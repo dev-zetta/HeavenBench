@@ -1,0 +1,21 @@
+Supply your own Unigine Heaven scene assets
+
+Original Unigine Heaven archives, extracted scene files and generated texture
+packs are not included in this software ZIP and are not relicensed by it.
+Obtain Heaven from https://benchmark.unigine.com/heaven and use only assets
+you are entitled to use. The project documents extraction and ZIP storage at:
+  docs/ZIP_ASSET_STORAGE.md (included in this package)
+
+Using this package's command-line tools from PowerShell, for example:
+  .\uniginex.exe -o C:\path\to\heaven.ung C:\HeavenData\heaven
+  .\uniginex.exe -o C:\path\to\core.ung C:\HeavenData\core
+  .\heaven_asset_packer.exe --data C:\HeavenData\heaven --pack-assets .\assets\assets.zip
+
+The packer includes the renderer's redistributable resources automatically.
+Leave complete, compatible packs in this assets directory. Each ZIP must
+contain a heavenbench-assets.json manifest; arbitrary source archives cannot
+be mounted directly. Large/high-resolution extension packs belong beside the
+base assets.zip and must not duplicate its payload paths.
+
+Alternatively, set HEAVEN_DATA or use --data to select an external asset pack,
+pack directory, or a loose extracted Data_Root.

@@ -1,0 +1,1790 @@
+[
+  {
+    "name": "clouds-on",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.clouds": true
+    }
+  },
+  {
+    "name": "clouds-off",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.clouds": false
+    }
+  },
+  {
+    "name": "color-grading-on",
+    "tour_time": 18,
+    "args": [
+      "--grading-saturation",
+      "0.3",
+      "--white-balance",
+      "0.3,-0.15",
+      "--color-grading"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.color_grading": true,
+      "runtime_settings.grading_saturation": 0.3,
+      "runtime_settings.grading_temperature": 0.3,
+      "runtime_settings.grading_tint": -0.15
+    }
+  },
+  {
+    "name": "physical-camera-on",
+    "tour_time": 18,
+    "args": [
+      "--aperture",
+      "4",
+      "--shutter",
+      "0.002",
+      "--iso",
+      "100",
+      "--physical-camera"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.physical_camera": true,
+      "runtime_settings.aperture": 4,
+      "runtime_settings.shutter": 0.002,
+      "runtime_settings.iso": 100
+    }
+  },
+  {
+    "name": "dynamic-resolution-on",
+    "tour_time": 18,
+    "args": [
+      "--dynamic-resolution-quality",
+      "0.5",
+      "--dynamic-resolution"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.dynamic_resolution": true,
+      "runtime_settings.dynamic_resolution_min_scale": 0.5
+    }
+  },
+  {
+    "name": "tone-agx",
+    "tour_time": 193.25,
+    "args": [
+      "--tone-mapper",
+      "agx"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.tone_mapper": "AgX"
+    }
+  },
+  {
+    "name": "hdr-night",
+    "tour_time": 193.25,
+    "settings": {
+      "hdr": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-01",
+    "tour_time": 0.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-02",
+    "tour_time": 17.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-03",
+    "tour_time": 23.5,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-04",
+    "tour_time": 29.2,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-05",
+    "tour_time": 34.9,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-06",
+    "tour_time": 46.25,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-07",
+    "tour_time": 68.89999999999999,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-08",
+    "tour_time": 74.6,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-09",
+    "tour_time": 85.95,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-10",
+    "tour_time": 97.3,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-11",
+    "tour_time": 108.64999999999999,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-12",
+    "tour_time": 120.0,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-13",
+    "tour_time": 130.75,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-14",
+    "tour_time": 136.45000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-15",
+    "tour_time": 147.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-16",
+    "tour_time": 153.5,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-17",
+    "tour_time": 159.20000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-18",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-19",
+    "tour_time": 181.9,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-20",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-21",
+    "tour_time": 198.95000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-22",
+    "tour_time": 210.3,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-23",
+    "tour_time": 221.65,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-24",
+    "tour_time": 233.0,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-25",
+    "tour_time": 244.35000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-26",
+    "tour_time": 250.05,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "grass-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false,
+      "features.grass": true
+    }
+  },
+  {
+    "name": "grass-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false,
+      "features.grass": false
+    }
+  },
+  {
+    "name": "massive_foliage-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.grass": false,
+      "features.massive_foliage": true
+    }
+  },
+  {
+    "name": "massive_foliage-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.grass": false,
+      "features.massive_foliage": false
+    }
+  },
+  {
+    "name": "ground_relief-on",
+    "tour_time": 0.8,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ground_relief": true
+    }
+  },
+  {
+    "name": "ground_relief-off",
+    "tour_time": 0.8,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ground_relief": false
+    }
+  },
+  {
+    "name": "particles-on",
+    "pose": [
+      -62,
+      62,
+      20,
+      -30,
+      -20
+    ],
+    "frames": 240,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.particles": true
+    }
+  },
+  {
+    "name": "particles-off",
+    "pose": [
+      -62,
+      62,
+      20,
+      -30,
+      -20
+    ],
+    "frames": 240,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.particles": false
+    }
+  },
+  {
+    "name": "heat_haze-on",
+    "pose": [
+      -128,
+      -82,
+      19.5,
+      143.31142,
+      -0.46605
+    ],
+    "frames": 240,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "heat_haze_enabled": true
+    }
+  },
+  {
+    "name": "heat_haze-off",
+    "pose": [
+      -128,
+      -82,
+      19.5,
+      143.31142,
+      -0.46605
+    ],
+    "frames": 240,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "heat_haze_enabled": false
+    }
+  },
+  {
+    "name": "god_rays-on",
+    "tour_time": 86,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.god_rays": true
+    }
+  },
+  {
+    "name": "god_rays-off",
+    "tour_time": 86,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.god_rays": false
+    }
+  },
+  {
+    "name": "volumetric_fog-on",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.volumetric_fog": true
+    }
+  },
+  {
+    "name": "volumetric_fog-off",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.volumetric_fog": false
+    }
+  },
+  {
+    "name": "sky-on",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.sky": true
+    }
+  },
+  {
+    "name": "sky-off",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.sky": false
+    }
+  },
+  {
+    "name": "volumetric_clouds-on",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.volumetric_clouds": true
+    }
+  },
+  {
+    "name": "volumetric_clouds-off",
+    "tour_time": 1,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.volumetric_clouds": false
+    }
+  },
+  {
+    "name": "lens_flares-on",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.lens_flares": true
+    }
+  },
+  {
+    "name": "lens_flares-off",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.lens_flares": false
+    }
+  },
+  {
+    "name": "rain-on",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.65,
+      "features.rain": true
+    }
+  },
+  {
+    "name": "rain-off",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.65,
+      "features.rain": false
+    }
+  },
+  {
+    "name": "wet_reflections-on",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.65,
+      "features.wet_reflections": true
+    },
+    "frames": 900
+  },
+  {
+    "name": "wet_reflections-off",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.65,
+      "features.wet_reflections": false
+    },
+    "frames": 900
+  },
+  {
+    "name": "soft_shadows-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.soft_shadows": true
+    }
+  },
+  {
+    "name": "soft_shadows-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.soft_shadows": false
+    }
+  },
+  {
+    "name": "contact_shadows-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.contact_shadows": true
+    }
+  },
+  {
+    "name": "contact_shadows-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.contact_shadows": false
+    }
+  },
+  {
+    "name": "point_light_shadows-on",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.point_light_shadows": true
+    }
+  },
+  {
+    "name": "point_light_shadows-off",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.point_light_shadows": false
+    }
+  },
+  {
+    "name": "msaa-on",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.msaa": true
+    }
+  },
+  {
+    "name": "msaa-off",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.msaa": false
+    }
+  },
+  {
+    "name": "refraction-on",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.refraction": true
+    }
+  },
+  {
+    "name": "refraction-off",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.refraction": false
+    }
+  },
+  {
+    "name": "reflections-on",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.reflections": true
+    }
+  },
+  {
+    "name": "reflections-off",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.reflections": false
+    }
+  },
+  {
+    "name": "ssgi-on",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ssgi": true
+    }
+  },
+  {
+    "name": "ssgi-off",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ssgi": false
+    }
+  },
+  {
+    "name": "clear_coat-on",
+    "tour_time": 119.999,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.clear_coat": true
+    }
+  },
+  {
+    "name": "clear_coat-off",
+    "tour_time": 119.999,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.clear_coat": false
+    }
+  },
+  {
+    "name": "anisotropic-on",
+    "tour_time": 119.999,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.anisotropic": true
+    }
+  },
+  {
+    "name": "anisotropic-off",
+    "tour_time": 119.999,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.anisotropic": false
+    }
+  },
+  {
+    "name": "subsurface-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.subsurface": true
+    }
+  },
+  {
+    "name": "subsurface-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.subsurface": false
+    }
+  },
+  {
+    "name": "cloth-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.cloth": true
+    }
+  },
+  {
+    "name": "cloth-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.cloth": false
+    }
+  },
+  {
+    "name": "transparent_shadows-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.transparent_shadows": true
+    }
+  },
+  {
+    "name": "transparent_shadows-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.transparent_shadows": false
+    }
+  },
+  {
+    "name": "colored_penumbra-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.colored_penumbra": true
+    }
+  },
+  {
+    "name": "colored_penumbra-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.colored_penumbra": false
+    }
+  },
+  {
+    "name": "specular_aa-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.specular_aa": true
+    }
+  },
+  {
+    "name": "specular_aa-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.specular_aa": false
+    }
+  },
+  {
+    "name": "gpu_instancing-on",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.gpu_instancing": true
+    }
+  },
+  {
+    "name": "gpu_instancing-off",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.gpu_instancing": false
+    }
+  },
+  {
+    "name": "gpu_skinning-on",
+    "tour_time": 46.5,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.gpu_skinning": true
+    }
+  },
+  {
+    "name": "gpu_skinning-off",
+    "tour_time": 46.5,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.gpu_skinning": false
+    }
+  },
+  {
+    "name": "bloom-on",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 21,
+      "features.bloom": true
+    }
+  },
+  {
+    "name": "bloom-off",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 21,
+      "features.bloom": false
+    }
+  },
+  {
+    "name": "ambient_occlusion-on",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ambient_occlusion": true
+    }
+  },
+  {
+    "name": "ambient_occlusion-off",
+    "tour_time": 98,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.ambient_occlusion": false
+    }
+  },
+  {
+    "name": "taa-on",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.taa": true
+    }
+  },
+  {
+    "name": "taa-off",
+    "tour_time": 18,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.taa": false
+    }
+  },
+  {
+    "name": "depth_of_field-on",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": true
+    }
+  },
+  {
+    "name": "depth_of_field-off",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    }
+  },
+  {
+    "name": "tessellation-on",
+    "pose": [
+      -131,
+      -89,
+      23,
+      210,
+      -24
+    ],
+    "settings": {
+      "tessellation.enabled": true,
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12
+    }
+  },
+  {
+    "name": "tessellation-off",
+    "pose": [
+      -131,
+      -89,
+      23,
+      210,
+      -24
+    ],
+    "settings": {
+      "tessellation.enabled": false,
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12
+    }
+  },
+  {
+    "name": "color-grading-off",
+    "tour_time": 18,
+    "args": [
+      "--grading-saturation",
+      "0.3",
+      "--white-balance",
+      "0.3,-0.15"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.color_grading": false,
+      "runtime_settings.grading_saturation": 0.3,
+      "runtime_settings.grading_temperature": 0.3,
+      "runtime_settings.grading_tint": -0.15
+    }
+  },
+  {
+    "name": "physical-camera-off",
+    "tour_time": 18,
+    "args": [
+      "--aperture",
+      "4",
+      "--shutter",
+      "0.002",
+      "--iso",
+      "100"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.physical_camera": false,
+      "runtime_settings.aperture": 4,
+      "runtime_settings.shutter": 0.002,
+      "runtime_settings.iso": 100
+    }
+  },
+  {
+    "name": "dynamic-resolution-off",
+    "tour_time": 18,
+    "args": [
+      "--dynamic-resolution-quality",
+      "0.5"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "renderer_features.dynamic_resolution": false,
+      "runtime_settings.dynamic_resolution_min_scale": 0.5
+    }
+  },
+  {
+    "name": "wind-debug-on",
+    "tour_time": 98,
+    "args": [
+      "--wind-debug"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "wind-debug-off",
+    "tour_time": 98,
+    "args": [],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "tone-aces",
+    "tour_time": 193.25,
+    "args": [
+      "--tone-mapper",
+      "aces"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.tone_mapper": "ACES"
+    }
+  },
+  {
+    "name": "tone-pbr-neutral",
+    "tour_time": 193.25,
+    "args": [
+      "--tone-mapper",
+      "pbr-neutral"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.tone_mapper": "PBRNeutral"
+    }
+  },
+  {
+    "name": "tone-gt7",
+    "tour_time": 193.25,
+    "args": [
+      "--tone-mapper",
+      "gt7"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.tone_mapper": "GT7"
+    }
+  },
+  {
+    "name": "tone-generic",
+    "tour_time": 193.25,
+    "args": [
+      "--tone-mapper",
+      "generic"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.tone_mapper": "Generic"
+    }
+  },
+  {
+    "name": "material-metallic-roughness",
+    "tour_time": 98,
+    "args": [
+      "--material-workflow",
+      "metallic-roughness"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "material-specular-glossiness",
+    "tour_time": 98,
+    "args": [
+      "--material-workflow",
+      "specular-glossiness"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "textures-original",
+    "tour_time": 98,
+    "settings": {
+      "texture_quality": "original",
+      "weather.rain_intensity": 0.0
+    },
+    "review_note": "Confirm texture-set availability and actual tier use in the log; a requested tier alone is not proof."
+  },
+  {
+    "name": "textures-2k",
+    "tour_time": 98,
+    "settings": {
+      "texture_quality": "2k",
+      "weather.rain_intensity": 0.0
+    },
+    "review_note": "Confirm texture-set availability and actual tier use in the log; a requested tier alone is not proof."
+  },
+  {
+    "name": "textures-4k",
+    "tour_time": 98,
+    "settings": {
+      "texture_quality": "4k",
+      "weather.rain_intensity": 0.0
+    },
+    "review_note": "Confirm texture-set availability and actual tier use in the log; a requested tier alone is not proof."
+  },
+  {
+    "name": "quality-ao-0",
+    "tour_time": 98,
+    "args": [
+      "--ao-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-ao-2",
+    "tour_time": 98,
+    "args": [
+      "--ao-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-bloom-0",
+    "tour_time": 170.55,
+    "args": [
+      "--bloom-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-bloom-2",
+    "tour_time": 170.55,
+    "args": [
+      "--bloom-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-dof-0",
+    "tour_time": 170.55,
+    "args": [
+      "--dof-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-dof-2",
+    "tour_time": 170.55,
+    "args": [
+      "--dof-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-taa-0",
+    "tour_time": 98,
+    "args": [
+      "--taa-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-taa-2",
+    "tour_time": 98,
+    "args": [
+      "--taa-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-soft-shadow-0",
+    "tour_time": 98,
+    "args": [
+      "--soft-shadow-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-soft-shadow-2",
+    "tour_time": 98,
+    "args": [
+      "--soft-shadow-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-contact-shadow-0",
+    "tour_time": 98,
+    "args": [
+      "--contact-shadow-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-contact-shadow-2",
+    "tour_time": 98,
+    "args": [
+      "--contact-shadow-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-cloud-0",
+    "tour_time": 98,
+    "args": [
+      "--cloud-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-cloud-2",
+    "tour_time": 98,
+    "args": [
+      "--cloud-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-ssgi-0",
+    "tour_time": 98,
+    "args": [
+      "--ssgi-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-ssgi-2",
+    "tour_time": 98,
+    "args": [
+      "--ssgi-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {}
+  },
+  {
+    "name": "quality-specular-aa-0",
+    "tour_time": 98,
+    "args": [
+      "--specular-aa-quality",
+      "0"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.specular_aa_quality": 0
+    }
+  },
+  {
+    "name": "quality-specular-aa-2",
+    "tour_time": 98,
+    "args": [
+      "--specular-aa-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "runtime_settings.specular_aa_quality": 2
+    }
+  },
+  {
+    "name": "msaa-samples-1",
+    "tour_time": 18,
+    "settings": {
+      "quality.msaa_samples": 1,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "msaa-samples-2",
+    "tour_time": 18,
+    "settings": {
+      "quality.msaa_samples": 2,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "msaa-samples-4",
+    "tour_time": 18,
+    "settings": {
+      "quality.msaa_samples": 4,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "reflections-isolated-on",
+    "tour_time": 193.25,
+    "settings": {
+      "features.reflections": true,
+      "features.wet_reflections": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "reflections-isolated-off",
+    "tour_time": 193.25,
+    "settings": {
+      "features.reflections": false,
+      "features.wet_reflections": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-taa-on",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.taa": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-taa-off",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.taa": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-ssgi-on",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.ssgi": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-ssgi-off",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.ssgi": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-depth_of_field-on",
+    "tour_time": 169,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.depth_of_field": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-depth_of_field-off",
+    "tour_time": 169,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.depth_of_field": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-gpu_skinning-on",
+    "tour_time": 44,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.gpu_skinning": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-gpu_skinning-off",
+    "tour_time": 44,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.gpu_skinning": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-grass-on",
+    "tour_time": 68.1,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.grass": true,
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false
+    }
+  },
+  {
+    "name": "motion-grass-off",
+    "tour_time": 68.1,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.grass": false,
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false
+    }
+  },
+  {
+    "name": "motion-cloth-on",
+    "tour_time": 96.5,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.cloth": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-cloth-off",
+    "tour_time": 96.5,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.cloth": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "motion-rain-on",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.rain": true,
+      "weather.rain_intensity": 0.65
+    }
+  },
+  {
+    "name": "motion-rain-off",
+    "tour_time": 17,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 120,
+    "settings": {
+      "features.rain": false,
+      "weather.rain_intensity": 0.65
+    }
+  },
+  {
+    "name": "cut-at-17",
+    "tour_time": 16.5,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 30,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "cut-at-18",
+    "tour_time": 16.5,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 90,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "cut-at-19",
+    "tour_time": 16.5,
+    "args": [
+      "--capture-tour-motion"
+    ],
+    "frames": 150,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "boiler-animated-30",
+    "pose": [
+      -62,
+      62,
+      20,
+      -30,
+      -20
+    ],
+    "frames": 30,
+    "settings": {
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "boiler-animated-240",
+    "pose": [
+      -62,
+      62,
+      20,
+      -30,
+      -20
+    ],
+    "frames": 240,
+    "settings": {
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "window-halo-close-night",
+    "pose": [
+      -23.34942,
+      29.8984,
+      22.34291,
+      -48.12304,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "frames": 180,
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "texture_quality": "original"
+    },
+    "review_note": "Historical open-shutter window halo remains unconfirmed. Tighten the known village-window bloom pose from 60 to 30 degrees at held 21:00; inspect pane/frame boundary and any green/orange blocks, not merely expected smooth warm bloom. Verify actual 30-degree metadata and that an open window is framed; if it is not, reposition before accepting coverage. Compare the existing bloom pair only after checking its different hour/FOV."
+  },
+  {
+    "name": "torch-refraction-close-on",
+    "pose": [
+      -128,
+      -82,
+      19.5,
+      143.31142,
+      -0.46605
+    ],
+    "frames": 240,
+    "settings": {
+      "time_of_day": 22,
+      "weather.rain_intensity": 0.0,
+      "features.particles": true,
+      "heat_haze_enabled": true
+    },
+    "review_note": "Aim at the actual torch_refraction emitter near (-132.929,-78.327,18.840), with the flame above it and fort masonry behind. One-setting pair tests foreground silhouette leakage, rectangular refraction edges and background distortion after four simulated seconds. The main heat-haze pair instead views the distant airship boiler; no original-engine pixel parity is implied."
+  },
+  {
+    "name": "torch-refraction-close-off",
+    "pose": [
+      -128,
+      -82,
+      19.5,
+      143.31142,
+      -0.46605
+    ],
+    "frames": 240,
+    "settings": {
+      "time_of_day": 22,
+      "weather.rain_intensity": 0.0,
+      "features.particles": true,
+      "heat_haze_enabled": false
+    },
+    "review_note": "Aim at the actual torch_refraction emitter near (-132.929,-78.327,18.840), with the flame above it and fort masonry behind. One-setting pair tests foreground silhouette leakage, rectangular refraction edges and background distortion after four simulated seconds. The main heat-haze pair instead views the distant airship boiler; no original-engine pixel parity is implied."
+  },
+  {
+    "name": "mill-wings-close-90-frames",
+    "pose": [
+      13.6,
+      -102,
+      29,
+      90.02118,
+      -0.40922
+    ],
+    "frames": 90,
+    "settings": {
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0,
+      "features.gpu_skinning": true
+    },
+    "review_note": "Aim from the south at actual mill_wings.smesh center (13.593,-83.994,28.871). Compare 90-frame (1.5s) and 210-frame (3.5s) poses for changing blade orientation, stationary duplicated rest-pose wings, silhouette holes and detached hub. Fixed camera and frozen island transform leave skeletal animation active. Confirm the blades are unobstructed before accepting coverage; two stills cannot establish smooth motion."
+  },
+  {
+    "name": "mill-wings-close-210-frames",
+    "pose": [
+      13.6,
+      -102,
+      29,
+      90.02118,
+      -0.40922
+    ],
+    "frames": 210,
+    "settings": {
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0,
+      "features.gpu_skinning": true
+    },
+    "review_note": "Aim from the south at actual mill_wings.smesh center (13.593,-83.994,28.871). Compare 90-frame (1.5s) and 210-frame (3.5s) poses for changing blade orientation, stationary duplicated rest-pose wings, silhouette holes and detached hub. Fixed camera and frozen island transform leave skeletal animation active. Confirm the blades are unobstructed before accepting coverage; two stills cannot establish smooth motion."
+  },
+  {
+    "name": "house2-open-window-night",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "texture_quality": "original"
+    },
+    "review_note": "Geometry-derived exposed-pane candidate: heaven/meshes/buildings/house2.mesh building_windows0_lod0, material building_tessellation_windows; plane center [-12.707006760168987, 27.808935159436388, 22.258727208753413]. Vertices welded at 0.0001 m split the plane from two nonplanar shutter components; camera is 4m along transformed local +X outward normal, with 45-degree FOV. Confirm visibly open shutters before accepting historical green/orange halo coverage; original closed-window case did not cover that report."
+  },
+  {
+    "name": "house1-open-window-night",
+    "pose": [
+      -15.51666,
+      18.35748,
+      25.45067,
+      131.87696,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "texture_quality": "original"
+    },
+    "review_note": "Geometry-derived exposed-pane candidate: heaven/meshes/buildings/house1.mesh building_windows0_lod0, material building_tessellation_windows; plane center [-18.186792509920654, 21.335800324982753, 25.45066800424545]. Vertices welded at 0.0001 m split the plane from two nonplanar shutter components; camera is 4m along transformed local +X outward normal, with 45-degree FOV. Confirm visibly open shutters before accepting historical green/orange halo coverage; original closed-window case did not cover that report."
+  },
+  {
+    "name": "hdr-day",
+    "tour_time": 0.8,
+    "settings": {
+      "hdr": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "legacy-deck-0-on",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "features.clouds": true,
+      "features.volumetric_clouds": false,
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "legacy-deck-0-off",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "features.clouds": false,
+      "features.volumetric_clouds": false,
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "legacy-deck-12-on",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "features.clouds": true,
+      "features.volumetric_clouds": false,
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "legacy-deck-12-off",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "features.clouds": false,
+      "features.volumetric_clouds": false,
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "projection-30",
+    "tour_time": 18,
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "camera_fov": 30
+    }
+  },
+  {
+    "name": "projection-90",
+    "tour_time": 18,
+    "args": [
+      "--camera-fov",
+      "90"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    },
+    "expected_metadata": {
+      "camera_fov": 90
+    }
+  }
+]

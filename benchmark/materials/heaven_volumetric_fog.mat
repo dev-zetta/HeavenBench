@@ -1,0 +1,348 @@
+// Heaven Benchmark — Volumetric fog
+
+// Screen-space ray-marched volumetric fog with per-light scattering.
+// Composites premultiplied in-scattered radiance over the attenuated
+// scene, so the fog obscures distant geometry as well as adding light.
+
+// Reference design adapted from HAliss/VolumetricFogTutorial (Unity
+// URP) — same overall structure: ray-march from camera to scene
+// depth in fixed-size world-space steps, accumulate Henyey–Greenstein
+// scattered light from main + per-pixel-culled lights, attenuate by
+// Beer-Lambert extinction. Filament's `blending: transparent` expects
+// premultiplied RGB: accumulated radiance plus sceneColor * transmittance.
+// Content was rephrased for compliance with licensing restrictions.
+
+// Pipeline (per pixel):
+//   1. Sample the linear scene depth (eye-space forward distance in
+//      metres) produced by the depth pre-pass / heaven_depth proxy.
+//   2. Build the view ray from the quad's own world position (no
+//      inverse-view-projection reconstruction), and cap the march at
+//      the scene depth  or maxFogDist, whichever is nearer.
+//   3. Jitter the start using blue noise so 32 fixed-size steps don't
+//      banding-stripe.
+//   4. At each step:
+//        density(p) = constant baseDensity (could later be modulated
+//                     by a 3D noise field for "wisps", not done here).
+//        Add per-step scattering:
+//           sun: sunColor × HG(rayDir, sunDir, gSun) × density × step
+//           lamps: Σ_k lightColor[k] × att(d, r) × HG(rayDir, lDir, gLamp)
+//                                       × density × step
+//        Multiply transmittance by exp(-density * step).
+//   5. Output (accumulatedFogColour, 1 - transmittance) as transparent.
+
+// Note on the sun term: this is the volumetric scattering contribution
+// of the sun *along the view ray*. The bright radial sun shafts in the
+// sky are the separate `heaven_godrays` material. Keeping these two
+// passes separate avoids double-bloom.
+
+// Compiled with: matc -a opengl -p desktop -o heaven_volumetric_fog.filamat heaven_volumetric_fog.mat
+
+material {
+    name : heaven_volumetric_fog,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    // World-space fullscreen quad (NOT vertexDomain:device).
+    // The CPU side places this quad just inside the far plane in
+    // front of the camera each frame, same trick as the godrays
+    // material. This is the proven pattern in our codebase: a
+    // post-process material with vertexDomain:device couldn't read
+    // its depthTexture sampler reliably.
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        // Linear scene depth (F, eye-space forward distance in
+        // metres) from the depth pre-pass / heaven_depth proxy render.
+        { type : sampler2d, name : depthTexture, precision : high, filterable : false },
+
+        // 64×64  tiling blue-noise — animates per-frame so TAA
+        // can resolve dithering across multiple frames.
+        { type : sampler2d, name : noiseTexture },
+
+        // Camera world position (ray origin). The view-ray direction is
+        // taken from the quad's own world position, so no inverse
+        // view-projection matrix is needed any more.
+        { type : float3,   name : cameraPos,             precision : high },
+
+        // Sun direction (world-space, FROM scene TO sun) and HDR colour.
+        { type : float3,   name : sunDir },
+        { type : float3,   name : sunColor },
+        { type : bool,     name : sunVisible },
+
+        // Ambient scattering radiance, scaled on the CPU by the same
+        // day/night environment illumination that lights the scene.
+        { type : float3,   name : fogColor },
+
+        // Fog parameters.
+        { type : float,    name : density },        // per-metre extinction
+        { type : float,    name : maxDistance },    // max march in metres
+        { type : float,    name : stepSize },       // metres per step
+        { type : float,    name : miePhaseG },      // sun forward-scatter
+        { type : float,    name : miePhaseGLight }, // lamp forward-scatter
+        { type : float,    name : intensity },      // master scattering scale
+
+        // Per-light data (CPU-culled, up to 16 packed).
+        { type : int,        name : numLights },
+        { type : float4[16], name : lightPosRadius },     // xyz=pos, w=radius
+        { type : float4[16], name : lightColorIntensity },// rgb=colour, a=flux
+
+        // Time, used to scroll the noise tile.
+        { type : float,    name : time },
+
+        // Low-discrepancy temporal phase in [0, 1). Added to the
+        // per-pixel blue-noise value so TAA receives changing samples
+        // instead of converging a fixed screen-space stipple.
+        { type : float,    name : temporalJitter },
+        { type : float4,   name : fogShaderTuning },
+        { type : int,      name : activeSteps }
+    ],
+}
+
+vertex {
+    // No-op vertex stage. The CPU positions the quad in world space
+    // (same as godrays); we just need UV0 to flow through to the
+    // fragment shader.
+    void materialVertex(inout MaterialVertexInputs material) {}
+}
+
+fragment {
+    // Henyey–Greenstein phase function with the 1/(4π) normalisation
+    // already applied. cosTheta = dot(rayDir, lightDir).
+    // Higher g = more forward-scattering (haze near light direction).
+    // Reference: HAliss/VolumetricFogTutorial gist
+    // (https://gist.github.com/HAliss/f84e3c482ea2ac9664a3048fa734093c)
+    // Same formula as their `henyey_greenstein()` function;
+    // content was rephrased for compliance with licensing restrictions.
+    float henyeyGreenstein(float cosTheta, float g) {
+        const float INV_4PI = 0.07957747;
+        float g2 = g * g;
+        float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+        return INV_4PI * (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // ─── DEBUG: trace the early-out path ────────────────────
+        // 0 = real shader
+        // 1 = solid green @ 50% opacity
+        // 2 = output `(opacity, 0, 0, opacity)` from the real loop
+        // 3 = output `(numLights, density, intensity, 1)` to confirm uniforms
+        // 4 = output `(sceneDist/300,...)` — linear depth visualisation
+        // 5 = output `(sceneRayLen/100, 0, 0, 1)` — view-ray length per pixel
+        // 6 = output `(distLimit/50, 0, 0, 1)` — clamped march length
+        #define DEBUG 0
+        #if DEBUG == 1
+            material.baseColor = float4(0.0, 1.0, 0.0, 0.5);
+            return;
+        #endif
+
+        float2 uv = getUV0();
+
+        // ── Linear scene-depth sample (LOCKED Y-convention) ─────
+
+        // Sample the linear scene-depth texture (F, eye-space
+        // forward distance in metres) produced by the depth pre-pass
+        // heaven_depth proxy render. The offscreen RT is Y-flipped
+        // versus the quad UV (Vulkan top-down framebuffer), the same
+        // convention as heaven_blit / godrays / heat haze / lens flare
+        // (scene-depth-pipeline).
+        float2 depthUV = uvToRenderTargetUV(uv);
+        float sceneDist = texture(materialParams_depthTexture, depthUV).r;
+
+        // Graceful fallback: a null/unbound depth texture reads
+        // a non-positive value. Treat that as "far / no geometry" so
+        // the fog is NOT clamped to zero before the depth pre-pass
+        // produces a valid texture.
+        if (sceneDist <= 0.0) sceneDist = 2000.0;
+
+        #if DEBUG == 4
+            float dbg4 = clamp(sceneDist / 300.0, 0.0, 1.0);
+            material.baseColor = float4(dbg4, dbg4, dbg4, 1.0);
+            return;
+        #endif
+
+        // No-geometry rays traverse the same finite medium as geometry
+        // beyond maxDistance. Skipping them would make the fog itself draw
+        // an opaque-looking silhouette at every distant object/sky boundary.
+
+        // ── View ray, clamped at the scene depth  ─────────
+
+        // The CPU positions this quad in world space just inside the
+        // far plane in front of the camera, so the fragment's own
+        // world position gives the view-ray direction directly — no
+        // inverse-view-projection reconstruction needed. `sceneDist`
+        // is the eye-space FORWARD distance to the nearest opaque
+        // surface; convert it to a length along this (possibly
+        // off-axis) ray via the camera-forward cosine, then cap the
+        // march there so fog never accumulates past solid geometry.
+        float3 rayStart = materialParams.cameraPos;
+        // Ray DIRECTION in world space. getWorldPosition() and
+        // getWorldCameraPosition() are BOTH in Filament's camera-shifted world,
+        // so their difference is the correct world-space view ray regardless of
+        // the shift. (Subtracting the CPU true-world `cameraPos` here instead —
+        // as this did originally — offsets the direction by the camera position,
+        // an error that grows as the camera moves away from the world origin.)
+        float3 rayDir   = normalize(getWorldPosition().xyz - getWorldCameraPosition());
+
+        float3 camFwd      = -normalize(frameUniforms.worldFromViewMatrix[2].xyz);
+        float  cosTheta    = max(dot(rayDir, camFwd), 1e-3);
+        float  sceneRayLen = sceneDist / cosTheta;
+
+        #if DEBUG == 5
+            float dbg5 = clamp(sceneRayLen / 100.0, 0.0, 1.0);
+            material.baseColor = float4(dbg5, 0.0, 0.0, 1.0);
+            return;
+        #endif
+
+        float distLimit = min(sceneRayLen, materialParams.maxDistance);
+
+        #if DEBUG == 6
+            float dbg6 = clamp(distLimit / 50.0, 0.0, 1.0);
+            material.baseColor = float4(dbg6, 0.0, 0.0, 1.0);
+            return;
+        #endif
+
+        if (distLimit < 0.5) {
+            material.baseColor = float4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        #if DEBUG == 3
+            float3 dbg = float3(
+                float(materialParams.numLights) / 16.0,
+                materialParams.density * 50.0,
+                materialParams.intensity / 4.0);
+            material.baseColor = float4(dbg, 1.0);
+            return;
+        #endif
+
+        float2 noiseUV = uv * 32.0;
+        float jitter = fract(texture(materialParams_noiseTexture, noiseUV).r
+                           + materialParams.temporalJitter);
+
+        // Exact segment integration for piecewise-constant lighting:
+        //   inscattered += L * (1 - exp(-density * dt)) * T
+        //   T *= exp(-density * dt)
+        // This conserves energy even for the larger far-field segments.
+        // Normalized exponential intervals reach distLimit exactly; jitter
+        // moves only the lighting sample, never the total optical depth.
+        float3 inscattered = float3(0.0);
+        float  transmittance = 1.0;
+
+        float density   = materialParams.density;
+        float gSun      = materialParams.miePhaseG;
+        float gLamp     = materialParams.miePhaseGLight;
+        float intensity = materialParams.intensity;
+        bool  sunVisible = materialParams.sunVisible;
+        float3 sunColor = materialParams.sunColor;
+        float3 sunDir   = materialParams.sunDir;
+        float3 baseFog  = materialParams.fogColor;
+        int    numLights = materialParams.numLights;
+
+        // Small near-camera intervals resolve lamp halos, while coarser
+        // far intervals cover the remaining finite medium in 32 samples.
+        const int MAX_STEPS = 32;
+        int activeSteps = clamp(materialParams.activeSteps, 1, MAX_STEPS);
+        float stepGrowth = max(materialParams.fogShaderTuning.z, 1.0);
+        float intervalScale = 1.0 / (exp(float(activeSteps) / stepGrowth) - 1.0);
+        float prevT = 0.0;
+        for (int i = 0; i < MAX_STEPS; ++i) {
+            if (i >= activeSteps) break;
+            float curT = distLimit * (exp(float(i + 1) / stepGrowth) - 1.0)
+                        * intervalScale;
+            float dt = curT - prevT;
+            float t = mix(prevT, curT, jitter);
+            float3 rayPos = rayStart + rayDir * t;
+
+            // Ambient scattering follows scene illumination, even when
+            // no local lamp contributes to this segment.
+            float3 stepLight = baseFog;
+
+            // Sun contribution — phase-weighted along the view ray.
+            // The 0.3 scale keeps the in-scattered sun tint subtle
+            // because the bright radial sun shafts are the godrays
+            // pass; this is just the haze-tint from sun light.
+            if (sunVisible) {
+                // Both directions point toward the source from the eye/ray:
+                // forward scattering peaks when looking toward the light.
+                float cosThetaSun = dot(rayDir, sunDir);
+                float phaseSun = henyeyGreenstein(cosThetaSun, gSun);
+                stepLight +=
+                    sunColor * phaseSun * materialParams.fogShaderTuning.y;
+            }
+
+            // Per-light contribution.
+
+            // Each light adds `lc · att · phase` to stepLight. With
+            // up to 16 lights all close to the camera, the sum can
+            // saturate the per-step radiance and produce a milky
+            // wash on geometry near a lamp cluster (visible as
+            // distant buildings reading much brighter than the
+            // sky-occluding trees beside them). To avoid that, we
+            // soft-clip the lamp contribution: each light is scaled
+            // by `1/(1 + 0.5·sumAtt)` where sumAtt grows with each
+            // light added. This caps the per-step lamp scattering
+            // at roughly 2× the brightest single light, so a 16-
+            // lamp cluster doesn't shine through as bright as a
+            // 32-lamp cluster, while a single isolated lamp still
+            // produces a clean halo.
+            float3 lampLight = float3(0.0);
+            float  sumAtt    = 0.0;
+            for (int k = 0; k < numLights; ++k) {
+                float4 lpr = materialParams.lightPosRadius[k];
+                float3 lp  = lpr.xyz;
+                float  lr  = lpr.w;
+
+                float3 toLight = lp - rayPos;
+                float  d2 = dot(toLight, toLight);
+                float  r2 = lr * lr;
+
+                // Heaven-style hard-radius cutoff:
+                //   A(d) = saturate(1 - d²/r²)²
+                float att = 1.0 - clamp(d2 / max(r2, 1e-4), 0.0, 1.0);
+                att = att * att;
+                if (att <= 1e-3) continue;
+
+                float d = sqrt(d2);
+                float3 lDir = toLight / max(d, 1e-3);
+                float4 lci = materialParams.lightColorIntensity[k];
+                float3 lc  = lci.rgb * lci.a;
+
+                float cosTheta = dot(rayDir, lDir);
+                float phase = henyeyGreenstein(cosTheta, gLamp);
+
+                lampLight += lc * att * phase;
+                sumAtt    += att;
+            }
+            stepLight +=
+                lampLight /
+                (1.0 + materialParams.fogShaderTuning.w * sumAtt);
+
+            // Integrate scattering and extinction over exactly this segment.
+            float segmentTransmittance = exp(-density * dt);
+            inscattered += stepLight * (1.0 - segmentTransmittance)
+                         * transmittance * intensity;
+            transmittance *= segmentTransmittance;
+
+            prevT = curT;
+            if (curT >= distLimit) break;
+        }
+
+        // Filament transparent materials use premultiplied alpha:
+        // final = inscattered + sceneColor * (1 - opacity). The integrated
+        // radiance already contains its scattering weight; do not multiply
+        // or divide it by opacity again.
+        float opacity = 1.0 - transmittance;
+
+        #if DEBUG == 2
+            // Red channel = opacity. White = 100% fog. Black = 0%.
+            material.baseColor = float4(opacity, 0.0, 0.0, opacity);
+            return;
+        #endif
+
+        material.baseColor = float4(inscattered, opacity);
+    }
+}

@@ -1,0 +1,98 @@
+// Heaven Benchmark — Scene depth-output material
+
+// Writes linear eye-space forward distance (metres) to the colour target so a
+// half-resolution depth pre-pass can produce a sampleable Scene_Depth_Texture
+// in an F COLOR attachment. Color attachments are reliably written and
+// sampleable in this Filament build, whereas the custom render-target's DEPTH
+// attachment retains its clear value (sampling it returns zero everywhere) —
+// so scene depth is produced as colour instead.
+
+// Rendered by a parallel set of depth-proxy renderables that share the main
+// scene's vertex/index buffers but use this material. Each fragment's
+// baseColor.r holds the nearest surface's eye-space distance in metres; depth
+// testing (depthCulling + depthWrite) keeps the nearest surface per pixel.
+
+// Compiled with: matc -a all -p desktop -o heaven_depth.filamat heaven_depth.mat
+
+material {
+    name : heaven_depth,
+    requires : [ uv0, custom0, tangents, custom1, custom2, custom3, custom4, custom5, custom6, custom7 ],
+    shadingModel : unlit,
+    blending : opaque,
+    // Double-sided so the scene-depth texture captures the NEAREST surface
+    // regardless of triangle winding. Thin two-sided surfaces — the cloth
+    // flags (heaven_lit_doublesided) most visibly — present back-facing
+    // triangles to the camera as they wave; a single-sided depth proxy culls
+    // those, leaving the flag absent from scene depth so the screen-space
+    // volumetric consumers (volumetric fog / volumetric clouds) march past it
+    // and composite in front of it (the "see-through flag" bug). For closed
+    // opaque meshes the front face is still nearest and wins the depth test, so
+    // their scene depth is unchanged; this only ADDS the missing coverage for
+    // thin/open surfaces.
+    doubleSided : true,
+    flipUV : false,
+    // Depth-test + depth-write so the colour target keeps the NEAREST surface's
+    // eye-space distance per pixel (the depth attachment is write-only here,
+    // used only for this test — it is never sampled).
+    depthWrite : true,
+    depthCulling : true,
+    parameters : [
+        { type : sampler2d, name : geometryHeightMap, stages : [ vertex ] },
+        { type : bool,      name : geometryDisplacement },
+        { type : float4,    name : baseTransform },
+        { type : float4,    name : displacementParams }
+    ],
+    variables : [
+        // .x = eye-space forward distance in metres;.yzw unused.
+        eyeDepth
+    ]
+}
+
+vertex {
+    #include "includes/bounded_displacement.glsl"
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.geometryDisplacement && getCustom7().w > 0.0) {
+            applyParentChord(material);
+        } else if (materialParams.geometryDisplacement) {
+            float3 userWorldPosition =
+                    (getUserWorldFromWorldMatrix() * material.worldPosition).xyz;
+            float distance = length(userWorldPosition - getMaterialGlobal1().xyz);
+            float normalizedDistance = clamp(
+                    (distance - materialParams.displacementParams.z)
+                    * materialParams.displacementParams.w, 0.0, 8.0);
+            float fade = pow(saturate(1.0 - normalizedDistance),
+                             materialParams.displacementParams.y);
+            float2 uv = material.uv0.xy * materialParams.baseTransform.xy
+                      + materialParams.baseTransform.zw;
+            // A vertex is one sample of the height field. Filter frequencies
+            // finer than its incident UV edges before moving the geometry;
+            // otherwise sparse triangles alias into false shadow-casting folds.
+            // CUSTOM0.yz is the UV footprint, populated by MeshStore. Keep the
+            // authored distance fade independent of this sampling LOD.
+            float2 footprint = getCustom0().yz * abs(materialParams.baseTransform.xy)
+                             * float2(textureSize(materialParams_geometryHeightMap, 0));
+            float meshLod = log2(max(max(footprint.x, footprint.y), 1.0));
+            float heightLod = max(normalizedDistance, meshLod);
+            float height = textureLod(materialParams_geometryHeightMap, uv, heightLod).r;
+            float offset = (height - 127.0 / 255.0)
+                         * materialParams.displacementParams.x * fade
+                         * getCustom0().x;
+            material.worldPosition.xyz += normalize(material.worldNormal) * offset;
+        }
+        // Transform the world position into view space; the forward axis is
+        // -z, so -(viewFromWorld * worldPosition).z is the positive eye-space
+        // distance in metres. Passed through as a varying for the fragment.
+        float4 viewPos = getViewFromWorldMatrix() * material.worldPosition;
+        material.eyeDepth = float4(-viewPos.z, 0.0, 0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Write linear eye-space distance (metres) to red. The F target
+        // preserves full precision across the 0.5..2000 m camera range.
+        material.baseColor = float4(variable_eyeDepth.x, 0.0, 0.0, 1.0);
+    }
+}

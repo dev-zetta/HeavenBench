@@ -1,0 +1,54 @@
+# HeavenBench 0.4.0 — private release candidate
+
+Drafted **2026-10-05**. This is an unpublished candidate for **Linux x86-64, Windows x64 and Android ARM64 together**, prepared in the private [dev-zetta/HeavenBench repository](https://github.com/dev-zetta/HeavenBench). It is not a release announcement or approval to publish. The portable Linux artifact completes clean build/static/host, source/package/relocation checks and both API capture matrices and the corrected full tour/cache check. The Android development artifact completes build and offline package checks; native Windows package and physical Android acceptance remain pending. Native results below retain their separate executable identities.
+
+## Contact shadows and displaced geometry
+
+The main correction addresses sharply clipped low-sun lit islands on displaced roof tiles. Desktop high-quality SUN contact visibility now integrates the authored finite Sun disc with analytic geometric horizon coverage and sixteen deterministic conditional rays. This preserves independent contact blockers, true geometric back-lighting, the existing contact distance and per-ray march steps, and authored BRDF/normal-map lighting. The Sun-disc sample pattern adds no per-pixel or temporal randomness. Ordinary directional lights and unsupported quality/feature-level paths retain their existing fallback.
+
+Finite-Sun visibility alone could not remove the coarse displaced-triangle horizon. Eligible static surfaces now receive a camera- and light-independent bounded geometry preparation, with a **20 mm physical correction limit**, preserved native height samples, original packed source fields, authored amplitude and runtime fade. Color, depth and shadow passes use the same prepared geometry. Unsupported or unsafe components retain their original geometry; preparation does not depend on an asset name or a selected roof camera.
+
+The accepted bounded preparation policy permits up to three million triangles per surface, 128 times source density and 27 million added rendered triangles across its instances. The measured roof changes from 31,889 to 2,999,485 unique triangles shared by nine placements. It visibly rounds the registered morning closing edge, but remains budget limited: the global approximation goal is not met, protected transition bands can retain slope discontinuities, and original-scene user visual sign-off remains open as VA-23.
+
+The user accepted the cleaner geometry and its measured cost. A prior matched Vulkan profile at 1920×1080 with 4K textures and the recorded high-quality afternoon settings measured **11.675 FPS before and 8.605 FPS with equivalent three-million-triangle geometry**, a **35.6752% increase in mean frame time**, over at least 60 measured seconds after warmup. Source/output review establishes applicability to the equivalent final geometry; this is not a remeasurement of the later bloom/skinning executable, an OpenGL result or a universal performance expectation. The final morning Vulkan startup recorded about **30.3 seconds** of geometry preparation; the standalone roof replay peaked near **2.02 GiB RSS**. Work budgets are bounded estimates, not a hard bound on total process memory or startup time. See [the complete geometry and performance audit](VISUAL_AUDIT.md#bounded-displaced-surface-continuation).
+
+Related corrections separate isotropic geometry-height sampling from fragment anisotropy, preserve shared color/depth sampling, and remove order-dependent midpoint seams in the neutral tessellation cache. Existing caches with older semantic versions are regenerated. Prepared surfaces use shared static buffers and conservative spatial draw ranges rather than per-frame geometry regeneration. A scoped Mesa resource-lifecycle repair also prevents temporary startup height sampling from corrupting later textured rendering.
+
+## Feature correctness and reusable scenes
+
+- **Bloom:** clean bloom is retained while the original lens-dirt image supplies bounded linear gain, rather than attenuating the entire bloom image. Requested strength has one owner across configuration, CLI and live UI; default `0.3` preserves the established time-of-day strength curve. Authored lamp halos are visible on both native APIs, with source emission and shipping material policy retained.
+- **CPU skinning:** animated uploads retain UV-aligned tangent frames and skinned-source ownership, including tessellation re-upload. The broad normal-mapped GPU/CPU mismatch is corrected in the authored mill sequence. Isolated edge-pixel differences remain; exact arbitrary-animation pixel parity is not claimed.
+- **Test scenes:** seventeen procedural scenes exercise isolated rendering switches without original assets. Four compact authored groups add real roof/stones, island/fir, windows/lamps and mill/flag controls through the normal node/material/mesh loader. Strict provenance and immutable-source replay distinguish actual supplied inputs, successful capture receipts and visible effect quality.
+- **Stronger authored controls:** close PCF views expose fractional fir-mask shadows, and a registered lamp-glass view exposes background response. These are improved test stimuli, not a production alpha-shadow rewrite or physically complete glass model. The refraction on/off pair also changes its lit/emissive fallback; a separate matched thickness control establishes the local optical shift.
+
+The pinned OpenSubdiv CPU subset supports the bounded surface builder and is included with its source provenance, license and notice. Original Heaven materials and data remain externally supplied. [Rendering feature ownership](FILAMENT_RENDERING_FEATURES.md) and [scene recipes/review limits](RENDER_TEST_SCENES.md) document the implementation and repeatable controls.
+
+## Verified native checkpoint
+
+The October 5 Linux native checkpoint uses renderer SHA-256 `070f005f21f390695208310429ac3d88611dd15dc9ecec50def996754616ac39` on the local Radeon AI PRO R9700, with Vulkan/Wayland and OpenGL/X11. These results are separate from the subsequent clean package build identities.
+
+| Check | Verified result |
+|---|---|
+| Complete procedural matrix | 87 cases and 474 retained frames per API; runner and complete sequence QA exit 0 with no input/receipt flags |
+| Authored feature matrix | 18 cases and 96 retained frames per API; all nine pairs and strict source/asset receipts replay successfully |
+| Focused contact and bloom guards | Four displaced-contact cases/eight frames and eight bloom guards/16 frames per API; all 16 focused contact images match the approved geometry integration byte for byte |
+| Complete native smoke harness | 43 passes, two original-reference-image skips and zero failures per API |
+| Host and capture-tool regressions | Host suite passes; all 50 Python capture/QA tests pass |
+
+These capture scopes overlap some recipes and must not be summed as unique feature coverage. Passing receipts and input counts do not imply that every appearance gate is closed. Pure-white bloom guards differ by at most two RGB8 levels; authored GPU/CPU skinning retains three isolated pixels above two levels per API over 32 paired frames, with sequence maxima 17/5 RGB8 and their cause unestablished. Complete native/source/image evidence and dated findings are recorded in [release readiness](RELEASE_READINESS.md), [visual audit](VISUAL_AUDIT.md) and [render-test scenes](RENDER_TEST_SCENES.md).
+
+## External assets and compatibility
+
+Original Unigine Heaven installers, UNG archives, meshes, materials, textures and base scene packs are **not included or relicensed**. Supply compatible scene data separately. `scripts/build_assets.sh` produces a validated base `assets/assets.zip` from the original installer; an existing installer can be selected with `--installer PATH --no-download`. The standalone `heaven_asset_packer` can instead package a complete extracted tree. See [asset tools](../tools/README.md) and [ZIP storage](ZIP_ASSET_STORAGE.md).
+
+Desktop startup accepts `--data PATH` or `HEAVEN_DATA` for a loose extracted data root, a manifest-bearing asset ZIP or a directory of compatible packs. Optional texture extensions belong beside the base pack and must not duplicate payload paths. Android uses the application's file picker to import a desktop-produced base pack. Procedural test scenes remain available without these original assets; authored scenes fail clearly when their required inputs are missing.
+
+Renderer version **0.4.0**, extraction-tool version **0.3.1**, result schema **2** and score version **3** remain distinct. Schema/score versions are unchanged. Performance comparisons must retain the same hardware, driver, API, scene, resolution and effective settings; the more expensive geometry policy prevents treating scores from different configurations as interchangeable.
+
+## Known limits and release gates
+
+VA-23 original-scene visual sign-off and VA-24 pre-existing OpenGL roof-edge shading/stipple remain open. Other retained limits include baked window-emission compression steps, a thin DOF frame-edge strip, close-camera foliage/DOF appearance, screen-space history/occlusion limits, and the solid-glass approximation. Procedural instancing parity, fine PCSS cutout response, haze/rain/atmosphere/reflection appearance and residual skinning edges remain explicit review scopes. This candidate does not claim original-engine pixel parity, universal temporal improvement or resolution of every rendering defect. Consult [known bugs](KNOWN_BUGS.md) together with the newer dated audits.
+
+The intended artifact set is a portable Linux x86-64 AppImage, a native Windows x64 ZIP, an Android ARM64 APK and an exact source archive, with SHA-256 files, dependency/toolchain provenance and redistributed notices. Each requires a fresh clean build, source/package verification and actual relocated/imported runtime checks. Headless Docker tests cannot establish desktop GPU behavior; a successful Android cross-build cannot establish touch, pause/resume, memory or device compatibility. Current native visual evidence is Linux; Windows rendering and physical Android acceptance remain separate gates.
+
+Android's `d7174192` development APK is debug signed, with SHA-256 `3b9b404fdc4bf48b78bb38394985a84732721280d7ab8c4b0bc873ce9f709a72`. Its debug certificate differs from the preceding intermediate build; a persistent publisher identity and update compatibility have not been qualified. Production signing requires a separately controlled identity and validation before distribution under that identity. Physical Android rendering and HDR calibration/display behavior remain unaccepted. Optional Zen binaries require compatible CPUs and their own execution checks; they are not part of the required portable three-platform candidate set. No tag, public release or publication approval is established by these notes.

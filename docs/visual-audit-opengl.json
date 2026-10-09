@@ -1,0 +1,112 @@
+[
+  {
+    "name": "opengl-tour-01",
+    "tour_time": 0.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "opengl-tour-20",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "opengl-legacy-deck-12-on",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "features.clouds": true,
+      "features.volumetric_clouds": false,
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "opengl-heat-haze-boiler-close-on",
+    "pose": [
+      -53.5,
+      59.5,
+      17.5,
+      -45,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.particles": true,
+      "heat_haze_enabled": true
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 240,
+    "review_note": "Corrected boiler smoke origin[-49.47458,55.50324,15.51257] is6m away, within8m full-strength fade and25m capture cutoff. Looks across rising plume toward village surfaces; torch refraction is not implemented by the smoke-only haze path."
+  },
+  {
+    "name": "opengl-grass-fix-grass-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false,
+      "features.grass": true
+    }
+  },
+  {
+    "name": "opengl-lens-flare-port-close-on",
+    "pose": [
+      -50.11721,
+      46.85126,
+      13.15872,
+      180,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.volumetric_fog": false,
+      "features.bloom": false,
+      "heat_haze_enabled": false,
+      "features.lens_flares": true
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 90,
+    "review_note": "Real lamp_post_glass surface center[-54.11721,46.85126,13.15872], distance4m. The old mixed-space shader falsely sees~75m and fades it out. Bloom is independently disabled in both captures to distinguish the additive flare from bloom."
+  },
+  {
+    "name": "opengl-target-flag-cloth-on",
+    "pose": [
+      -12.47,
+      -4.23,
+      37,
+      -163.03707,
+      -0.01527
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.cloth": true
+    },
+    "expected_metadata": {
+      "camera_fov": 45,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the first actual ClothBody under fly_island1/buildings/house5_1/flag_small_1: props/flag_small.mesh surface flag -> material flag. Source geometry center (-18.2112,-5.9812,36.9984), world extent (.79,3.06,1.16), outward averaged normal (.956,.292,0); camera is six metres along that normal. Cloth shading toggle does not disable simulation, so equal fixed-frame captures preserve the same cloth pose. The old dragon view had no cloth surface. No companion effect disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.cloth."
+  }
+]

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HeavenBench
+Comment=Explore and benchmark the Heaven scene
+Exec=heaven_benchmark
+Icon=heavenbench
+Categories=Game;Graphics;
+Terminal=true

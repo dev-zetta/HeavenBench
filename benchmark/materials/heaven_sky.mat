@@ -1,0 +1,302 @@
+// Heaven Benchmark - analytic Z-up sky sphere
+
+// Drawn on a large inverted sphere centered on the camera. The material uses a
+// compact Hoffman/Preetham-style atmosphere model adapted from Filament's
+// Analytic Skybox sample, converted to Heaven's Z-up world.
+
+material {
+    name : heaven_sky,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : true,
+    parameters : [
+        { type : float3,    name : sunDir,             precision : high },
+        { type : float3,    name : sunColor,           precision : high },
+        { type : float3,    name : depthR,             precision : high },
+        { type : float3,    name : depthM,             precision : high },
+        { type : float3,    name : ozone,              precision : high },
+        { type : float3,    name : multiScattering,    precision : high },
+        { type : float3,    name : nightColor,         precision : high },
+        { type : float2,    name : miePhaseParams,     precision : high },
+        { type : float,     name : horizonGlow,        precision : high },
+        { type : float,     name : sunRadiance,        precision : high },
+        { type : float,     name : sunDiskRadiance,    precision : high },
+        { type : float,     name : sunCosRadius,       precision : high },
+        { type : float,     name : sunLimbDarkening,   precision : high },
+        { type : float,     name : contrast,           precision : high },
+        { type : float3,    name : moonDir,            precision : high },
+        { type : float,     name : moonIntensity,      precision : high },
+        { type : float,     name : moonCosRadius,      precision : high },
+        { type : float,     name : moonSinRadius,      precision : high },
+        { type : float3,    name : milkyWayRow0,       precision : high },
+        { type : float3,    name : milkyWayRow1,       precision : high },
+        { type : float3,    name : milkyWayRow2,       precision : high },
+        { type : float3,    name : milkyWayControl,    precision : high },
+        { type : float4,    name : starControl,        precision : high },
+        { type : float,     name : time,               precision : high },
+        { type : float4,    name : skyAtmosphereTuning, precision : high },
+        { type : float4,    name : skyLowerHemisphereTuning, precision : high },
+        { type : sampler2d, name : moonTexture },
+        { type : sampler2d, name : moonNormal },
+        { type : sampler2d, name : milkyWayTexture }
+    ],
+    variables : [
+        viewDir
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        float3 cam_pos = float3(frameUniforms.worldFromViewMatrix[3].xyz);
+        material.viewDir = float4(material.worldPosition.xyz - cam_pos, 1.0);
+    }
+}
+
+fragment {
+    #define PI 3.14159265359
+    float rayleighPhase(float cosTheta) {
+        return (3.0 / 16.0) * (1.0 + cosTheta * cosTheta);
+    }
+
+    float hgPhase(float cosTheta, float2 params) {
+        float oneMinusG2 = 2.0 - params.x;
+        float denom = pow(max(params.x + params.y * cosTheta, 1e-4), 1.5);
+        return 0.25 * oneMinusG2 / denom;
+    }
+
+    float hash13(highp float3 p3) {
+        p3 = fract(p3 * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    highp float4 hash43(highp float3 p) {
+        highp float4 p4 = fract(float4(p.xyzx) * float4(0.1031, 0.1030, 0.0973, 0.1099));
+        p4 += dot(p4, p4.wzxy + 33.33);
+        return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+    }
+
+    highp float starValue(highp float3 V) {
+        if (materialParams.starControl.y < 0.5) return 0.0;
+        highp float density = materialParams.starControl.x;
+        highp float gridFreq = materialParams.starControl.z;
+        highp float3 p = V * gridFreq;
+        highp float3 id = floor(p);
+        highp float4 h = hash43(id);
+        if (h.w > density) return 0.0;
+
+        highp float3 jitter = 0.2 + 0.6 * h.xyz;
+        highp float3 center = normalize((id + jitter) / gridFreq);
+        highp float distSq = 2.0 * (1.0 - dot(V, center));
+        highp float radius = max(materialParams.starControl.w, 1e-5);
+        highp float radiusSq = radius * radius;
+        if (distSq >= radiusSq) return 0.0;
+
+        highp float x = distSq / radiusSq;
+        highp float intensity = (1.0 - x) * (1.0 - x);
+        highp float twinkle = 0.75 + 0.25 * sin(materialParams.time * 1.7 + h.x * 30.0);
+        // h.w already passed the sparse density threshold; using it again
+        // restricted every selected star to the dimmest 0.15% of the range.
+        highp float brightness = 0.01 + 15.0 * h.x;
+        return intensity * brightness * twinkle * 100.0;
+    }
+
+    float3 getStars(highp float3 V, highp float sunZ, highp float3 transmittance) {
+        highp float fade = 1.0 - smoothstep(-0.20, 0.10, sunZ);
+        fade *= fade;
+        if (fade <= 0.0 || V.z <= 0.03) return float3(0.0);
+
+        highp float3 rotV = normalize(float3(
+            dot(V, float3(0.6, 0.8, 0.0)),
+            dot(V, float3(-0.8, 0.6, 0.0)),
+            V.z));
+        highp float value = starValue(rotV);
+        float horizon = smoothstep(0.03, 0.22, V.z);
+        return float3(value) * transmittance * fade * horizon * 0.18;
+    }
+
+    float3 getAtmosphere(highp float3 V, highp float3 L, out highp float3 outTransmittance) {
+        // The benchmark camera lives among floating islands, above the cloud
+        // sea. Looking below the horizon should see more high-altitude sky
+        // glow, not the dense ground-level horizon path. Lift lower-hemisphere
+        // rays into a shallow sky sample before evaluating the analytic model.
+        highp float lowerBlend = 1.0 - smoothstep(
+            materialParams.skyLowerHemisphereTuning.x,
+            materialParams.skyLowerHemisphereTuning.y, V.z);
+        highp float liftedZ = mix(max(V.z, materialParams.skyAtmosphereTuning.w),
+                                  materialParams.skyLowerHemisphereTuning.z +
+                                  min(max(-V.z, 0.0), 1.0) *
+                                  materialParams.skyLowerHemisphereTuning.w,
+                                  lowerBlend);
+        highp float3 A = normalize(float3(V.xy, liftedZ));
+
+        highp float cosTheta = dot(A, L);
+        highp float rPhase = rayleighPhase(cosTheta * 0.5 + 0.5);
+        highp float mPhase = min(
+            hgPhase(cosTheta, materialParams.miePhaseParams),
+            materialParams.skyAtmosphereTuning.z);
+
+        highp float zenithCos = clamp(
+            A.z, materialParams.skyAtmosphereTuning.w, 1.0);
+        highp float zenithAngle = acos(zenithCos);
+        highp float zenithAngleDeg = zenithAngle * (180.0 / PI);
+        highp float opticalMass = 1.0 / max(
+            zenithCos + 0.15 * pow(max(93.885 - zenithAngleDeg, 1e-3), -1.253),
+            1e-3);
+
+        highp float3 totalExtinction =
+            materialParams.depthR + materialParams.depthM + materialParams.ozone;
+        outTransmittance = exp(
+            -totalExtinction * opticalMass *
+            materialParams.skyAtmosphereTuning.y);
+
+        highp float3 scatteringTerm =
+            materialParams.depthR * rPhase +
+            materialParams.depthM * mPhase +
+            materialParams.multiScattering;
+        highp float3 inScattering =
+            materialParams.sunRadiance * (scatteringTerm / max(totalExtinction, float3(1e-6)));
+        highp float3 sky = inScattering * (1.0 - outTransmittance);
+
+        mediump float horizonMix =
+            saturate(pow(1.0 - L.z, 5.0)) * materialParams.horizonGlow;
+        highp float3 horizonGlow = sqrt(max(inScattering * outTransmittance, float3(0.0)));
+        sky *= mix(float3(1.0), horizonGlow, horizonMix);
+
+        return sky;
+    }
+
+    float3 getSunDisk(highp float3 V, highp float3 L, highp float3 transmittance) {
+        highp float cosTheta = dot(V, L);
+        highp float angle = sqrt(max(0.0, 2.0 * (1.0 - cosTheta)));
+        highp float diskAngle = acos(clamp(materialParams.sunCosRadius, -1.0, 1.0));
+        highp float disk = 1.0 - smoothstep(diskAngle * 0.88, diskAngle * 1.15, angle);
+        highp float core = 1.0 - smoothstep(diskAngle * 0.18, diskAngle * 0.62, angle);
+        highp float innerGlare = exp(-pow(angle / max(diskAngle * 1.9, 1e-5), 1.8));
+        highp float outerGlare = exp(-pow(angle / max(diskAngle * 5.5, 1e-5), 1.45));
+        if (disk <= 0.0 && outerGlare <= 1e-3) return float3(0.0);
+
+        highp float3 diskTransmittance = max(transmittance, float3(0.50));
+        highp float3 hotCore = float3(1.0, 0.96, 0.86);
+        highp float3 warmGlare = float3(1.0, 0.86, 0.55);
+        return materialParams.sunDiskRadiance * diskTransmittance *
+            (hotCore * (disk * 2.0 + core * 5.0) +
+             warmGlare * (innerGlare * 0.28 + outerGlare * 0.055));
+    }
+
+    float3 getVisualSun(highp float3 V, highp float3 L, highp float3 transmittance) {
+        highp float cosTheta = clamp(dot(V, L), -1.0, 1.0);
+        highp float angle = acos(cosTheta);
+        highp float diskAngle = max(acos(clamp(materialParams.sunCosRadius, -1.0, 1.0)),
+                                    0.00872665);
+        highp float daylight = smoothstep(-0.03, 0.16, L.z);
+        if (daylight <= 0.0) return float3(0.0);
+
+        highp float disk = 1.0 - smoothstep(diskAngle * 0.86, diskAngle * 1.02, angle);
+        highp float core = 1.0 - smoothstep(diskAngle * 0.30, diskAngle * 0.74, angle);
+        highp float rim = smoothstep(diskAngle * 0.45, diskAngle * 0.92, angle) * disk;
+        highp float aureole = exp(-pow(angle / max(diskAngle * 2.3, 1e-5), 2.15));
+        highp float innerCorona = exp(-pow(angle / max(diskAngle * 6.5, 1e-5), 1.55));
+        highp float outerCorona = exp(-pow(angle / max(diskAngle * 15.0, 1e-5), 1.18));
+
+        highp float3 air = max(transmittance, float3(0.58));
+        highp float3 solarWhite = float3(1.0, 0.985, 0.90);
+        highp float3 solarGold = float3(1.0, 0.76, 0.30);
+        highp float3 sun =
+            solarWhite * (core * 3.8 + disk * 1.7) +
+            solarGold * (rim * 0.75 + aureole * 0.62 + innerCorona * 0.16) +
+            solarWhite * outerCorona * 0.045;
+        return sun * air * daylight;
+    }
+
+    float3 getMilkyWay(highp float3 V, highp float sunZ, highp float3 transmittance) {
+        float intensity = materialParams.milkyWayControl.x;
+        if (intensity <= 0.0) return float3(0.0);
+
+        highp float3 Vg = float3(
+            dot(materialParams.milkyWayRow0, V),
+            dot(materialParams.milkyWayRow1, V),
+            dot(materialParams.milkyWayRow2, V));
+        highp float u = atan(Vg.y, Vg.x) * 0.1591549 + 0.5;
+        highp float v = asin(clamp(Vg.z, -1.0, 1.0)) * 0.3183098 + 0.5;
+        highp float3 color = texture(materialParams_milkyWayTexture, float2(u, v)).rgb;
+        color = max(float3(0.0), color - materialParams.milkyWayControl.z);
+        float gray = dot(color, float3(0.299, 0.587, 0.114));
+        color = mix(float3(gray), color, materialParams.milkyWayControl.y);
+
+        float fade = 1.0 - smoothstep(-0.20, 0.10, sunZ);
+        return color * intensity * fade * transmittance * smoothstep(0.03, 0.25, V.z);
+    }
+
+    float moonPhaseFactor(highp float3 Lsun, highp float3 Lmoon) {
+        highp float cosAlpha = -dot(Lsun, Lmoon);
+        highp float alpha = acos(clamp(cosAlpha, -1.0, 1.0));
+        return (sin(alpha) + (PI - alpha) * cosAlpha) / PI;
+    }
+
+    float3 getMoonDisk(highp float3 V, highp float3 Lmoon, highp float3 Lsun,
+                       highp float3 transmittance) {
+        highp float cosTheta = dot(V, Lmoon);
+        highp float dist = 1.0 - cosTheta;
+        highp float diskRadius = max(1e-6, 1.0 - materialParams.moonCosRadius);
+        highp float edge = max(2e-7, diskRadius * 0.05);
+        highp float profile = 1.0 - smoothstep(diskRadius, diskRadius + edge, dist);
+        if (profile <= 0.0 || materialParams.moonIntensity <= 0.0) return float3(0.0);
+
+        highp float3 T = V - cosTheta * Lmoon;
+        highp float3 Nperp = T / max(materialParams.moonSinRadius, 1e-9);
+        highp float nPerpSq = dot(Nperp, Nperp);
+        highp float3 Nsphere = Nperp - Lmoon * sqrt(max(0.0, 1.0 - nPerpSq));
+
+        highp float3 Up = float3(0.0, 0.0, 1.0);
+        if (abs(Lmoon.z) > 0.99) Up = float3(0.0, 1.0, 0.0);
+        highp float3 Right = normalize(cross(Up, Lmoon));
+        highp float3 MoonUp = cross(Lmoon, Right);
+        highp float u = dot(Nsphere, Right) * 0.5 + 0.5;
+        highp float v = dot(Nsphere, MoonUp) * 0.5 + 0.5;
+
+        highp float3 albedo = texture(materialParams_moonTexture, float2(1.0 - u, 1.0 - v)).rgb;
+        highp float3 Nmap = texture(materialParams_moonNormal, float2(1.0 - u, 1.0 - v)).rgb * 2.0 - 1.0;
+        Nmap.xy *= 0.2;
+        Nmap.x *= -1.0;
+        Nsphere = normalize(Nmap.x * Right + Nmap.y * MoonUp + Nmap.z * Nsphere);
+
+        highp float NdotL = max(0.0, dot(Nsphere, Lsun));
+        highp float earthPhase = 0.5 * (1.0 + dot(Lsun, Lmoon));
+        highp float phase = max(0.08, moonPhaseFactor(Lsun, Lmoon));
+        highp float3 lit = materialParams.moonIntensity * transmittance * NdotL * albedo;
+        highp float3 unlit = materialParams.moonIntensity * transmittance * 0.002 * earthPhase * albedo;
+        return mix(unlit, lit, smoothstep(0.0, 0.1, NdotL)) * phase * profile;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        highp float3 V = normalize(variable_viewDir.xyz);
+        highp float3 L = normalize(materialParams.sunDir);
+        highp float3 transmittance;
+        highp float3 color = getAtmosphere(V, L, transmittance);
+
+        // Atmospheric scattering uses solar lux, while the night floor,
+        // stars, Milky Way and moon already use scene-linear radiance.
+        // Apply the daylight conversion before adding those night sources;
+        // scaling them a second time erased the night sky in SDR.
+        color = pow(max(color, float3(0.0)), float3(materialParams.contrast));
+        color *= materialParams.skyAtmosphereTuning.x;
+        float night = 1.0 - smoothstep(-0.08, 0.25, L.z);
+        color += materialParams.nightColor * night * smoothstep(-0.08, 0.35, V.z);
+
+        color += getStars(V, L.z, transmittance);
+        color += getMilkyWay(V, L.z, transmittance);
+
+        highp float3 Lmoon = normalize(materialParams.moonDir);
+        color += getMoonDisk(V, Lmoon, L, transmittance);
+
+        color += getVisualSun(V, L, transmittance) * materialParams.sunColor;
+        material.baseColor = float4(color, 1.0);
+    }
+}

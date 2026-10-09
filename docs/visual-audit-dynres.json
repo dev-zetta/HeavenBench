@@ -1,0 +1,41 @@
+[
+  {
+    "name": "dynres-heavy-on",
+    "tour_time": 68.9,
+    "frames": 180,
+    "settings": {
+      "quality_preset": "gpu-torture",
+      "weather.rain_intensity": 0.0,
+      "width": 3840,
+      "height": 2160
+    },
+    "args": [
+      "--dynamic-resolution-quality",
+      "0.5",
+      "--dynamic-resolution"
+    ],
+    "expected_metadata": {
+      "renderer_features.dynamic_resolution": true,
+      "runtime_settings.dynamic_resolution_min_scale": 0.5
+    }
+  },
+  {
+    "name": "dynres-heavy-off",
+    "tour_time": 68.9,
+    "frames": 180,
+    "settings": {
+      "quality_preset": "gpu-torture",
+      "weather.rain_intensity": 0.0,
+      "width": 3840,
+      "height": 2160
+    },
+    "args": [
+      "--dynamic-resolution-quality",
+      "0.5"
+    ],
+    "expected_metadata": {
+      "renderer_features.dynamic_resolution": false,
+      "runtime_settings.dynamic_resolution_min_scale": 0.5
+    }
+  }
+]

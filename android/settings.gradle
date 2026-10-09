@@ -1,0 +1,21 @@
+pluginManagement {
+    def versions = new Properties()
+    file('versions.properties').withInputStream { versions.load(it) }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    plugins {
+        id 'com.android.application' version versions.getProperty('agp')
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'HeavenBench'
+include ':app'

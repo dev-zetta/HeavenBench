@@ -1,0 +1,212 @@
+// Heaven Benchmark — GPU-animated grass blade material
+
+// Wind animation runs in the vertex shader (zero per-frame CPU
+// cost). Geometry is generated once at startup; only the `time`
+// uniform updates per frame.
+
+// Colour comes from two textures, mirroring the pattern in the
+// original Heaven `fragment_base_deferred.shader`:
+//   - grassDiffuse: per-blade tip-to-base colour gradient
+//                      (sampled with the per-blade UV0)
+//   - grassVariation: world-space tiling noise that nudges the
+//                      diffuse colour up or down on a per-patch
+//                      basis so blades aren't identical clones
+// The vertex `color` attribute carries only per-blade albedo variation.
+// Filament evaluates direct lights, IBL, and shadow maps at render time.
+
+material {
+    name : heaven_grass,
+    requires : [ uv0, color ],
+    shadingModel : lit,
+    blending : masked,
+    maskThreshold : 0.15,
+    alphaToCoverage : true,
+    // Draw both faces without Filament's double-sided normal flip. Grass uses
+    // an upward-bent vegetation normal on both faces so overhead light does not
+    // leave one side of every thin ribbon black.
+    culling : none,
+    flipUV : false,
+    specularAmbientOcclusion : bentNormals,
+    multiBounceAmbientOcclusion : true,
+    specularAntiAliasing : true,
+    parameters : [
+        { type : sampler2d, name : grassDiffuse },
+        { type : sampler2d, name : grassVariation },
+        { type : float,     name : time },
+        // World-space UV scale for the variation noise. ~0.05
+        // gives one full noise tile across roughly 20m of grass,
+        // which matches the visible scale of patchiness in the
+        // original benchmark.
+        { type : float,     name : variationScale },
+        // How strongly the variation noise modulates the diffuse
+        // colour. 0 = identical blades, 0.4 = strong patches.
+        { type : float,     name : variationStrength },
+        // xy scales normalized card UVs and zw offsets them into the selected
+        // diffuse atlas region. Grass uses identity; flower cards select the
+        // authored flowering plant in grass_variation_d.dds.
+        { type : float4,    name : grassDiffuseUv },
+        // x enables flower recoloring; yz are the height ramp over the plant
+        // and w is minimum target brightness. Grass binds x=0.
+        { type : float4,    name : flowerTintTuning },
+        { type : float4,    name : grassAtlasTuning },
+        { type : float4,    name : grassShadingTuning },
+        { type : float3,    name : grassTipTuning },
+        { type : float4,    name : grassWetnessTuning },
+        { type : float4,    name : grassWindTuning }
+    ],
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // UV.y = height along the blade (0=base, 1=tip).
+        // Wind force grows quadratically with height so the base
+        // stays planted and only the tip swings.
+        float height = material.uv0.y;
+        float windStrength = height * height;
+
+        // Per-blade phase from world XY so neighbouring blades
+        // don't move in lockstep.
+        float3 worldPos = getPosition().xyz;
+        float phase = worldPos.x * 0.5 + worldPos.y * 0.3;
+        float time = materialParams.time;
+        float wind =
+            sin(time * materialParams.grassWindTuning.x + phase) *
+                materialParams.grassWindTuning.z +
+            sin(time * materialParams.grassWindTuning.y + phase * 2.0) *
+                materialParams.grassWindTuning.w;
+
+        // Horizontal sway dominates; small downward droop on the
+        // strong-wind half of the cycle to fake the blade folding.
+        material.worldPosition.x += wind * windStrength * 0.8;
+        material.worldPosition.y += wind * windStrength * 0.3;
+        material.worldPosition.z -= windStrength * abs(wind) * 0.2;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float2 uv = getUV0();
+
+        // Sample blade diffuse atlas. UV0 here goes (0..0.5, 0..1)
+        // for one side of the blade and (0.5..1, 0..1) for the
+        // other (see grass_cpu.cpp), so the atlas should be a
+        // single tip-to-base gradient stretched over both halves.
+        float2 diffuseUv =
+            uv * materialParams.grassDiffuseUv.xy +
+            materialParams.grassDiffuseUv.zw;
+        float4 diffuse = texture(materialParams_grassDiffuse, diffuseUv);
+
+        float h = uv.y;
+        float flowerTintStrength = materialParams.flowerTintTuning.x;
+        if (flowerTintStrength > 0.0) {
+            // The authored flower heads are low-energy gray-green rather than
+            // neutral white, so a luminance/chroma key is not reliable after
+            // sRGB decoding. Keep the base green and progressively recolor the
+            // flowering upper plant. getColor() supplies a stable per-card
+            // yellow, blue, or red palette entry.
+            float authoredLuma = dot(
+                diffuse.rgb, float3(0.2126, 0.7152, 0.0722));
+            float tintMask =
+                smoothstep(materialParams.flowerTintTuning.y,
+                           materialParams.flowerTintTuning.z, h) *
+                flowerTintStrength;
+            float targetBrightness = mix(
+                materialParams.flowerTintTuning.w, 1.0,
+                clamp(authoredLuma * 2.5, 0.0, 1.0));
+            float3 targetColor = getColor().rgb * targetBrightness;
+            diffuse.rgb = min(diffuse.rgb * 1.20, float3(1.0));
+            diffuse.rgb = mix(diffuse.rgb, targetColor, tintMask);
+        } else {
+            // Grass-specific green calibration and synthesized tip gradient.
+            diffuse.rgb *= float3(materialParams.grassAtlasTuning.z,
+                                  materialParams.grassAtlasTuning.w,
+                                  materialParams.grassShadingTuning.x);
+            diffuse.rgb = min(
+                diffuse.rgb * materialParams.grassShadingTuning.y,
+                float3(1.0));
+            float3 baseColor =
+                diffuse.rgb * materialParams.grassWetnessTuning.x;
+            float3 tipColor =
+                diffuse.rgb * materialParams.grassTipTuning;
+            diffuse.rgb = mix(baseColor, tipColor, h * h);
+        }
+
+        // Per-blade-position colour variation. Sampling the
+        // variation texture with world-space UVs gives every blade
+        // (and every fragment of every blade) a slightly different
+        // tint, which is what makes a meadow look like a meadow
+        // instead of a green plastic carpet. We map the noise to
+        // [-1, +1] then scale by `variationStrength`.
+
+        // Use getUserWorldPosition() (API-level / TRUE world) rather than
+        // getWorldPosition() (Filament's camera-SHIFTED world): the shifted
+        // space translates with the camera, which would slide the variation
+        // pattern across the meadow as the camera moves. The true world anchors
+        // it to the ground.
+        float3 worldXY = getUserWorldPosition().xyz;
+        float2 varUV = worldXY.xy * materialParams.variationScale;
+        float3 noise = texture(materialParams_grassVariation, varUV).rgb;
+        noise = (noise - 0.5) * 2.0;
+        if (flowerTintStrength > 0.0) {
+            float noiseLuma = dot(noise, float3(0.2126, 0.7152, 0.0722));
+            diffuse.rgb = clamp(
+                diffuse.rgb + noiseLuma * materialParams.variationStrength,
+                0.0, 1.0);
+        } else {
+            // Modulate the albedo by the requested fraction. The sRGB atlas
+            // decodes to dark linear values, so adding this signed variation
+            // directly clips ordinary blade colors to black. Multiplication
+            // keeps a 0.25 strength within 75..125% of the calibrated albedo.
+            diffuse.rgb = clamp(
+                diffuse.rgb * (1.0 + noise * materialParams.variationStrength),
+                0.0, 1.0);
+        }
+
+        material.baseColor.rgb = flowerTintStrength > 0.0
+            ? diffuse.rgb
+            : diffuse.rgb * getColor().rgb;
+        material.baseColor.a   = diffuse.a * getColor().a;
+        material.metallic      = 0.0;
+        material.roughness = materialParams.grassShadingTuning.w;
+        material.reflectance = materialParams.grassAtlasTuning.y;
+
+        // Dense blades self-occlude near the ground. Feed that into Filament's
+        // indirect-light AO term while leaving direct light and shadow maps
+        // physically evaluated.
+        material.ambientOcclusion =
+            mix(materialParams.grassWetnessTuning.w, 1.0,
+                clamp(h * 5.0, 0.0, 1.0));
+
+        // Wetness (Weather_System). getMaterialGlobal0()
+        // is a view-wide built-in (frameUniforms) available to lit materials
+        // with no declaration, so we read the same global the lit materials use:
+        //   g.x = specular boost, g.y = diffuse darken, g.z = wet amount in [0,1].
+        // Default {0,0,0,1} ⇒ wetAmt 0 ⇒ the branch is skipped and the emitted
+        // colour is BIT-IDENTICAL to today (Shipping_Look / dry parity).
+        vec4 g = getMaterialGlobal0();
+        float wetAmt = g.z;
+        if (wetAmt > 0.0) {
+            // Wet grass reads noticeably darker and slightly desaturated (the
+            // water film cuts diffuse scatter and dulls the chlorophyll green),
+            // so we push the final colour toward a darker, less-saturated wet
+            // look weighted by g.z — it fades in as the ground soaks and out as
+            // it dries. Desaturate toward luma, then darken; both scaled by
+            // wetAmt so the response is MONOTONIC in g.z and exactly a no-op at
+            // g.z==0. The 0.55 darken endpoint keeps full-wet grass at ~0.45 of
+            // its dry brightness — clearly wet, never black — matching the
+            // ~0.45-of-dry floor the lit ground uses. Sky-independent: a pure
+            // colour multiply, so it survives the overcast lighting and tonemap.
+            float3 wc   = material.baseColor.rgb;
+            float  luma = dot(wc, float3(0.2126, 0.7152, 0.0722));
+            wc = mix(wc, float3(luma),
+                     materialParams.grassWetnessTuning.y * wetAmt);
+            wc *= (1.0 - materialParams.grassWetnessTuning.z * wetAmt);
+            material.baseColor.rgb = wc;
+            material.roughness = mix(material.roughness, 0.30, wetAmt);
+            material.reflectance = clamp(material.reflectance + g.x * wetAmt,
+                                         0.0, 1.0);
+        }
+    }
+}

@@ -1,0 +1,121 @@
+// Heaven Benchmark — Soft halo glow particles
+
+// Used by two distinct effects that share the same look:
+//   1. The `fire_glow` particle in `torch_light.node` — a slow,
+//      large halo that pulses around each torch flame.
+//   2. The lamp / torch *glare* effect — a camera-facing billboard
+//      anchored at every emissive light. As the camera approaches a
+//      lamp the glare grows and brightens, mimicking the lens-bloom
+//      response of the original benchmark.
+
+// Material samples `fire_glow_dr.dds` (64×64 soft halo) and outputs
+// premultiplied-alpha. Each particle picks a slot-deterministic phase
+// so a row of torches doesn't pulse in lock-step.
+
+// Compiled with: matc -a all -p desktop -o heaven_glow.filamat heaven_glow.mat
+
+material {
+    name : heaven_glow,
+    requires : [ uv0, custom0, custom1 ],
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    transparency : twoPassesTwoSides,
+    parameters : [
+        { type : sampler2d, name : glowTex },
+        { type : float,     name : time },
+        { type : float3,    name : tint },
+        { type : float,     name : alphaScale },
+        { type : float,     name : spawnInterval },
+        { type : float4,    name : particleShapeTuning }
+    ],
+    variables : [
+        ageNorm
+    ]
+}
+
+vertex {
+    float hash11(float x) {
+        x = fract(x * 0.1031);
+        x *= x + 33.33;
+        x *= x + x;
+        return fract(x);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        float3 emitter_origin = material.worldPosition.xyz;
+        float2 corner         = material.uv0.xy * 2.0 - 1.0;
+        float4 c0             = getCustom0();
+        float4 c1             = getCustom1();
+        float  slot           = c0.x;
+        float  base_radius    = c0.y;
+        float  growth         = c0.z;
+        float  velocity       = c0.w;
+        float  lifetime       = c1.x;
+
+        float total_cycle = lifetime + materialParams.spawnInterval;
+        float slot_phase  = slot * materialParams.spawnInterval;
+        float age = mod(materialParams.time - slot_phase, total_cycle);
+        float alive = step(age, lifetime);
+
+        float r1 = hash11(slot * 1.7);
+        float r2 = hash11(slot * 3.1 + 4.0);
+
+        // Halo is anchored at the emitter — barely moves, just pulses.
+        // A small upward drift keeps successive halos slightly offset
+        // so the bloom doesn't sample the exact same pixel every time.
+        float t01    = age / lifetime;
+        float rise =
+            velocity * age * materialParams.particleShapeTuning.x;
+        float3 pos_local = float3(
+            (r1 - 0.5) * 0.05,
+            (r2 - 0.5) * 0.05,
+            rise);
+
+        // Radius grows generously over life — the glow expands as it
+        // fades, that's the visual signature.
+        float radius = (base_radius + growth * age) * alive;
+
+        // Pure camera-aligned billboard (this is a halo, not a flame —
+        // we don't want a vertical bias).
+        float3 cam_right = float3(frameUniforms.worldFromViewMatrix[0].xyz);
+        float3 cam_up    = float3(frameUniforms.worldFromViewMatrix[1].xyz);
+        float3 right = cam_right * radius;
+        float3 up    = cam_up    * radius;
+
+        float3 world = emitter_origin + pos_local
+                     + corner.x * right + corner.y * up;
+        material.worldPosition = float4(world, 1.0);
+
+        material.ageNorm = float4(t01, slot, rise, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float t    = variable_ageNorm.x;
+        float2 uv  = getUV0();
+
+        // Fetch the soft halo. The texture is a radial gradient — bright
+        // at the centre, fading to zero at the edges — so we just use
+        // the red channel directly as the alpha shape.
+        float halo = texture(materialParams_glowTex, uv).r;
+
+        // Lifetime envelope: gentle fade in and out, peak in the middle.
+        float fade_in  = clamp(t / 0.20, 0.0, 1.0);
+        float fade_out = clamp(1.0 - (t - 0.30) / 0.70, 0.0, 1.0);
+        float life_alpha = fade_in * fade_out;
+
+        float a = halo * life_alpha * materialParams.alphaScale;
+
+        // HDR colour for bloom response.
+        float3 rgb =
+            materialParams.tint * materialParams.particleShapeTuning.w;
+
+        material.baseColor = float4(rgb * a, a);
+    }
+}

@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+export APPDIR
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export HEAVEN_RESOURCE_DIR="$APPDIR/usr/share/heavenbench/resources"
+if [ -z "${HEAVEN_USER_DIR:-}" ]; then
+    case "${XDG_DATA_HOME:-}" in
+        /*) HEAVEN_USER_DIR="$XDG_DATA_HOME/HeavenBench" ;;
+        *) HEAVEN_USER_DIR="$HOME/.local/share/HeavenBench" ;;
+    esac
+fi
+export HEAVEN_USER_DIR
+mkdir -p "$HEAVEN_USER_DIR"
+
+# Keep the caller's working directory and explicit relative --data/--config
+# arguments intact. Original Heaven content is supplied separately by its user.
+has_assets() {
+    case "$1" in *.zip) [ -f "$1" ] && return 0 ;; esac
+    [ -f "$1/heaven/heaven.world" ] && return 0
+    for archive in "$1"/*.zip; do
+        [ -f "$archive" ] && return 0
+    done
+    return 1
+}
+
+has_data=false
+for arg in "$@"; do
+    case "$arg" in --data) has_data=true ;; esac
+done
+if [ "$has_data" = false ]; then
+    if [ -n "${HEAVEN_DATA:-}" ]; then
+        # This is an explicit environment override, like --data itself.
+        set -- --data "$HEAVEN_DATA" "$@"
+    elif [ -z "${HEAVEN_DEFAULT_DATA:-}" ]; then
+        image_dir=$(CDPATH= cd -- "$(dirname -- "${APPIMAGE:-$APPDIR}")" && pwd)
+        HEAVEN_DEFAULT_DATA="$HEAVEN_USER_DIR/assets.zip"
+        for candidate in "$image_dir/assets" "$image_dir/assets.zip" "$HEAVEN_USER_DIR/assets"; do
+            if has_assets "$candidate"; then
+                HEAVEN_DEFAULT_DATA=$candidate
+                break
+            fi
+        done
+        # Defaults remain below saved configuration and explicit CLI flags.
+        export HEAVEN_DEFAULT_DATA
+    fi
+fi
+exec "$APPDIR/usr/bin/heaven_benchmark" "$@"

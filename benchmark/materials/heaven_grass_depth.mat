@@ -1,0 +1,94 @@
+// Heaven Benchmark — Grass depth-proxy material
+
+// Companion to heaven_depth / heaven_depth_masked, but for the PROCEDURAL
+// grass (GrassFeature / MassiveFoliageFeature). Procedural grass is generated
+// by those features as their own vertex/index buffers and rendered straight
+// into the main view — it is NOT a scene instance, so DepthProxyBuilder never
+// writes it into the linear scene-depth texture. The screen-space depth
+// consumers (volumetric clouds, volumetric fog, god rays, SSGI, rain splash)
+// then read the depth of the TERRAIN/SKY behind the blades and composite IN
+// FRONT of the grass — e.g. distant clouds drawing over the grass silhouette
+// at the horizon.
+
+// This material lets each grass patch render a depth-only proxy (sharing the
+// visible patch's VB/IB) into the depth pre-pass scene, so the blades occlude
+// the screen-space effects correctly. It MUST stay in lockstep with
+// heaven_grass.mat on two things:
+//   1. the wind vertex animation — so the depth silhouette tracks the swaying
+//      blades and does not shimmer against the colour pass; and
+//   2. the alpha cutout (grass diffuse atlas alpha * vertex-colour alpha at
+//      maskThreshold 0.15) — so only real blade pixels write depth.
+// The fragment writes linear eye-space forward distance (metres) to red, like
+// heaven_depth, computed AFTER the wind displacement.
+
+// Compiled with: matc -a all -p desktop -o heaven_grass_depth.filamat heaven_grass_depth.mat
+
+material {
+    name : heaven_grass_depth,
+    requires : [ uv0, color ],
+    shadingModel : unlit,
+    // Same alpha cutout as heaven_grass.mat so the depth silhouette equals the
+    // visible blade silhouette.
+    blending : masked,
+    maskThreshold : 0.15,
+    doubleSided : true,
+    flipUV : false,
+    // Depth-test + depth-write so the F colour target keeps the NEAREST
+    // surface's eye-space distance per pixel (the depth attachment is
+    // write-only, used only for this test — never sampled).
+    depthWrite : true,
+    depthCulling : true,
+    parameters : [
+        // Grass diffuse atlas — only its ALPHA channel is used (the cutout).
+        { type : sampler2d, name : grassDiffuse },
+        // Wind animation time — set per frame, identical to heaven_grass.mat.
+        { type : float,     name : time },
+        { type : float4,    name : grassWindTuning }
+    ],
+    variables : [
+        // .x = eye-space forward distance in metres;.yzw unused.
+        eyeDepth
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // ── Wind — byte-for-byte heaven_grass.mat::materialVertex ──
+        // UV.y = height along the blade (0=base, 1=tip); wind grows
+        // quadratically with height so the base stays planted.
+        float height = material.uv0.y;
+        float windStrength = height * height;
+
+        float3 worldPos = getPosition().xyz;
+        float phase = worldPos.x * 0.5 + worldPos.y * 0.3;
+        float time = materialParams.time;
+        float wind =
+            sin(time * materialParams.grassWindTuning.x + phase) *
+                materialParams.grassWindTuning.z +
+            sin(time * materialParams.grassWindTuning.y + phase * 2.0) *
+                materialParams.grassWindTuning.w;
+
+        material.worldPosition.x += wind * windStrength * 0.8;
+        material.worldPosition.y += wind * windStrength * 0.3;
+        material.worldPosition.z -= windStrength * abs(wind) * 0.2;
+
+        // Eye-space forward distance AFTER the wind displacement, so the depth
+        // matches the displaced blade. -z is the forward axis.
+        float4 viewPos = getViewFromWorldMatrix() * material.worldPosition;
+        material.eyeDepth = float4(-viewPos.z, 0.0, 0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Blade alpha = atlas alpha * vertex-colour alpha, exactly as
+        // heaven_grass.mat composes it. `masked` blending discards fragments
+        // below maskThreshold (0.15), so only solid blade pixels write depth.
+        float alpha = texture(materialParams_grassDiffuse, getUV0()).a * getColor().a;
+
+        // Red = linear eye-space distance (metres); alpha drives the cutout.
+        material.baseColor = float4(variable_eyeDepth.x, 0.0, 0.0, alpha);
+    }
+}

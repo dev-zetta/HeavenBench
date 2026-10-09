@@ -1,0 +1,105 @@
+// Heaven Benchmark — HDR10 PQ output encode
+
+// Final fullscreen pass for the --hdr path. The main view is tone-mapped by
+// GT7 and written to an fp16 scene texture in LINEAR Rec.2020 display-referred
+// values, where a value of 1.0 == 100 cd/m^2 (the GT7 reference luminance).
+// This pass converts those linear values into the HDR10 swap-chain signal:
+
+//   1. scale display-referred linear -> absolute luminance (nits)
+//   2. normalise by 10000 nits (the PQ peak)
+//   3. apply the SMPTE ST.2084 (PQ) OETF
+
+// The swap chain is created with VK_COLOR_SPACE_HDR10_ST2084_EXT, so the
+// compositor interprets the written values as PQ-encoded Rec.2020. The scene
+// texture is already in Rec.2020 primaries (set via ColorGrading
+// outputColorSpace), so no gamut conversion is needed here.
+
+// Material parameters:
+//   sceneTexture: sampler2D — the linear Rec.2020 fp16 scene
+//   referenceNits: float    — nits for a display-referred value of 1.0
+//                              (GT7 reference luminance == 100 cd/m^2)
+//   peakNits: float         — display peak luminance (highlight clamp)
+
+// Compiled with:
+//   matc -a all -p desktop -o heaven_hdr_encode.filamat heaven_hdr_encode.mat
+
+material {
+    name : heaven_hdr_encode,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    vertexDomain : device,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : sampler2d, name : sceneTexture },
+        { type : sampler2d, name : sdrLayerTexture },
+        { type : bool,      name : hasScene },
+        { type : bool,      name : hasSdrLayer },
+        { type : float,     name : referenceNits },
+        { type : float,     name : peakNits }
+    ]
+}
+
+fragment {
+    float3 srgb_to_linear(float3 color) {
+        return mix(color / 12.92, pow((color + 0.055) / 1.055, float3(2.4)),
+                   greaterThan(color, float3(0.04045)));
+    }
+
+    float3 srgb_to_rec2020(float3 color) {
+        // Linear-light sRGB/Rec.709 primaries to Rec.2020, both D65.
+        return float3(
+            dot(color, float3(0.62740390, 0.32928304, 0.04331307)),
+            dot(color, float3(0.06909729, 0.91954040, 0.01136232)),
+            dot(color, float3(0.01639144, 0.08801331, 0.89559525)));
+    }
+
+    // SMPTE ST.2084 (PQ) inverse-EOTF / OETF. Input is absolute luminance
+    // normalised to [0,1] over [0,10000] nits; output is the PQ code value.
+    float3 pq_oetf(float3 L) {
+        const float m1 = 0.1593017578125;
+        const float m2 = 78.84375;
+        const float c1 = 0.8359375;
+        const float c2 = 18.8515625;
+        const float c3 = 18.6875;
+        float3 Lm1 = pow(max(L, 0.0), float3(m1));
+        return pow((c1 + c2 * Lm1) / (1.0 + c3 * Lm1), float3(m2));
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Sample the captured scene. Vulkan RT is Y-flipped relative to the
+        // texture authoring orientation, so flip V (same trick as heaven_blit).
+        float2 uv = uvToRenderTargetUV(getNormalizedViewportCoord().xy);
+        float3 linearRec2020 = materialParams.hasScene
+            ? texture(materialParams_sceneTexture, uv).rgb : float3(0.0);
+
+        if (materialParams.hasSdrLayer) {
+            // ImGui and the splash retain their normal sRGB code values in a
+            // separate linear-format target. Unpremultiply before applying the
+            // transfer function, then blend in linear light before PQ encoding.
+            float4 layer = texture(materialParams_sdrLayerTexture, uv);
+            float alpha = clamp(layer.a, 0.0, 1.0);
+            float3 srgb = alpha > 0.0
+                ? clamp(layer.rgb / alpha, 0.0, 1.0) : float3(0.0);
+            float3 layerRec2020 = srgb_to_rec2020(srgb_to_linear(srgb));
+            linearRec2020 = mix(linearRec2020, layerRec2020, alpha);
+        }
+
+        // Display-referred linear (1.0 == 100 cd/m^2 from GT7) -> absolute nits.
+        float3 nits = linearRec2020 * materialParams.referenceNits;
+
+        // Clamp to the display peak so we never ask for more than the panel can
+        // show (avoids PQ values the compositor would hard-clip unpredictably).
+        nits = min(nits, float3(materialParams.peakNits));
+
+        // Normalise by the PQ peak (10000 nits) and apply the PQ OETF.
+        float3 pq = pq_oetf(nits / 10000.0);
+
+        material.baseColor = float4(pq, 1.0);
+    }
+}

@@ -1,0 +1,64 @@
+plugins {
+    id 'com.android.application'
+}
+
+def versions = new Properties()
+rootProject.file('versions.properties').withInputStream { versions.load(it) }
+def sdlSource = providers.gradleProperty('heavenSdlSource').orNull
+def nativeDirectory = providers.gradleProperty('heavenJniDir').orNull
+def assetDirectory = providers.gradleProperty('heavenAssetsDir').orNull
+if (sdlSource == null || nativeDirectory == null || assetDirectory == null) {
+    throw new GradleException('Build with scripts/build_android.sh to stage matching SDL Java/native code, resources, and licenses.')
+}
+def sdlJavaDirectory = layout.buildDirectory.dir('generated/sdl-java')
+def prepareSdlJava = tasks.register('prepareSdlJava', Exec) {
+    inputs.dir new File(sdlSource, 'android-project/app/src/main/java')
+    inputs.file rootProject.file('prepare_sdl_java.py')
+    outputs.dir sdlJavaDirectory
+    commandLine 'python3', rootProject.file('prepare_sdl_java.py').absolutePath,
+        '--source', sdlSource, '--output', sdlJavaDirectory.get().asFile.absolutePath
+}
+tasks.named('preBuild').configure { dependsOn prepareSdlJava }
+
+android {
+    namespace 'app.zetta.heavenbench'
+    compileSdk versions.getProperty('sdk').toInteger()
+    buildToolsVersion versions.getProperty('buildTools')
+    ndkVersion versions.getProperty('ndk')
+
+    defaultConfig {
+        applicationId 'app.zetta.heavenbench'
+        minSdk versions.getProperty('minSdk').toInteger()
+        targetSdk versions.getProperty('sdk').toInteger()
+        versionCode 2
+        versionName providers.gradleProperty('heavenVersion').getOrElse('1.0.0')
+        ndk { abiFilters providers.gradleProperty('heavenAbi').getOrElse('arm64-v8a') }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets.main {
+        java.srcDir sdlJavaDirectory
+        jniLibs.srcDir nativeDirectory
+        assets.srcDir assetDirectory
+    }
+    packaging {
+        // SDL locates SDL_main with dlopen(nativeLibraryDir + library). Keep
+        // native libraries extracted, including on devices with 16 KiB pages.
+        jniLibs.useLegacyPackaging = true
+    }
+    buildTypes {
+        debug { debuggable true }
+        release {
+            minifyEnabled false
+            // Distribution signing belongs to the publisher. The helper's
+            // default debug APK is installable without a private release key.
+        }
+    }
+    lint {
+        // Check application and generated SDL glue together, with no exclusions.
+        checkGeneratedSources true
+        checkReleaseBuilds true
+    }
+}

@@ -1,0 +1,69 @@
+# Original Heaven downloads and extracted data stay local. Assembled OBJ scenes
+# are transient conversions of that same original geometry, not new artwork.
+/data/
+/extracted/
+/assembled/
+*.[uU][nN][gG]
+Unigine_Heaven-*.run
+Unigine_Heaven-*.exe
+Unigine_Heaven-*.dmg
+# A download beside an explicitly selected installer stays private until verified.
+.Unigine_Heaven-*.run.*.part
+
+# Runtime packs are reproducible local outputs. Source-owned generated assets
+# and fixture packs remain eligible, including /assets/generated/; do not ignore
+# all PNG/DDS/ZIPs.
+/assets.zip
+/assets/assets.zip
+/assets/assets-hires.zip
+# The builder validates a complete base ZIP in a private sibling directory.
+.heaven-assets-*/
+
+# Development runs can write caches and diagnostic reports beside the sources.
+/cache/
+/assets/cache/
+/results/
+/profiles/
+/loading-results/
+imgui.ini
+
+# Canonical generated tree.
+/build/
+# Legacy build-tree names from older scripts; safe to delete locally.
+/benchmark/build/
+/benchmark/build-*/
+/build-ci/
+# Gradle output and locally exported compilation databases are not source files.
+/android/**/build/
+/compile_commands.json
+.gradle/
+/android/local.properties
+*.iml
+
+# Local editor/agent state and instructions, including nested tool workspaces.
+.vscode/
+.idea/
+.vs/
+.codex/
+.kiro/
+.agents/
+AGENTS.md
+# Cloud credentials and machine-specific session metadata stay local.
+.aws/
+
+# Host file-manager metadata.
+.DS_Store
+Thumbs.db
+
+# Exact revisions are managed by scripts/fetch_dependencies.sh.
+/lib/filament/
+/lib/JoltPhysics/
+/lib/rapidcheck/
+/lib/libzip/
+/lib/pocketfft/
+/lib/bcdec/
+# Python test and offline-tool environments, caches and bytecode.
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]

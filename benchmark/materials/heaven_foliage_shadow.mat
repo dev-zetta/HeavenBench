@@ -1,0 +1,258 @@
+// Heaven Benchmark — Transparent/coverage-modulated foliage shadow caster
+
+
+// In Filament a surface's shadow is cast by its OWN material's shadow
+// behaviour — there is no separate per-renderable shadow material. The
+// shipping foliage uses heaven_lit_twosided (`blending: masked`), so it casts
+// a BINARY alpha-tested shadow: a texel either writes the shadow map (full
+// occlusion) or is discarded (none). That reads as a near-solid silhouette
+// blob under a dense canopy.
+
+// This material is the coverage-modulated variant the transparent-shadow
+// feature routes foliage casters to (MaterialInstanceCache::get_or_create when
+// set_transparent_shadows(true) AND is_foliage_shadow_caster(...) —,
+// It declares `blending: transparent` + `transparentShadow: true`,
+// which switches the depth/shadow pass to Filament's screen-door path
+// (surface_depth_main.fs): the fragment's interleaved-gradient noise is
+// compared against baseColor.a and discarded when `noise >= alpha`, so a texel
+// with coverage `a` writes the shadow map with probability `a`. A
+// partially-transparent canopy therefore casts a LOWER-density shadow than the
+// opaque silhouette, and a fully-transparent region (a == 0) casts
+// none.
+
+// DXT5 foliage alpha is NOT a clean binary mask (AGENTS.md: many background
+// texels of e.g. fir_branch_d.dds sit at alpha ~0.39, not 0). Feeding that raw
+// alpha to the screen-door would scatter ~39%-density shadow from background
+// texels. So coverage is remapped with a smoothstep that pushes the ~0.39
+// background to 0 while keeping solid leaf interiors at 1 and giving a soft
+// graded edge in between (the coverage modulation  asks for).
+
+// This material is bound only on a duplicate shadow-only renderable. It does
+// NOT write colour in the main view; visible foliage stays on the masked
+// heaven_lit_twosided path so tree cards remain depth-stable and never enter
+// Filament's transparent colour sorting. The shadow variant still reads
+// baseColor.a for transparentShadow coverage.
+
+// Authored as a.mat source, compiled with matc via the incremental
+// ./scripts/build.sh --materials path and embedded via gen_materials_data.py —
+// never hand-editing materials_data.h.
+
+material {
+    name : heaven_foliage_shadow,
+    requires : [ uv0, uv1, custom0, custom1, custom2, custom3, custom4, custom5, custom6, custom7 ],
+    shadingModel : lit,
+    // Transparent blending is required for Filament's transparentShadow path
+    // (MaterialBuilder rejects transparentShadow on MASKED blending). Colour
+    // writes are disabled because this material is a shadow-only duplicate;
+    // the visible foliage/log branch planes use the masked material instead.
+    blending : transparent,
+    transparentShadow : true,
+    colorWrite : false,
+    depthWrite : false,
+    doubleSided : true,
+    flipUV : false,
+    specularAmbientOcclusion : simple,
+    specularAntiAliasing : true,
+    parameters : [
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasBaseColor },
+        { type : sampler2d, name : normalMap },
+        { type : bool,      name : hasNormal },
+        { type : float,     name : normalStrength },
+        { type : sampler2d, name : specularMap },
+        { type : bool,      name : hasSpecular },
+        { type : sampler2d, name : emissiveMap },
+        { type : bool,      name : hasEmissive },
+        { type : float3,    name : emissionTint },
+        { type : float,     name : emissionScale },
+        { type : sampler2d, name : detailMap },
+        { type : sampler2d, name : detailNormalMap },
+        { type : sampler2d, name : detailSpecularMap },
+        { type : bool,      name : hasDetail },
+        { type : int,       name : detailMode },
+        { type : float3,    name : detailStrength },
+        { type : bool,      name : detailUsesBaseAlpha },
+        { type : float4,    name : detailTransform },
+        { type : float4,    name : baseTransform },
+        { type : sampler2d, name : heightMap },
+        // Vertex geometry uses a separate isotropic trilinear sampler.
+        { type : sampler2d, name : geometryHeightMap, stages : [ vertex ] },
+        { type : bool,      name : geometryDisplacement },
+        { type : float4,    name : displacementParams },
+        { type : bool,      name : hasHeight },
+        { type : float,     name : displacementScale },
+        { type : float4,    name : surfaceSamplingTuning },
+        { type : float4,    name : surfaceMetallicTuning },
+        { type : float4,    name : surfaceDielectricTuning },
+        { type : float4,    name : surfaceReflectanceTuning },
+        { type : float4,    name : surfaceEmissionTuning },
+        { type : float4,    name : surfaceMaskedEmissionTuning },
+        { type : float4,    name : surfaceWetnessTuning },
+        { type : float2,    name : surfaceWetnessShape }
+    ],
+}
+
+vertex {
+    #include "includes/bounded_displacement.glsl"
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.geometryDisplacement && getCustom7().w > 0.0) {
+            applyParentChord(material);
+        } else if (materialParams.geometryDisplacement) {
+            float3 userWorldPosition =
+                    (getUserWorldFromWorldMatrix() * material.worldPosition).xyz;
+            float distance = length(userWorldPosition - getMaterialGlobal1().xyz);
+            float normalizedDistance = clamp(
+                    (distance - materialParams.displacementParams.z)
+                    * materialParams.displacementParams.w, 0.0, 8.0);
+            float fade = pow(saturate(1.0 - normalizedDistance),
+                             materialParams.displacementParams.y);
+            float2 uv = material.uv0.xy * materialParams.baseTransform.xy
+                      + materialParams.baseTransform.zw;
+            // A vertex is one sample of the height field. Filter frequencies
+            // finer than its incident UV edges before moving the geometry;
+            // otherwise sparse triangles alias into false shadow-casting folds.
+            // CUSTOM0.yz is the UV footprint, populated by MeshStore. Keep the
+            // authored distance fade independent of this sampling LOD.
+            float2 footprint = getCustom0().yz * abs(materialParams.baseTransform.xy)
+                             * float2(textureSize(materialParams_geometryHeightMap, 0));
+            float meshLod = log2(max(max(footprint.x, footprint.y), 1.0));
+            float heightLod = max(normalizedDistance, meshLod);
+            float height = textureLod(materialParams_geometryHeightMap, uv, heightLod).r;
+            float offset = (height - 127.0 / 255.0)
+                         * materialParams.displacementParams.x * fade
+                         * getCustom0().x;
+            material.worldPosition.xyz += normalize(material.worldNormal) * offset;
+        }
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        // Heaven's per-material UV transform — see heaven_lit_twosided.mat.
+        float2 uv = getUV0() * materialParams.baseTransform.xy
+                  + materialParams.baseTransform.zw;
+        float4 base = materialParams.hasBaseColor
+                ? texture(materialParams_baseColorMap, uv)
+                : float4(materialParams.surfaceSamplingTuning.xxx, 1.0);
+        float4 detailSample =
+            float4(materialParams.surfaceSamplingTuning.yyy, 1.0);
+        float3 detailBlend = float3(0.0);
+        float2 detailUV = uv;
+        if (materialParams.hasDetail) {
+            float2 detailBaseUV =
+                    (materialParams.detailMode == 2 || materialParams.detailMode == 4)
+                    ? getUV1() : uv;
+            detailUV = detailBaseUV * materialParams.detailTransform.xy
+                     + materialParams.detailTransform.zw;
+            detailSample = texture(materialParams_detailMap, detailUV);
+            float blendAlpha = detailSample.a;
+            if (materialParams.detailUsesBaseAlpha) blendAlpha *= base.a;
+            detailBlend = materialParams.detailStrength * blendAlpha;
+        }
+
+        // ── Normal map + height bump — MUST precede prepareMaterial() ──
+        // Filament consumes material.normal inside prepareMaterial(); assigning
+        // it afterwards is silently ignored (mirrors heaven_lit_twosided).
+        float foliageDetail = 1.0;
+        float3 tangentNormal = float3(0.0, 0.0, 1.0);
+        if (materialParams.hasNormal) {
+            float3 n = texture(materialParams_normalMap, uv).xyz;
+            if (n.b < materialParams.surfaceSamplingTuning.z) {
+                n.xy = n.xy * 2.0 - 1.0;
+                n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
+            } else {
+                n = n * 2.0 - 1.0;
+            }
+            n = normalize(float3(
+                    n.xy * materialParams.normalStrength, max(n.z, 1e-4)));
+            tangentNormal = n;
+            float nz = max(n.z, 0.0);
+            foliageDetail = mix(0.4, 1.0, nz * nz);
+        }
+        if (materialParams.hasDetail && detailBlend.y > 0.0) {
+            float2 detailNormal = texture(materialParams_detailNormalMap, detailUV).xy
+                                * 2.0 - 1.0;
+            tangentNormal.xy += detailNormal * detailBlend.y
+                              * materialParams.normalStrength;
+        }
+        if (materialParams.hasHeight) {
+            float texel = materialParams.surfaceSamplingTuning.w;
+            float hc = texture(materialParams_heightMap, uv).r;
+            float hx = texture(materialParams_heightMap, uv + float2(texel, 0.0)).r;
+            float hy = texture(materialParams_heightMap, uv + float2(0.0, texel)).r;
+            float3 bump = float3(hc - hx, hc - hy, 0.0) * 2.0;
+            tangentNormal = normalize(tangentNormal + bump);
+        }
+        if (materialParams.hasNormal || materialParams.hasDetail ||
+            materialParams.hasHeight) {
+            material.normal = normalize(tangentNormal);
+        }
+
+        prepareMaterial(material);
+
+        // ── Foliage colour + coverage ──────────────────────────────
+        if (materialParams.hasDetail) {
+            if (materialParams.detailMode <= 2) {
+                base.rgb = clamp(base.rgb
+                        + (detailSample.rgb * 2.0 - 1.0) * detailBlend.x,
+                        0.0, 1.0);
+            } else {
+                base.rgb *= clamp(
+                        detailSample.rgb + 1.0 - detailBlend.x, 0.0, 1.0);
+            }
+        }
+        base.rgb *= foliageDetail;
+
+        // Coverage remap (AGENTS.md). The DXT5 foliage alpha is
+        // not a clean 0/1 mask — background texels sit near ~0.39 — so remap so
+        // the background collapses to zero coverage (no shadow), solid leaf
+        // interiors stay at full coverage, and the band between gives a soft
+        // graded edge. This graded coverage is exactly what the screen-door
+        // shadow pass turns into a partial-density (and edge-feathered) shadow.
+        float coverage = smoothstep(0.40, 0.85, base.a);
+
+        if (materialParams.hasSpecular) {
+            float spec = texture(materialParams_specularMap, uv).r;
+            if (materialParams.hasDetail && detailBlend.z > 0.0) {
+                float detailSpec = texture(materialParams_detailSpecularMap, detailUV).r;
+                if (materialParams.detailMode <= 2) {
+                    spec = clamp(spec + (detailSpec * 2.0 - 1.0) * detailBlend.z,
+                                 0.0, 1.0);
+                } else {
+                    spec *= clamp(detailSpec + 1.0 - detailBlend.z, 0.0, 1.0);
+                }
+            }
+            material.metallic    = 0.0;
+            material.roughness = clamp(
+                1.0 - spec * materialParams.surfaceDielectricTuning.x,
+                materialParams.surfaceDielectricTuning.y,
+                materialParams.surfaceDielectricTuning.z);
+            material.reflectance =
+                mix(materialParams.surfaceDielectricTuning.w,
+                    materialParams.surfaceReflectanceTuning.x, spec);
+        } else {
+            material.roughness = materialParams.surfaceReflectanceTuning.y;
+            material.metallic    = 0.0;
+            material.reflectance = materialParams.surfaceReflectanceTuning.z;
+        }
+
+        if (materialParams.hasEmissive) {
+            float4 esample = texture(materialParams_emissiveMap, uv);
+            float scl_in   = materialParams.emissionScale;
+            float scl_out =
+                max(0.0, scl_in - materialParams.surfaceMaskedEmissionTuning.x) *
+                materialParams.surfaceMaskedEmissionTuning.y;
+            float lum      = max(esample.r, max(esample.g, esample.b));
+            float mask =
+                smoothstep(materialParams.surfaceMaskedEmissionTuning.z,
+                           materialParams.surfaceMaskedEmissionTuning.w, lum);
+            float3 tint    = materialParams.emissionTint;
+            material.emissive = float4(esample.rgb * tint * mask * scl_out, 0.0);
+        }
+
+        // The shadow pass reads baseColor.a == coverage for its screen-door
+        // discard. Colour writes are disabled in the main view, but keep rgb
+        // premultiplied for any backend path that still evaluates it.
+        material.baseColor = float4(base.rgb * coverage, coverage);
+    }
+}

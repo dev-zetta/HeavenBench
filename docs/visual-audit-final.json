@@ -1,0 +1,340 @@
+[
+  {
+    "name": "bloom-off",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 21,
+      "features.bloom": false
+    }
+  },
+  {
+    "name": "bloom-on",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 21,
+      "features.bloom": true
+    }
+  },
+  {
+    "name": "lens-flare-port-close-off",
+    "pose": [
+      -50.11721,
+      46.85126,
+      13.15872,
+      180,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.volumetric_fog": false,
+      "features.bloom": false,
+      "heat_haze_enabled": false,
+      "features.lens_flares": false
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 90,
+    "review_note": "Real lamp_post_glass surface center[-54.11721,46.85126,13.15872], distance4m. The old mixed-space shader falsely sees~75m and fades it out. Bloom is independently disabled in both captures to distinguish the additive flare from bloom."
+  },
+  {
+    "name": "lens-flare-port-close-on",
+    "pose": [
+      -50.11721,
+      46.85126,
+      13.15872,
+      180,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.volumetric_fog": false,
+      "features.bloom": false,
+      "heat_haze_enabled": false,
+      "features.lens_flares": true
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 90,
+    "review_note": "Real lamp_post_glass surface center[-54.11721,46.85126,13.15872], distance4m. The old mixed-space shader falsely sees~75m and fades it out. Bloom is independently disabled in both captures to distinguish the additive flare from bloom."
+  },
+  {
+    "name": "target-cannon-ground-contact-on",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -23.035
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.ambient_occlusion": false,
+      "quality.contact_shadow_level": 2,
+      "features.contact_shadows": true
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the actual cannon/wheel/wood contact against the fort ground near (-136.25,-92.37,20.0). Contact shadows are SUN ShadowOptions, not point-light shadows. Hour9 retains a contributing sun at a grazing angle; High contact quality increases actual step count. Disable AO in BOTH halves so its dark creases do not conceal screen-space contact-shadow differences. Keep ordinary mapped sun shadows enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.contact_shadows."
+  },
+  {
+    "name": "target-cannon-ground-contact-off",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -23.035
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.ambient_occlusion": false,
+      "quality.contact_shadow_level": 2,
+      "features.contact_shadows": false
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the actual cannon/wheel/wood contact against the fort ground near (-136.25,-92.37,20.0). Contact shadows are SUN ShadowOptions, not point-light shadows. Hour9 retains a contributing sun at a grazing angle; High contact quality increases actual step count. Disable AO in BOTH halves so its dark creases do not conceal screen-space contact-shadow differences. Keep ordinary mapped sun shadows enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.contact_shadows."
+  },
+  {
+    "name": "hdr-night",
+    "tour_time": 193.25,
+    "settings": {
+      "hdr": true,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-01",
+    "tour_time": 0.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-02",
+    "tour_time": 17.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-03",
+    "tour_time": 23.5,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-04",
+    "tour_time": 29.2,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-05",
+    "tour_time": 34.9,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-06",
+    "tour_time": 46.25,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-07",
+    "tour_time": 68.89999999999999,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-08",
+    "tour_time": 74.6,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-09",
+    "tour_time": 85.95,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-10",
+    "tour_time": 97.3,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-11",
+    "tour_time": 108.64999999999999,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-12",
+    "tour_time": 120.0,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-13",
+    "tour_time": 130.75,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-14",
+    "tour_time": 136.45000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-15",
+    "tour_time": 147.8,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-16",
+    "tour_time": 153.5,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-17",
+    "tour_time": 159.20000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-18",
+    "tour_time": 170.55,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-19",
+    "tour_time": 181.9,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-20",
+    "tour_time": 193.25,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-21",
+    "tour_time": 198.95000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-22",
+    "tour_time": 210.3,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-23",
+    "tour_time": 221.65,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-24",
+    "tour_time": 233.0,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-25",
+    "tour_time": 244.35000000000002,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "tour-26",
+    "tour_time": 250.05,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "hdr-day",
+    "tour_time": 0.8,
+    "settings": {
+      "hdr": true,
+      "weather.rain_intensity": 0.0
+    }
+  }
+]

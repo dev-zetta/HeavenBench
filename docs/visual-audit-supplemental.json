@@ -1,0 +1,1126 @@
+[
+  {
+    "name": "edge-no-taa",
+    "tour_time": 159.2,
+    "settings": {
+      "features.taa": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-no-ssgi",
+    "tour_time": 159.2,
+    "settings": {
+      "features.ssgi": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-no-volumetric_fog",
+    "tour_time": 159.2,
+    "settings": {
+      "features.volumetric_fog": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-no-volumetric_clouds",
+    "tour_time": 159.2,
+    "settings": {
+      "features.volumetric_clouds": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-no-god_rays",
+    "tour_time": 159.2,
+    "settings": {
+      "features.god_rays": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-no-depth_of_field",
+    "tour_time": 159.2,
+    "settings": {
+      "features.depth_of_field": false,
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "edge-reference",
+    "tour_time": 159.2,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "grass-close-reference",
+    "tour_time": 233.0,
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "grass-close-none",
+    "tour_time": 233.0,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.grass": false,
+      "features.massive_foliage": false
+    }
+  },
+  {
+    "name": "grass-close-no-dof",
+    "tour_time": 233.0,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    }
+  },
+  {
+    "name": "edge-dof-high",
+    "tour_time": 159.2,
+    "args": [
+      "--dof-quality",
+      "2"
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0
+    }
+  },
+  {
+    "name": "window-isolate-no-reflections",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.reflections": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "window-isolate-no-ssgi",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.ssgi": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "window-isolate-no-depth_of_field",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.depth_of_field": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "window-isolate-no-taa",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.taa": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "window-isolate-no-ambient_occlusion",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.ambient_occlusion": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "window-isolate-no-point_light_shadows",
+    "pose": [
+      -16.55995,
+      28.88356,
+      22.25873,
+      -15.58437,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "30"
+    ],
+    "settings": {
+      "time_of_day": 21,
+      "weather.rain_intensity": 0.0,
+      "features.bloom": true,
+      "features.point_light_shadows": false
+    },
+    "review_note": "Isolate block-stepped warm spill at lintel/sill; identical pose/settings to bloom-on except named effect disabled."
+  },
+  {
+    "name": "heat-haze-boiler-close-on",
+    "pose": [
+      -53.5,
+      59.5,
+      17.5,
+      -45,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.particles": true,
+      "heat_haze_enabled": true
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 240,
+    "review_note": "Corrected boiler smoke origin[-49.47458,55.50324,15.51257] is6m away, within8m full-strength fade and25m capture cutoff. Looks across rising plume toward village surfaces; torch refraction is not implemented by the smoke-only haze path."
+  },
+  {
+    "name": "heat-haze-boiler-close-off",
+    "pose": [
+      -53.5,
+      59.5,
+      17.5,
+      -45,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.particles": true,
+      "heat_haze_enabled": false
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 240,
+    "review_note": "Corrected boiler smoke origin[-49.47458,55.50324,15.51257] is6m away, within8m full-strength fade and25m capture cutoff. Looks across rising plume toward village surfaces; torch refraction is not implemented by the smoke-only haze path."
+  },
+  {
+    "name": "god-rays-sun-roof-on",
+    "pose": [
+      4.23908,
+      -18.56104,
+      24.2079,
+      34.37747,
+      30
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.volumetric_fog": false,
+      "features.god_rays": true
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Hour8 sun vector is yaw34.37747/elevation30degrees; sun must project onscreen for this effect. Roof view seeks partial occlusion, raised control establishes unobstructed sky response."
+  },
+  {
+    "name": "god-rays-sun-roof-off",
+    "pose": [
+      4.23908,
+      -18.56104,
+      24.2079,
+      34.37747,
+      30
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.volumetric_fog": false,
+      "features.god_rays": false
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Hour8 sun vector is yaw34.37747/elevation30degrees; sun must project onscreen for this effect. Roof view seeks partial occlusion, raised control establishes unobstructed sky response."
+  },
+  {
+    "name": "god-rays-sun-open-on",
+    "pose": [
+      4.23908,
+      -18.56104,
+      55,
+      34.37747,
+      30
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.volumetric_fog": false,
+      "features.god_rays": true
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Hour8 sun vector is yaw34.37747/elevation30degrees; sun must project onscreen for this effect. Roof view seeks partial occlusion, raised control establishes unobstructed sky response."
+  },
+  {
+    "name": "god-rays-sun-open-off",
+    "pose": [
+      4.23908,
+      -18.56104,
+      55,
+      34.37747,
+      30
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.volumetric_fog": false,
+      "features.god_rays": false
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Hour8 sun vector is yaw34.37747/elevation30degrees; sun must project onscreen for this effect. Roof view seeks partial occlusion, raised control establishes unobstructed sky response."
+  },
+  {
+    "name": "ground-relief-ruins-close-on",
+    "pose": [
+      -8,
+      -17.5,
+      23.75,
+      90,
+      -14
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.ground_relief": true
+    },
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 90,
+    "review_note": "Actual ruins_ground triangle centers[-8.0414,-15.8604,22.9458],[-8.5591,-15.2030,22.9458]. Low grazing camera~2m away tests the specifically enhanced surface, not generic cobblestones."
+  },
+  {
+    "name": "ground-relief-ruins-close-off",
+    "pose": [
+      -8,
+      -17.5,
+      23.75,
+      90,
+      -14
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.ground_relief": false
+    },
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 90,
+    "review_note": "Actual ruins_ground triangle centers[-8.0414,-15.8604,22.9458],[-8.5591,-15.2030,22.9458]. Low grazing camera~2m away tests the specifically enhanced surface, not generic cobblestones."
+  },
+  {
+    "name": "ground-relief-fort-close-on",
+    "pose": [
+      -120,
+      -84,
+      16.99,
+      90,
+      -14
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.ground_relief": true
+    },
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 90,
+    "review_note": "Actual fort_ground is planar atworldZ16.1882, boundedXY[-141.47,-98.52]to[-113.87,-70.63]; target triangles near[-119.87,-81.59,16.1882]."
+  },
+  {
+    "name": "ground-relief-fort-close-off",
+    "pose": [
+      -120,
+      -84,
+      16.99,
+      90,
+      -14
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 8,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.ground_relief": false
+    },
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 90,
+    "review_note": "Actual fort_ground is planar atworldZ16.1882, boundedXY[-141.47,-98.52]to[-113.87,-70.63]; target triangles near[-119.87,-81.59,16.1882]."
+  },
+  {
+    "name": "volumetric-cloud-deck-0-on",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.clouds": false,
+      "features.volumetric_fog": false,
+      "features.volumetric_clouds": true
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Same outboard/downward view as legacy-deck controls. Volumetric slab worldZ[-720,-400] is below islands and occluded by the normal street view."
+  },
+  {
+    "name": "volumetric-cloud-deck-0-off",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.clouds": false,
+      "features.volumetric_fog": false,
+      "features.volumetric_clouds": false
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Same outboard/downward view as legacy-deck controls. Volumetric slab worldZ[-720,-400] is below islands and occluded by the normal street view."
+  },
+  {
+    "name": "volumetric-cloud-deck-12-on",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.clouds": false,
+      "features.volumetric_fog": false,
+      "features.volumetric_clouds": true
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Same outboard/downward view as legacy-deck controls. Volumetric slab worldZ[-720,-400] is below islands and occluded by the normal street view."
+  },
+  {
+    "name": "volumetric-cloud-deck-12-off",
+    "pose": [
+      0,
+      -45,
+      60,
+      0,
+      -35
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.clouds": false,
+      "features.volumetric_fog": false,
+      "features.volumetric_clouds": false
+    },
+    "args": [],
+    "frames": 90,
+    "review_note": "Same outboard/downward view as legacy-deck controls. Volumetric slab worldZ[-720,-400] is below islands and occluded by the normal street view."
+  },
+  {
+    "name": "lens-flare-port-close-on",
+    "pose": [
+      -50.11721,
+      46.85126,
+      13.15872,
+      180,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.volumetric_fog": false,
+      "features.bloom": false,
+      "heat_haze_enabled": false,
+      "features.lens_flares": true
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 90,
+    "review_note": "Real lamp_post_glass surface center[-54.11721,46.85126,13.15872], distance4m. The old mixed-space shader falsely sees~75m and fades it out. Bloom is independently disabled in both captures to distinguish the additive flare from bloom."
+  },
+  {
+    "name": "lens-flare-port-close-off",
+    "pose": [
+      -50.11721,
+      46.85126,
+      13.15872,
+      180,
+      0
+    ],
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 0,
+      "features.volumetric_fog": false,
+      "features.bloom": false,
+      "heat_haze_enabled": false,
+      "features.lens_flares": false
+    },
+    "args": [
+      "--camera-fov",
+      "40"
+    ],
+    "frames": 90,
+    "review_note": "Real lamp_post_glass surface center[-54.11721,46.85126,13.15872], distance4m. The old mixed-space shader falsely sees~75m and fades it out. Bloom is independently disabled in both captures to distinguish the additive flare from bloom."
+  },
+  {
+    "name": "target-dragon-clearcoat-on",
+    "pose": [
+      15,
+      -0.5,
+      31.3,
+      -149.68879,
+      -10.42822
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 14,
+      "features.clear_coat": true
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 14
+    },
+    "review_note": "Targets heaven/meshes/buildings/dragon.mesh, dragon_body_lod0 and dragon_body_tesselation, bound to dragon_body_reflection/dragon_body_tessellation_reflection. Actual body bounds center is (5.90,-5.82,29.36); dragon is a clear-coat marker in material_model_ref.h. Afternoon lighting gives an oblique specular angle. The previous boiler view did not match clear-coat markers. No other effects disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.clear_coat."
+  },
+  {
+    "name": "target-dragon-clearcoat-off",
+    "pose": [
+      15,
+      -0.5,
+      31.3,
+      -149.68879,
+      -10.42822
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 14,
+      "features.clear_coat": false
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 14
+    },
+    "review_note": "Targets heaven/meshes/buildings/dragon.mesh, dragon_body_lod0 and dragon_body_tesselation, bound to dragon_body_reflection/dragon_body_tessellation_reflection. Actual body bounds center is (5.90,-5.82,29.36); dragon is a clear-coat marker in material_model_ref.h. Afternoon lighting gives an oblique specular angle. The previous boiler view did not match clear-coat markers. No other effects disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.clear_coat."
+  },
+  {
+    "name": "target-cannon-anisotropy-on",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -19.28369
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 14,
+      "features.anisotropic": true
+    },
+    "expected_metadata": {
+      "camera_fov": 45,
+      "time_of_day": 14
+    },
+    "review_note": "Targets actual fort cannon.mesh surface cannon -> cannon_tesselation_paint, center (-136.25,-92.37,20.56), dimensions (2.50,2.27,1.12). cannon is an anisotropy marker. Close oblique view keeps the barrel large enough to assess directional specular streaks; the boiler had no anisotropy marker. No other effects disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.anisotropic."
+  },
+  {
+    "name": "target-cannon-anisotropy-off",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -19.28369
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 14,
+      "features.anisotropic": false
+    },
+    "expected_metadata": {
+      "camera_fov": 45,
+      "time_of_day": 14
+    },
+    "review_note": "Targets actual fort cannon.mesh surface cannon -> cannon_tesselation_paint, center (-136.25,-92.37,20.56), dimensions (2.50,2.27,1.12). cannon is an anisotropy marker. Close oblique view keeps the barrel large enough to assess directional specular streaks; the boiler had no anisotropy marker. No other effects disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.anisotropic."
+  },
+  {
+    "name": "target-flag-cloth-on",
+    "pose": [
+      -12.47,
+      -4.23,
+      37,
+      -163.03707,
+      -0.01527
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.cloth": true
+    },
+    "expected_metadata": {
+      "camera_fov": 45,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the first actual ClothBody under fly_island1/buildings/house5_1/flag_small_1: props/flag_small.mesh surface flag -> material flag. Source geometry center (-18.2112,-5.9812,36.9984), world extent (.79,3.06,1.16), outward averaged normal (.956,.292,0); camera is six metres along that normal. Cloth shading toggle does not disable simulation, so equal fixed-frame captures preserve the same cloth pose. The old dragon view had no cloth surface. No companion effect disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.cloth."
+  },
+  {
+    "name": "target-flag-cloth-off",
+    "pose": [
+      -12.47,
+      -4.23,
+      37,
+      -163.03707,
+      -0.01527
+    ],
+    "args": [
+      "--camera-fov",
+      "45"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.cloth": false
+    },
+    "expected_metadata": {
+      "camera_fov": 45,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the first actual ClothBody under fly_island1/buildings/house5_1/flag_small_1: props/flag_small.mesh surface flag -> material flag. Source geometry center (-18.2112,-5.9812,36.9984), world extent (.79,3.06,1.16), outward averaged normal (.956,.292,0); camera is six metres along that normal. Cloth shading toggle does not disable simulation, so equal fixed-frame captures preserve the same cloth pose. The old dragon view had no cloth surface. No companion effect disabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.cloth."
+  },
+  {
+    "name": "target-flag-wind-arrows-on",
+    "pose": [
+      -12.47,
+      -4.23,
+      37,
+      -163.03707,
+      -0.01527
+    ],
+    "args": [
+      "--camera-fov",
+      "55"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.cloth": true,
+      "wind_debug": true
+    },
+    "expected_metadata": {
+      "camera_fov": 55,
+      "time_of_day": 9
+    },
+    "review_note": "Same actual flag_small_1 ClothBody as the cloth pair. main.cpp places one wind arrow at the authored anchor centroid, with length 0.5 times wind speed; flag_small.node authors velocity (2.92471,-.150574,0). Wider 55-degree framing includes both cloth and its pole/anchor arrow. The source load log confirms four ClothBody instances, each with 162 particles and 87 anchors. Keep cloth shading enabled in both halves. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only wind_debug."
+  },
+  {
+    "name": "target-flag-wind-arrows-off",
+    "pose": [
+      -12.47,
+      -4.23,
+      37,
+      -163.03707,
+      -0.01527
+    ],
+    "args": [
+      "--camera-fov",
+      "55"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.cloth": true,
+      "wind_debug": false
+    },
+    "expected_metadata": {
+      "camera_fov": 55,
+      "time_of_day": 9
+    },
+    "review_note": "Same actual flag_small_1 ClothBody as the cloth pair. main.cpp places one wind arrow at the authored anchor centroid, with length 0.5 times wind speed; flag_small.node authors velocity (2.92471,-.150574,0). Wider 55-degree framing includes both cloth and its pole/anchor arrow. The source load log confirms four ClothBody instances, each with 162 particles and 87 anchors. Keep cloth shading enabled in both halves. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only wind_debug."
+  },
+  {
+    "name": "target-fir-ground-coverage-shadows-on",
+    "pose": [
+      7.2,
+      -59.5,
+      16.6,
+      38.65981,
+      -27.50055
+    ],
+    "args": [
+      "--camera-fov",
+      "55"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 10,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.transparent_shadows": true
+    },
+    "expected_metadata": {
+      "camera_fov": 55,
+      "time_of_day": 10
+    },
+    "review_note": "Targets fir_3.mesh lod_0 -> fir_branch at (12.19,-55.59,15.42), above ground at z~13.1. SceneBuilder routes its alpha-tested fir material to a separate coverage-modulated shadow caster; the color-pass tree is unchanged. At hour10 the sun casts the canopy shadow southwest onto the framed ground. Disable regular and massive grass in BOTH halves because opaque foreground blades hide that receiver; leave the tree, sun, AO and all shadow mechanisms otherwise configured normally. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.transparent_shadows."
+  },
+  {
+    "name": "target-fir-ground-coverage-shadows-off",
+    "pose": [
+      7.2,
+      -59.5,
+      16.6,
+      38.65981,
+      -27.50055
+    ],
+    "args": [
+      "--camera-fov",
+      "55"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 10,
+      "features.grass": false,
+      "features.massive_foliage": false,
+      "features.transparent_shadows": false
+    },
+    "expected_metadata": {
+      "camera_fov": 55,
+      "time_of_day": 10
+    },
+    "review_note": "Targets fir_3.mesh lod_0 -> fir_branch at (12.19,-55.59,15.42), above ground at z~13.1. SceneBuilder routes its alpha-tested fir material to a separate coverage-modulated shadow caster; the color-pass tree is unchanged. At hour10 the sun casts the canopy shadow southwest onto the framed ground. Disable regular and massive grass in BOTH halves because opaque foreground blades hide that receiver; leave the tree, sun, AO and all shadow mechanisms otherwise configured normally. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.transparent_shadows."
+  },
+  {
+    "name": "target-cannon-ground-contact-on",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -23.035
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.ambient_occlusion": false,
+      "quality.contact_shadow_level": 2,
+      "features.contact_shadows": true
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the actual cannon/wheel/wood contact against the fort ground near (-136.25,-92.37,20.0). Contact shadows are SUN ShadowOptions, not point-light shadows. Hour9 retains a contributing sun at a grazing angle; High contact quality increases actual step count. Disable AO in BOTH halves so its dark creases do not conceal screen-space contact-shadow differences. Keep ordinary mapped sun shadows enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.contact_shadows."
+  },
+  {
+    "name": "target-cannon-ground-contact-off",
+    "pose": [
+      -133.3,
+      -89.5,
+      22,
+      -135.78752,
+      -23.035
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 9,
+      "features.ambient_occlusion": false,
+      "quality.contact_shadow_level": 2,
+      "features.contact_shadows": false
+    },
+    "expected_metadata": {
+      "camera_fov": 50,
+      "time_of_day": 9
+    },
+    "review_note": "Targets the actual cannon/wheel/wood contact against the fort ground near (-136.25,-92.37,20.0). Contact shadows are SUN ShadowOptions, not point-light shadows. Hour9 retains a contributing sun at a grazing angle; High contact quality increases actual step count. Disable AO in BOTH halves so its dark creases do not conceal screen-space contact-shadow differences. Keep ordinary mapped sun shadows enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.contact_shadows."
+  },
+  {
+    "name": "target-lamp-ground-point-shadows-on",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "quality.shadow_light_budget": 16,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "features.point_light_shadows": true
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 22
+    },
+    "review_note": "Frames the first city lamp_post instance: lamp_post_glass center (5.69084,7.28068,31.25133), its metal pole reaching z26.64 and adjacent street receiver. Its name selects the brightest 180000-lumen emitter class. Budget16 covers the nine lamp-post and three torch instances plus lab lamp candidates, avoiding the default budget2 selecting a distant light. Night removes sunlight from the receiver. Disable bloom/lens flares in BOTH halves to expose lamp/pole/ground shadows rather than glow sprites; lights stay enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.point_light_shadows."
+  },
+  {
+    "name": "target-lamp-ground-point-shadows-off",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "quality.shadow_light_budget": 16,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "features.point_light_shadows": false
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 22
+    },
+    "review_note": "Frames the first city lamp_post instance: lamp_post_glass center (5.69084,7.28068,31.25133), its metal pole reaching z26.64 and adjacent street receiver. Its name selects the brightest 180000-lumen emitter class. Budget16 covers the nine lamp-post and three torch instances plus lab lamp candidates, avoiding the default budget2 selecting a distant light. Night removes sunlight from the receiver. Disable bloom/lens flares in BOTH halves to expose lamp/pole/ground shadows rather than glow sprites; lights stay enabled. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.point_light_shadows."
+  },
+  {
+    "name": "target-lamp-glass-refraction-on",
+    "pose": [
+      7.15,
+      5.9,
+      31.5,
+      136.58299,
+      -7.05664
+    ],
+    "args": [
+      "--camera-fov",
+      "35"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "features.refraction": true
+    },
+    "expected_metadata": {
+      "camera_fov": 35,
+      "time_of_day": 12
+    },
+    "review_note": "Targets the genuine lamp_post_glass surface -> building_glass, a .40x.40x.44m glass enclosure. This actual material matches the glass marker and reaches heaven_glass; painted *window* wall materials intentionally do not. Close oblique framing exposes background distortion through the pane. Disable bloom/lens flares in BOTH halves to prevent the lamp halo from covering the small pane; authored glass and background remain unchanged. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.refraction."
+  },
+  {
+    "name": "target-lamp-glass-refraction-off",
+    "pose": [
+      7.15,
+      5.9,
+      31.5,
+      136.58299,
+      -7.05664
+    ],
+    "args": [
+      "--camera-fov",
+      "35"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 12,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "features.refraction": false
+    },
+    "expected_metadata": {
+      "camera_fov": 35,
+      "time_of_day": 12
+    },
+    "review_note": "Targets the genuine lamp_post_glass surface -> building_glass, a .40x.40x.44m glass enclosure. This actual material matches the glass marker and reaches heaven_glass; painted *window* wall materials intentionally do not. Close oblique framing exposes background distortion through the pane. Disable bloom/lens flares in BOTH halves to prevent the lamp halo from covering the small pane; authored glass and background remain unchanged. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.refraction."
+  },
+  {
+    "name": "target-lamp-receiver-ssgi-on",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "heat_haze_enabled": false,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "quality.ssgi_quality": 2,
+      "features.ssgi": true
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 22
+    },
+    "review_note": "Frames warm authored lamp illumination against the neighboring street/wall receiver. SSGI gathers color from the PREVIOUS completed scene-color capture within a 3.5%-screen-space radius, so this closer receiver gives local color/depth structure instead of the distant airship silhouette. High sample quality, 180 fixed frames. Disable heat haze in BOTH halves to prevent its alternate scene-capture owner from withholding fresh SSGI history; disable bloom/lens flares in both to distinguish color bleeding from a glow sprite. No light colors, material routes or SSGI intensity changed. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.ssgi."
+  },
+  {
+    "name": "target-lamp-receiver-ssgi-off",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 22,
+      "heat_haze_enabled": false,
+      "features.bloom": false,
+      "features.lens_flares": false,
+      "quality.ssgi_quality": 2,
+      "features.ssgi": false
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 22
+    },
+    "review_note": "Frames warm authored lamp illumination against the neighboring street/wall receiver. SSGI gathers color from the PREVIOUS completed scene-color capture within a 3.5%-screen-space radius, so this closer receiver gives local color/depth structure instead of the distant airship silhouette. High sample quality, 180 fixed frames. Disable heat haze in BOTH halves to prevent its alternate scene-capture owner from withholding fresh SSGI history; disable bloom/lens flares in both to distinguish color bleeding from a glow sprite. No light colors, material routes or SSGI intensity changed. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.ssgi."
+  },
+  {
+    "name": "target-airship-deck-ssgi-on",
+    "pose": [
+      -56,
+      44,
+      12.5,
+      59.03624,
+      -16.25392
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 15,
+      "heat_haze_enabled": false,
+      "quality.ssgi_quality": 2,
+      "features.ssgi": true
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 15
+    },
+    "review_note": "Independent daytime SSGI receiver: the actual airship-engine surfaces (engine/engine1 -> airship_engine_tesselation*) beside the wooden gondola/deck at z~10.8. This view includes nearby colored metal and deck instead of sky. Disable heat haze only in BOTH halves to guarantee clean scene-color history; High sample quality and 180 fixed frames. No artificial saturated object or parameter amplification is introduced. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.ssgi."
+  },
+  {
+    "name": "target-airship-deck-ssgi-off",
+    "pose": [
+      -56,
+      44,
+      12.5,
+      59.03624,
+      -16.25392
+    ],
+    "args": [
+      "--camera-fov",
+      "60"
+    ],
+    "frames": 180,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "time_of_day": 15,
+      "heat_haze_enabled": false,
+      "quality.ssgi_quality": 2,
+      "features.ssgi": false
+    },
+    "expected_metadata": {
+      "camera_fov": 60,
+      "time_of_day": 15
+    },
+    "review_note": "Independent daytime SSGI receiver: the actual airship-engine surfaces (engine/engine1 -> airship_engine_tesselation*) beside the wooden gondola/deck at z~10.8. This view includes nearby colored metal and deck instead of sky. Disable heat haze only in BOTH halves to guarantee clean scene-color history; High sample quality and 180 fixed frames. No artificial saturated object or parameter amplification is introduced. Pose is derived from authored geometry/world transforms; first capture must confirm unobstructed framing. Each pair changes only features.ssgi."
+  },
+  {
+    "name": "grass-fix-grass-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false,
+      "features.grass": true
+    }
+  },
+  {
+    "name": "grass-fix-grass-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.massive_foliage": false,
+      "features.grass": false
+    }
+  },
+  {
+    "name": "grass-fix-massive_foliage-on",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.grass": false,
+      "features.massive_foliage": true
+    }
+  },
+  {
+    "name": "grass-fix-massive_foliage-off",
+    "tour_time": 68.9,
+    "settings": {
+      "weather.rain_intensity": 0.0,
+      "features.grass": false,
+      "features.massive_foliage": false
+    }
+  }
+]

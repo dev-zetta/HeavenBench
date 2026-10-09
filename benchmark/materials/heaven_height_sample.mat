@@ -1,0 +1,38 @@
+// Startup-only readback of the actual uploaded geometry height field.
+// This is a separate package; existing depth/color packages are unchanged.
+material {
+    name : heaven_height_sample,
+    requires : [ uv0, custom0 ],
+    quality : high,
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : sampler2d, name : geometryHeightMap, stages : [ vertex ] },
+        { type : float4, name : baseTransform }
+    ],
+    variables : [ heightSample ]
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        highp float2 uv = material.uv0.xy * materialParams.baseTransform.xy
+                       + materialParams.baseTransform.zw;
+        highp float2 footprint = getCustom0().yz * abs(materialParams.baseTransform.xy)
+                              * float2(textureSize(materialParams_geometryHeightMap, 0));
+        highp float meshLod = log2(max(max(footprint.x, footprint.y), 1.0));
+        // The host rejects every request whose mesh LOD is below one. With
+        // positive displacement fade, this is the static distance-LOD state.
+        highp float heightLod = max(0.0, meshLod);
+        highp float height = textureLod(materialParams_geometryHeightMap, uv, heightLod).r;
+        material.heightSample = float4(height, getCustom0().w, meshLod, heightLod);
+    }
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_heightSample;
+    }
+}

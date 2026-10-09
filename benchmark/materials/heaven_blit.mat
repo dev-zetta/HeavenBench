@@ -1,0 +1,40 @@
+// Heaven Benchmark — Fullscreen scene blit
+
+// A fullscreen quad that samples the captured-scene texture and
+// writes it to the swap chain. Used as the opaque background of
+// the composite pass that runs after the main view (which writes
+// to the capture RT). The heat-haze quads alpha-blend over the
+// result.
+
+// Material parameters:
+//   sceneTexture: sampler2D — the captured scene
+
+// Compiled with:
+//   matc -a all -p desktop -o heaven_blit.filamat heaven_blit.mat
+
+material {
+    name : heaven_blit,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : sampler2d, name : sceneTexture }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Sample the captured scene at the fragment's NDC. Vulkan
+        // RT is Y-flipped relative to the texture authoring
+        // orientation, so we flip V to compensate (same trick as
+        // godrays and volfog).
+        float2 uv = uvToRenderTargetUV(getNormalizedViewportCoord().xy);
+        material.baseColor = texture(materialParams_sceneTexture, uv);
+    }
+}

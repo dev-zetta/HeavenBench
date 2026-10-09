@@ -1,0 +1,402 @@
+// Heaven Benchmark — Screen-space global illumination (SSGI)
+
+// Screen-space, depth-buffer one-bounce indirect lighting. The same proven
+// post-process pattern as heaven_godrays.mat: a fullscreen quad composited
+// ADDITIVELY over the scene (blending: add), reading the shared half-res
+// linear scene-depth texture plus a copy of the scene colour buffer. For each
+// pixel the shader reconstructs the VIEW-SPACE position and surface normal from
+// the linear scene depth, then gathers one-bounce indirect light from the scene
+// colour within a bounded screen-space radius (producing colour bleeding from
+// adjacent saturated surfaces) and adds the result into the scene's indirect
+// lighting.
+
+// ── DEPTH SOURCE (scene-depth-pipeline) ─────────────────────────────
+// The depth texture is the linear scene-depth target (F, eye-space FORWARD
+// distance in metres) produced by the depth pre-pass / heaven_depth proxy
+// render — NOT the old reversed-Z depth attachment. A pixel covered by opaque
+// geometry reads that geometry's eye-forward distance; open sky / no-geometry
+// reads the far clear value (~2000 m); a null/unbound texture reads <= 0. The
+// view-space reconstruction is therefore a plain view-ray un-projection scaled
+// by the linear distance (no reversed-Z, no inverse-projection matrix).
+
+// ── LOCKSTEP NOTE (read before editing) ─────────────────────────────
+// The linear-depth -> view-space position and depth -> normal reconstruction
+// below MIRRORS benchmark/src/engine/ssgi_reconstruct_ref.h (namespace
+// heaven::ssgi_ref) BYTE-FOR-BYTE:
+//   * view_position_from_dist() -> the `viewPosFromDist(uv, dist)` block:
+//         ndc = uv*2-1; viewRay = (ndc.x*projScale.x, ndc.y*projScale.y, -1);
+//         viewPos = viewRay * dist
+//     where projScale = (tan(fovY/2)*aspect, tan(fovY/2)) is the per-axis
+//     view-ray slope at the image edges (the inverse of the perspective focal
+//     terms). The sampled LINEAR distance is used DIRECTLY (no reversed-Z
+//     un-project, no GL 1-2*depth remap).
+//   * reconstruct_view_normal() -> n = normalize(cross(dpdx, dpdy)), oriented
+//     toward the camera at the view-space origin, with a unit +Z fallback for a
+//     degenerate (collinear/coincident) tap set so the gather never divides by
+//     a zero-length normal.
+// ssgi_reconstruct_ref.h is the single source of truth; when the reconstruction
+// math changes there, change it here too (and vice versa). The property test
+// (tests/prop_ssgi_reconstruct.cpp:, SSGI depth reconstruction
+// round-trips) asserts the CPU mirror stays in lockstep. This follows the
+// weather_shader_ref.h <-> heaven_rain.mat / heaven_splash.mat precedent.
+
+// ── Y-FLIP NOTE (LOCKED convention, scene-depth-pipeline) ──
+// The offscreen linear-depth render-target on Vulkan is stored top-down, so the
+// depth read is Y-flipped versus the quad UV: depthUV = (uv.x, 1 - uv.y). This
+// is the same convention as heaven_blit / godrays / volfog / heat haze / lens
+// flare. A neighbour at SCREEN offset (ox, oy) reads its depth at the flipped
+// position of (uv + (ox, oy)) and is reconstructed at screen uv + (ox, oy) —
+// the per-tap-consistent mapping (each tap sampled and reconstructed at its own
+// position), exactly as proven in depth_reconstruct_ref.h.
+
+// Compiled with: matc --api vulkan --api opengl -o heaven_ssgi.filamat heaven_ssgi.mat
+
+material {
+    name : heaven_ssgi,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    // Additive composite into the scene's indirect lighting (god-rays pattern):
+    // the shader outputs (indirect, 1) and Filament's blender adds it on top.
+    blending : add,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        // Linear scene depth (F, eye-space forward distance in metres) from
+        // the depth pre-pass / heaven_depth proxy render.
+        { type : sampler2d, name : depthTexture, precision : high, filterable : false },
+
+        // Copy of the rendered scene colour to gather one-bounce light from.
+        { type : sampler2d, name : colorTexture },
+
+        // Per-axis view-ray slope at the image edges: (tan(fovY/2)*aspect,
+        // tan(fovY/2)) — the inverse of the perspective focal terms fx, fy.
+        // Mirrors ssgi_reconstruct_ref.h::view_ray_scale. The sampled LINEAR
+        // distance is scaled along this view ray (NO reversed-Z / inverse-
+        // projection un-project).
+        { type : float2, name : projScale, precision : high },
+
+        // One texel of the depth/colour buffer in UV units (for neighbour taps).
+        { type : float2,   name : texelSize },
+
+        // Previous frame's view-projection (clip-from-world), for REPROJECTION:
+        // a gather sample's CURRENT world position is projected into the
+        // previous frame's screen to read the colour that actually belongs to
+        // that geometry — so the bounce stays aligned to surfaces when the
+        // camera moves (no smear/step). Built CPU-side from the previous
+        // frame's camera with the same 60° projection the reconstruction uses.
+        { type : float4x4, name : prevViewProj, precision : high },
+
+        // Bounded screen-space gather radius in UV units (— keeps the
+        // colour-bleed contribution local and the per-pixel cost bounded).
+        { type : float,    name : sampleRadius },
+
+        // Gather sample/ray count (driven by the ssgi_samples quality knob).
+        { type : int,      name : numSamples },
+
+        // Master indirect-light scale.
+        { type : float,    name : intensity },
+        { type : float4,   name : ssgiStabilityTuning },
+        { type : float4,   name : ssgiRejectionTuning },
+        { type : float4,   name : ssgiColorTuning }
+    ],
+}
+
+fragment {
+    // Golden angle (radians) for the equal-area spiral disk gather — spreads the
+    // samples evenly across the bounded radius without a precomputed kernel.
+    const float kGoldenAngle = 2.39996322972865332;
+
+    // Open-sky / no-geometry threshold in metres. Pixels at or beyond this read
+    // the far clear value (~2000 m) and contribute no indirect light — matching
+    // the godrays / volfog / clouds sky cutoff.
+    // Reconstruct a VIEW-SPACE position from a screen UV and the LINEAR
+    // eye-space forward distance (metres) sampled from the depth texture.
+    // Byte-for-byte ssgi_reconstruct_ref.h::view_position_from_dist:
+    //   ndc = uv*2-1; viewRay = (ndc.x*projScale.x, ndc.y*projScale.y, -1);
+    //   viewPos = viewRay * dist.
+    float3 viewPosFromDist(float2 uv, float dist) {
+        float2 ndcXY = uv * 2.0 - 1.0;
+        float3 viewRay = float3(ndcXY * materialParams.projScale, -1.0);
+        return viewRay * dist;
+    }
+
+    // Sample the linear scene-depth texture for a pixel at SCREEN uv. The depth
+    // texture is Y-flipped versus the quad UV (offscreen top-down render
+    // target), so the read happens at (uv.x, 1 - uv.y). Graceful fallback
+    // a null/unbound texture reads a non-positive value — treat that as
+    // "far / no geometry" so SSGI is not spuriously occluded before the depth
+    // pre-pass produces a valid texture.
+    float sampleDist(float2 uv) {
+        float2 depthUV = uvToRenderTargetUV(uv);
+        float d = texture(materialParams_depthTexture, depthUV).r;
+        return d <= 0.0 ? 2000.0 : d;
+    }
+
+    // Reproject a CURRENT-frame view-space position into the PREVIOUS frame's
+    // colour-history UV. Returns false when the point was off-screen / behind
+    // the camera last frame (no valid history to gather). The history texture
+    // is the offscreen capture (Y-flipped vs screen UV), so the caller samples
+    // colorTexture at float2(uv.x, 1.0 - uv.y) like every other consumer.
+    bool reprojectToHistory(float3 viewPos, float2 currentUV, out float2 historyUV) {
+        // worldFromViewMatrix yields Filament's CAMERA-SHIFTED world space (its
+        // origin is moved to the current camera for floating-point precision —
+        // see the Filament materials guide, "world space" note). Our
+        // prevViewProj is built CPU-side in TRUE (API-level) world space, so we
+        // MUST convert the shifted world back to true world before applying it.
+        // Skipping this offsets the reprojection by the camera position, an
+        // error that grows as the camera moves away from the world origin — the
+        // "it breaks when I move away from the island" artifact.
+        float3 shiftedWorld = (frameUniforms.worldFromViewMatrix * float4(viewPos, 1.0)).xyz;
+        float3 trueWorld = (getUserWorldFromWorldMatrix() * float4(shiftedWorld, 1.0)).xyz;
+        float4 prevClip = materialParams.prevViewProj * float4(trueWorld, 1.0);
+        if (prevClip.w <= 1.0e-4) return false;
+        float2 prevUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+        if (prevUV.x < 0.0 || prevUV.x > 1.0 ||
+            prevUV.y < 0.0 || prevUV.y > 1.0) return false;
+
+        // History is useful only when the reprojected point lands near the
+        // current tap. If the camera-origin conversion, a disocclusion, or a
+        // sharp parallax edge sends the lookup far across the frame, it can
+        // pull sky / fog / lamps into every receiver and the additive pass turns
+        // milky white. Skip those taps instead of letting a bad history sample
+        // become "global" illumination.
+        float2 delta = abs(prevUV - currentUV);
+        float maxHistoryJump =
+            max(materialParams.sampleRadius *
+                    materialParams.ssgiStabilityTuning.w,
+                materialParams.ssgiRejectionTuning.x *
+                    max(materialParams.texelSize.x,
+                        materialParams.texelSize.y));
+        if (delta.x > maxHistoryJump || delta.y > maxHistoryJump) return false;
+
+        historyUV = uvToRenderTargetUV(prevUV);
+        return true;
+    }
+
+    // Reconstruct a unit-length view-space normal from the centre position and
+    // its right/up neighbour taps. Byte-for-byte
+    // ssgi_reconstruct_ref.h::reconstruct_view_normal: n = normalize(cross(dpdx,
+    // dpdy)), oriented toward the camera at the view-space origin, with a unit
+    // +Z fallback when the tap set is degenerate (zero-length cross product).
+    float3 reconstructViewNormal(float3 center, float3 right, float3 up) {
+        float3 dpdx = right - center;
+        float3 dpdy = up - center;
+        float3 c = cross(dpdx, dpdy);
+        float len = length(c);
+        if (len <= 1.0e-12) {
+            return float3(0.0, 0.0, 1.0);   // degenerate: unit fallback
+        }
+        float3 n = c / len;
+        if (dot(n, -center) < 0.0) {
+            n = -n;
+        }
+        return n;
+    }
+
+    // Per-pixel hash in [0,1). Used to give every pixel its OWN spiral
+    // orientation so the gather does not reproduce the structure of a bright
+    // source. Without this, every pixel walks the same golden-angle spiral, so
+    // a high-frequency bright source (a lit window's mullion grid) is sampled
+    // in a spatially-coherent pattern by neighbouring receivers and bleeds onto
+    // the surrounding wall as a faint DISPLACED COPY of the window rather than a
+    // smooth glow ("the light texture is multiplied"). Rotating the spiral by a
+    // per-pixel angle decorrelates the gather: the bright source's contribution
+    // becomes fine noise (smoothed by bloom / the additive subtlety) instead of
+    // a coherent ghost. The hash is a function of the pixel position ONLY (not
+    // time), so the rotation is STATIC frame-to-frame — it does not turn the
+    // kernel into a moving target that TAA would fight (the same reason the
+    // per-sample offset carries no per-frame jitter).
+    float hash12(float2 p) {
+        float3 p3 = fract(float3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float2 uv = getUV0();
+
+        // Centre depth (linear eye-forward metres). Open-sky / far pixels read
+        // the far clear value (>= kSkyDist) and contribute no indirect light.
+        float dist = sampleDist(uv);
+        if (dist >= materialParams.ssgiStabilityTuning.x) {
+            // Premultiplied-alpha additive-over composite (the SSGI quad is
+            // drawn in a TRANSLUCENT view OVER the blitted scene): alpha 0 means
+            // "add nothing, keep the scene" (dst = src + (1-0)*dst). Sky / far
+            // pixels contribute no bounce.
+            material.baseColor = float4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        // Reconstruct the centre view-space position and surface normal. The
+        // neighbour taps read depth at the Y-flipped offset (handled inside
+        // sampleDist) while being reconstructed at the screen offset (ox, oy) —
+        // the per-tap-consistent mapping from depth_reconstruct_ref.h.
+        float2 texel = materialParams.texelSize;
+        float3 centerPos = viewPosFromDist(uv, dist);
+
+        float dR = sampleDist(uv + float2(texel.x, 0.0));
+        float dU = sampleDist(uv + float2(0.0, texel.y));
+        float3 rightPos = viewPosFromDist(uv + float2(texel.x, 0.0), dR);
+        float3 upPos    = viewPosFromDist(uv + float2(0.0, texel.y), dU);
+        float3 normal   = reconstructViewNormal(centerPos, rightPos, upPos);
+
+        // ── One-bounce gather within the bounded screen-space radius ───
+        // Spiral the samples outward over the disk of radius sampleRadius. Each
+        // sample reconstructs a neighbour's view-space position, and contributes
+        // its scene colour weighted by the cosine of the normal toward it
+        // (lambertian receive) and an inverse-square-ish distance falloff. This
+        // is the colour bleeding: a receiver next to a saturated surface picks
+        // up that surface's hue.
+        int numSamples = max(materialParams.numSamples, 1);
+        float radius = materialParams.sampleRadius;
+
+        // Per-pixel spiral rotation (static in time) — see hash12 above. This
+        // breaks the coherent kernel that otherwise stamps a displaced copy of
+        // a bright high-frequency source (lit windows) onto adjacent surfaces.
+        float rotAngle = hash12(uv * 4096.0) * 6.28318530718;
+
+        float3 indirect = float3(0.0);
+        float totalWeight = 0.0;
+
+        for (int i = 0; i < numSamples; ++i) {
+            // Equal-area golden-angle spiral: r grows with sqrt(i/N) so samples
+            // are uniformly distributed across the disk, angle steps by the
+            // golden angle. Deterministic in `i` (no per-frame jitter, so TAA
+            // is not fighting a moving kernel) but rotated by the per-pixel
+            // `rotAngle` so neighbouring pixels do not gather in lockstep.
+            float fi = (float(i) + 0.5) / float(numSamples);
+            float sampleR = radius * sqrt(fi);
+            float angle = rotAngle + float(i) * kGoldenAngle;
+            float2 offset = float2(cos(angle), sin(angle)) * sampleR;
+
+            float2 sampleUV = uv + offset;
+            if (sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
+                sampleUV.y < 0.0 || sampleUV.y > 1.0) {
+                continue;
+            }
+
+            float sd = sampleDist(sampleUV);
+            if (sd >= materialParams.ssgiStabilityTuning.x) {
+                continue;   // sky / far: no indirect contribution
+            }
+
+            float3 samplePos = viewPosFromDist(sampleUV, sd);
+
+            // Bilateral range rejection (silhouette guard). Skip samples whose
+            // view-space depth differs sharply from the receiver's: a thin
+            // foreground occluder (e.g. an airship rigging cable strung in front
+            // of a wall) sits metres closer than the wall behind it, and without
+            // this check its bright colour bleeds onto the wall as a soft halo
+            // that traces the cable and swims with the camera. The threshold
+            // scales with the receiver's depth so it holds at any distance, with
+            // a small floor for near geometry. This is the standard fix for the
+            // SSGI/SSAO "halo across depth discontinuities" artifact and keeps
+            // the bleed restricted to genuinely adjacent (co-planar-ish)
+            // surfaces — which is what one-bounce colour bleed should be.
+            float depthDiff = abs(samplePos.z - centerPos.z);
+            float rangeThreshold =
+                max(materialParams.ssgiRejectionTuning.y,
+                    materialParams.ssgiRejectionTuning.z *
+                        abs(centerPos.z));
+            if (depthDiff > rangeThreshold) {
+                continue;
+            }
+
+            // Direction and distance from the receiver to the sampled surface.
+            float3 toSample = samplePos - centerPos;
+            float dist2 = length(toSample);
+            if (dist2 < materialParams.ssgiRejectionTuning.w) {
+                continue;
+            }
+            float3 dir = toSample / dist2;
+
+            // Lambertian receive: only surfaces the receiver faces bleed onto it.
+            float nDotL = max(dot(normal, dir), 0.0);
+            if (nDotL <= 0.0) {
+                continue;
+            }
+
+            // Distance falloff keeps the bounce local (bounded radius).
+            float falloff = 1.0 / (1.0 + dist2 * dist2);
+
+            // Reproject this sample's CURRENT world position into the previous
+            // frame's history and read the colour that actually belongs to this
+            // geometry — so the bounce does not smear when the camera moves. If
+            // it was not visible last frame, skip it.
+            float2 colorUV;
+            if (!reprojectToHistory(samplePos, sampleUV, colorUV)) {
+                continue;
+            }
+            float3 sampleColor = texture(materialParams_colorTexture, colorUV).rgb;
+
+            // ── Feedback stability (scene-depth-pipeline regression fix) ──
+            // The colour buffer is full HDR (RGBA16F, pre-tonemap), so bright
+            // sources (sun, sky, lamps) are very large values. SSGI composites
+            // ADDITIVELY and is captured back into that buffer, so an unbounded
+            // gather makes bright pixels bleed 0.3x into neighbours, which then
+            // bleed into THEIR neighbours next frame — a runaway that spreads
+            // and saturates the whole screen (and never recovers). The gather
+            // is meant to bounce a roughly-LDR surface colour, so:
+            //   1) drop any NaN/Inf sample (NaN != NaN) so it can't poison the
+            //      average and propagate stickily through the feedback, and
+            //   2) clamp the gathered HDR colour to a modest ceiling so a single
+            //      bright highlight can't dominate the bounce.
+            if (sampleColor != sampleColor) {   // NaN guard
+                continue;
+            }
+            sampleColor =
+                clamp(sampleColor, float3(0.0),
+                      float3(materialParams.ssgiStabilityTuning.y));
+
+            // The history buffer is scene colour, so white sky/fog/bloom is
+            // very bright but carries no useful colour-bleed information. If
+            // we average it as indirect light, every receiver gets a grey/white
+            // additive veil — exactly the SSGI white-out seen when the camera
+            // moves to foggy/bright map regions. Keep saturated surfaces
+            // (grass, roof tiles, lamps) as bounce sources and reject nearly
+            // neutral bright samples.
+            float maxC = max(max(sampleColor.r, sampleColor.g), sampleColor.b);
+            float minC = min(min(sampleColor.r, sampleColor.g), sampleColor.b);
+            float chroma = maxC - minC;
+            float luma = dot(sampleColor, float3(0.2126, 0.7152, 0.0722));
+            if (luma > materialParams.ssgiColorTuning.x &&
+                chroma < materialParams.ssgiColorTuning.y) {
+                continue;
+            }
+            sampleColor *=
+                saturate(chroma * materialParams.ssgiColorTuning.z);
+
+            float weight = nDotL * falloff;
+            indirect += sampleColor * weight;
+            totalWeight += weight;
+        }
+
+        if (totalWeight > 0.0) {
+            indirect /= totalWeight;
+        }
+
+        // ── Albedo modulation ───────────────────────────────────────────
+        // Multiply the gathered irradiance by the RECEIVER's own albedo proxy
+        // (its reprojected scene colour) so SSGI adds INDIRECT light scaled by
+        // the surface — a dark surface can only reflect a little, so it is not
+        // washed to grey — instead of a flat brightness floor on everything.
+        float3 receiverAlbedo = float3(0.5);
+        float2 centerUV;
+        if (reprojectToHistory(centerPos, uv, centerUV)) {
+            receiverAlbedo = clamp(texture(materialParams_colorTexture, centerUV).rgb,
+                                   float3(0.0), float3(1.0));
+        }
+
+        // Additive composite (alpha 0 ⇒ premultiplied additive-over in the
+        // TRANSLUCENT composite view: dst = scene + bounce).
+        float3 finalColor =
+            clamp(indirect * receiverAlbedo * materialParams.intensity,
+                  float3(0.0),
+                  float3(materialParams.ssgiStabilityTuning.z));
+        material.baseColor = float4(finalColor, 0.0);
+    }
+}

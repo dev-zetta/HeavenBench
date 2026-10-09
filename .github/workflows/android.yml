@@ -1,0 +1,50 @@
+name: Android APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and validate ARM64 APK in Docker
+        run: |
+          ./scripts/build_docker.sh android --abi arm64-v8a --jobs 2 \
+            --output-dir build/release/android
+
+      - name: Upload APK, matching source, checksums and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-android-arm64-v8a-debug
+          path: |
+            build/release/android/HeavenBench-*-android-arm64-v8a-debug.apk
+            build/release/android/HeavenBench-*-android-arm64-v8a-debug.apk.sha256
+            build/release/android/*-source.tar.gz
+            build/release/android/*-source.tar.gz.sha256
+            build/release/android/source-manifest.json
+            build/release/android/build-environment.txt
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload build log and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-android-build-log
+          path: |
+            build/release/android/logs/
+          if-no-files-found: ignore

@@ -1,0 +1,37 @@
+// Heaven Benchmark — Unlit material for grass, particles, and other
+// non-PBR geometry that uses custom lighting in the fragment shader.
+
+material {
+    name : heaven_unlit,
+    requires : [ uv0, color ],
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    transparency : twoPassesTwoSides,
+    parameters : [
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasTexture }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float4 color = getColor();
+
+        if (materialParams.hasTexture) {
+            float4 tex = texture(materialParams_baseColorMap, getUV0());
+            color *= tex;
+        }
+
+        // Filament's `transparent` blend mode expects pre-multiplied alpha.
+        // The vertex color and texture sample carry straight (un-premultiplied)
+        // alpha, so we do the multiply here. Without this the rendered colour
+        // is far too bright and the alpha cutoff appears as a solid card.
+        color.rgb *= color.a;
+
+        material.baseColor = color;
+    }
+}

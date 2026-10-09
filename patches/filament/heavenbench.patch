@@ -1,0 +1,3381 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a95a74765827433f989b1b1125fca6bb39721291..c5f90688c8c0b01c47fbfe62da273610083a99a6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -210,9 +210,29 @@ if (NOT FILAMENT_OSMESA_PATH STREQUAL "")
+ endif()
+ 
+ if (LINUX)
++    # HeavenBench patch: allow X11 AND Wayland to coexist in a single
++    # build. Upstream Filament forces FILAMENT_SUPPORTS_X11 FALSE the
++    # moment Wayland is requested, producing a Wayland-only binary.
++    # We instead compile both surface paths and pick one at runtime
++    # (see VulkanPlatformLinux.cpp). FILAMENT_LINUX_DUAL_WSI signals
++    # the platform code to build the runtime-dispatch variant.
+     if (FILAMENT_SUPPORTS_WAYLAND)
+         add_definitions(-DFILAMENT_SUPPORTS_WAYLAND)
+-        set(FILAMENT_SUPPORTS_X11 FALSE)
++        if (FILAMENT_SUPPORTS_XCB OR FILAMENT_SUPPORTS_XLIB)
++            # Dual X11 + Wayland build.
++            if (FILAMENT_SUPPORTS_XCB)
++                add_definitions(-DFILAMENT_SUPPORTS_XCB)
++            endif()
++            if (FILAMENT_SUPPORTS_XLIB)
++                add_definitions(-DFILAMENT_SUPPORTS_XLIB)
++            endif()
++            add_definitions(-DFILAMENT_SUPPORTS_X11)
++            add_definitions(-DFILAMENT_LINUX_DUAL_WSI)
++            set(FILAMENT_SUPPORTS_X11 TRUE)
++        else()
++            # Wayland-only build (upstream behaviour).
++            set(FILAMENT_SUPPORTS_X11 FALSE)
++        endif()
+     elseif (FILAMENT_SUPPORTS_EGL_ON_LINUX)
+         add_definitions(-DFILAMENT_SUPPORTS_EGL_ON_LINUX)
+         set(FILAMENT_SUPPORTS_X11 FALSE)
+diff --git a/filament/backend/include/backend/DriverEnums.h b/filament/backend/include/backend/DriverEnums.h
+index 7392178b014fb84e817a589cde967c242aae0bbc..4684c22ae1ac7b1ba7fe3c367200a7c2ecda21b0 100644
+--- a/filament/backend/include/backend/DriverEnums.h
++++ b/filament/backend/include/backend/DriverEnums.h
+@@ -111,6 +111,20 @@ static constexpr uint64_t SWAP_CHAIN_CONFIG_PROTECTED_CONTENT   = 0x40;
+  */
+ static constexpr uint64_t SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES      = 0x80;
+ 
++/**
++ * HeavenBench patch (HDR display output): request an HDR10 swap chain.
++ *
++ * When set, the Vulkan backend selects a wide-gamut / high-precision surface
++ * format paired with the VK_COLOR_SPACE_HDR10_ST2084_EXT (PQ) colorspace, if
++ * the surface advertises one. Pixel values written to the swap chain are then
++ * interpreted as PQ-encoded Rec.2020 (the application is responsible for that
++ * encoding — see the HDR output pass). Requires VK_EXT_swapchain_colorspace
++ * (enabled when available) and a Wayland surface; under X11/XWayland no HDR
++ * colorspace is exposed. Creation fails if the requested HDR format is absent;
++ * the application must probe support before requesting this flag.
++ */
++static constexpr uint64_t SWAP_CHAIN_CONFIG_HDR10_ST2084        = 0x100;
++
+ static constexpr size_t MAX_VERTEX_ATTRIBUTE_COUNT  = 16;   // This is guaranteed by OpenGL ES.
+ static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
+ static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
+diff --git a/filament/backend/src/Driver.cpp b/filament/backend/src/Driver.cpp
+index bdab829d960eccaa1fa7ef25857023be9a169ae8..e4dd285c9bc7809285dd2cb1f5ac9a830aafb848 100644
+--- a/filament/backend/src/Driver.cpp
++++ b/filament/backend/src/Driver.cpp
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include "DriverBase.h"
++#include "GpuProfiler.h"
+ 
+ #include <private/backend/CommandStream.h>
+ #include <private/backend/Driver.h>
+@@ -276,3 +277,5 @@ void Driver::execute(std::function<void(void)> const& fn) {
+ }
+ 
+ } // namespace filament::backend
++
++filament::backend::GpuProfiler::~GpuProfiler() = default;
+diff --git a/filament/backend/src/GpuProfiler.h b/filament/backend/src/GpuProfiler.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..668dee9fb19d1d894baeedde698c44b9163da50d
+--- /dev/null
++++ b/filament/backend/src/GpuProfiler.h
+@@ -0,0 +1,236 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++#ifndef TNT_BACKEND_GPU_PROFILER_H
++#define TNT_BACKEND_GPU_PROFILER_H
++
++#include <private/utils/ProfilerTrace.h>
++#include <backend/DriverEnums.h>
++#include <array>
++#include <cmath>
++#include <cstring>
++#include <limits>
++
++namespace filament::backend {
++
++// Native adapters own dedicated query storage. This bounded owner-thread state
++// machine never waits for a GPU result or reuses an in-flight query interval.
++class GpuProfiler {
++public:
++    static constexpr uint32_t PASS_COUNT = 256;
++    static constexpr uint32_t FRAME_COUNT = 16;
++    static constexpr uint32_t QUERIES_PER_FRAME = 1 + PASS_COUNT * 2;
++    static constexpr uint32_t QUERY_COUNT = FRAME_COUNT * QUERIES_PER_FRAME;
++    using Context = utils::profiling::Context;
++    using Sample = utils::profiling::GpuSample;
++    using QueryStatus = utils::profiling::GpuStatus;
++    using Caps = utils::profiling::GpuCapabilities;
++
++    explicit GpuProfiler(Caps caps) noexcept : mCaps(caps), mAdapter{
++            this,
++            [](void* p, Context c) noexcept { static_cast<GpuProfiler*>(p)->beginFrame(c); },
++            [](void* p) noexcept { static_cast<GpuProfiler*>(p)->endFrame(); },
++            [](void* p, Context c, uint64_t id, const char* n) noexcept {
++                static_cast<GpuProfiler*>(p)->beginPass(c, id, n); },
++            [](void* p, uint64_t id) noexcept { static_cast<GpuProfiler*>(p)->endPass(id); },
++            [](void* p, uint64_t c, uint64_t t, uint64_t v) noexcept {
++                static_cast<GpuProfiler*>(p)->counters(c, t, v); }} {}
++    virtual ~GpuProfiler();
++
++    static uint64_t primitiveCount(PrimitiveType type, uint32_t count, uint32_t instances) noexcept {
++        uint64_t primitives = 0;
++        switch (type) {
++            case PrimitiveType::POINTS: primitives = count; break;
++            case PrimitiveType::LINES: primitives = count / 2; break;
++            case PrimitiveType::LINE_STRIP: primitives = count > 1 ? count - 1 : 0; break;
++            case PrimitiveType::TRIANGLES: primitives = count / 3; break;
++            case PrimitiveType::TRIANGLE_STRIP: primitives = count > 2 ? count - 2 : 0; break;
++        }
++        return primitives * instances;
++    }
++    void recordPrimitives(PrimitiveType type, uint32_t count, uint32_t instances) noexcept {
++        counters(0, primitiveCount(type, count, instances), 0, instances);
++    }
++    void install() noexcept { utils::profiling::setGpuAdapter(&mAdapter); }
++    void uninstall() noexcept { utils::profiling::setGpuAdapter(nullptr); }
++    void poll() noexcept {
++        QueryStatus const state = validity();
++        for (uint32_t slot = 0; slot < FRAME_COUNT; ++slot) {
++            auto& frame = mFrames[slot];
++            if (!frame.busy) continue;
++            if (state != QueryStatus::AVAILABLE) frame.validity = state;
++            if (!frame.closed || !ready(slot)) continue;
++            // Even invalid/disjoint intervals keep their query storage until the GPU
++            // has completed it. A disjoint notification is not a completion fence.
++            if (frame.validity != QueryStatus::AVAILABLE) { retire(frame, frame.validity); continue; }
++            uint64_t origin = 0;
++            QueryStatus result = read(slot * QUERIES_PER_FRAME, origin);
++            if (result == QueryStatus::PENDING) continue;
++            if (result != QueryStatus::AVAILABLE) { retire(frame, result); continue; }
++            bool pending = false;
++            for (uint32_t i = 0; i < frame.count; ++i) {
++                auto& pass = frame.passes[i];
++                if (pass.retired) continue;
++                uint64_t start = 0, stop = 0;
++                result = pass.ended ? read(slot * QUERIES_PER_FRAME + 1 + i * 2, start) :
++                        QueryStatus::ERROR;
++                if (result == QueryStatus::AVAILABLE) {
++                    result = read(slot * QUERIES_PER_FRAME + 2 + i * 2, stop);
++                }
++                if (result == QueryStatus::PENDING) { pending = true; continue; }
++                if (result == QueryStatus::AVAILABLE &&
++                        (!relative(origin, start, pass.sample.begin_ns) ||
++                         !relative(origin, stop, pass.sample.end_ns) ||
++                         pass.sample.end_ns < pass.sample.begin_ns)) result = QueryStatus::ERROR;
++                emit(pass, result);
++            }
++            if (!pending) frame.busy = false;
++        }
++    }
++    void terminate() noexcept {
++        poll();
++        for (auto& frame : mFrames) if (frame.busy) retire(frame, QueryStatus::ERROR);
++        mCurrent = nullptr;
++        uninstall();
++    }
++
++protected:
++    virtual bool initialize() noexcept = 0;
++    virtual void reset(uint32_t slot) noexcept = 0;
++    virtual void write(uint32_t index) noexcept = 0;
++    virtual QueryStatus read(uint32_t index, uint64_t& ticks) noexcept = 0;
++    virtual bool ready(uint32_t slot) noexcept = 0;
++    virtual void close(uint32_t slot) noexcept = 0;
++    virtual QueryStatus validity() noexcept { return QueryStatus::AVAILABLE; }
++    Caps mCaps;
++
++private:
++    struct Pass {
++        Sample sample{};
++        std::array<char, 96> name{};
++        bool ended = false;
++        bool retired = false;
++    };
++    struct Frame {
++        Context context{};
++        std::array<Pass, PASS_COUNT> passes{};
++        uint32_t count = 0;
++        bool busy = false;
++        bool closed = false;
++        QueryStatus validity = QueryStatus::AVAILABLE;
++    };
++    std::array<Frame, FRAME_COUNT> mFrames{};
++    utils::profiling::GpuAdapter mAdapter;
++    Frame* mCurrent = nullptr;
++    uint32_t mCurrentSlot = 0;
++    int32_t mActivePass = -1;
++    uint64_t mCapsCapture = std::numeric_limits<uint64_t>::max();
++    bool mInitialized = false;
++    bool mInitializeAttempted = false;
++
++    bool relative(uint64_t origin, uint64_t ticks, int64_t& ns) const noexcept {
++        uint64_t const mask = mCaps.timestamp_valid_bits == 64 ? ~uint64_t(0) :
++                ((uint64_t(1) << mCaps.timestamp_valid_bits) - 1);
++        uint64_t const delta = (ticks - origin) & mask;
++        // More than half a counter revolution cannot be ordered unambiguously.
++        if (delta > (mask >> 1)) return false;
++        double const value = double(delta) * mCaps.timestamp_period_ns;
++        if (!std::isfinite(value) || value < 0 || value >= double(INT64_MAX)) return false;
++        ns = int64_t(value);
++        return true;
++    }
++    static void emit(Pass& pass, QueryStatus status) noexcept {
++        pass.sample.name = pass.name.data();
++        pass.sample.status = status;
++        if (status != QueryStatus::AVAILABLE) pass.sample.begin_ns = pass.sample.end_ns = -1;
++        utils::profiling::emitGpu(pass.sample);
++        pass.retired = status != QueryStatus::PENDING;
++    }
++    static void retire(Frame& frame, QueryStatus status) noexcept {
++        for (uint32_t i = 0; i < frame.count; ++i) {
++            if (!frame.passes[i].retired) emit(frame.passes[i], status);
++        }
++        frame.busy = false;
++    }
++    void beginFrame(Context context) noexcept {
++        poll();
++        if (mCurrent) endFrame();
++        mCurrent = nullptr;
++        mActivePass = -1;
++        // This command was accepted on the submitting thread. A capture can
++        // stop before its queued commands reach the driver; keep that identity.
++        if (!mInitializeAttempted) {
++            mInitializeAttempted = true;
++            mInitialized = mCaps.hardware_timestamps && initialize();
++            if (!mInitialized) mCaps.hardware_timestamps = false;
++        }
++        if (mCapsCapture != context.capture_id) {
++            utils::profiling::emitCapabilities(mCaps);
++            mCapsCapture = context.capture_id;
++        }
++        for (uint32_t slot = 0; slot < FRAME_COUNT; ++slot) {
++            if (mFrames[slot].busy) continue;
++            auto& frame = mFrames[slot];
++            frame.context = context;
++            frame.count = 0;
++            frame.busy = true;
++            frame.closed = false;
++            frame.validity = QueryStatus::AVAILABLE;
++            mCurrent = &frame;
++            mCurrentSlot = slot;
++            if (mInitialized) { reset(slot); write(slot * QUERIES_PER_FRAME); }
++            return;
++        }
++    }
++    void endFrame() noexcept {
++        if (!mCurrent) return;
++        auto& frame = *mCurrent;
++        frame.closed = true;
++        if (mInitialized) close(mCurrentSlot);
++        for (uint32_t i = 0; i < frame.count; ++i) {
++            emit(frame.passes[i], mInitialized ? QueryStatus::PENDING : QueryStatus::UNSUPPORTED);
++        }
++        if (!mInitialized) frame.busy = false;
++        mCurrent = nullptr;
++        mActivePass = -1;
++    }
++    void beginPass(Context context, uint64_t id, const char* name) noexcept {
++        if (!mCurrent || mCurrent->count == PASS_COUNT) {
++            utils::profiling::emitGpu(Sample{.context = context, .pass_id = id, .name = name,
++                    .status = QueryStatus::DROPPED});
++            mActivePass = -1;
++            return;
++        }
++        uint32_t const index = mCurrent->count++;
++        auto& pass = mCurrent->passes[index];
++        pass.sample = Sample{.context = context, .pass_id = id};
++        pass.ended = pass.retired = false;
++        size_t const length = name ? std::strlen(name) : 0;
++        size_t const copied = length < pass.name.size() ? length : pass.name.size() - 1;
++        if (copied) std::memcpy(pass.name.data(), name, copied);
++        pass.name[copied] = 0;
++        pass.sample.name_truncated = copied < length;
++        mActivePass = int32_t(index);
++        if (mInitialized) write(mCurrentSlot * QUERIES_PER_FRAME + 1 + index * 2);
++    }
++    void endPass(uint64_t id) noexcept {
++        if (!mCurrent || mActivePass < 0) return;
++        auto& pass = mCurrent->passes[size_t(mActivePass)];
++        if (pass.sample.pass_id != id) return;
++        if (mInitialized) write(mCurrentSlot * QUERIES_PER_FRAME + 2 + uint32_t(mActivePass) * 2);
++        pass.ended = true;
++        mActivePass = -1;
++    }
++    void counters(uint64_t commands, uint64_t primitives, uint64_t visible,
++            uint64_t instanceInvocations = 0) noexcept {
++        if (!mCurrent || mActivePass < 0) return;
++        auto& sample = mCurrent->passes[size_t(mActivePass)].sample;
++        sample.command_count += commands;
++        sample.primitive_count += primitives;
++        sample.visible_renderables += visible;
++        sample.draw_instance_invocations += instanceInvocations;
++    }
++};
++} // namespace filament::backend
++#endif
+diff --git a/filament/backend/src/opengl/OpenGLContext.cpp b/filament/backend/src/opengl/OpenGLContext.cpp
+index ff482ed458ecb663d4e6f0ec94ae6d94bb0737a2..757dcf8bcdeb76030362798d6d9b37a74860c14d 100644
+--- a/filament/backend/src/opengl/OpenGLContext.cpp
++++ b/filament/backend/src/opengl/OpenGLContext.cpp
+@@ -294,9 +294,13 @@ void OpenGLContext::initProcs(Procs* procs,
+     procs->getQueryObjectuiv = glGetQueryObjectuiv;
+ #   ifdef BACKEND_OPENGL_VERSION_GL
+     procs->getQueryObjectui64v = glGetQueryObjectui64v; // only core in GL
++    procs->queryCounter = glQueryCounter;
++    procs->getQueryiv = glGetQueryiv;
+ #   elif defined(GL_EXT_disjoint_timer_query)
+ #       ifndef __EMSCRIPTEN__
+             procs->getQueryObjectui64v = glGetQueryObjectui64vEXT;
++            procs->queryCounter = glQueryCounterEXT;
++            procs->getQueryiv = glGetQueryivEXT;
+ #       endif
+ #   endif // BACKEND_OPENGL_VERSION_GL
+ 
+@@ -335,6 +339,8 @@ void OpenGLContext::initProcs(Procs* procs,
+         procs->endQuery = glEndQueryEXT;
+         procs->getQueryObjectuiv = glGetQueryObjectuivEXT;
+         procs->getQueryObjectui64v = glGetQueryObjectui64vEXT;
++        procs->queryCounter = glQueryCounterEXT;
++        procs->getQueryiv = glGetQueryivEXT;
+ 
+         procs->invalidateFramebuffer = glDiscardFramebufferEXT;
+ 
+@@ -494,7 +500,7 @@ void OpenGLContext::initBugs(Bugs* bugs, Extensions const& exts,
+             bugs->dont_use_timer_query = true;
+         }
+ 
+-        if (strstr(vendor, "Mesa")) {
++        if (strstr(vendor, "Mesa") || strstr(version, "Mesa")) {
+             // Seen on
+             //  [Mesa],
+             //  [Intel(R) HD Graphics 505 (APL 3)],
+diff --git a/filament/backend/src/opengl/OpenGLContext.h b/filament/backend/src/opengl/OpenGLContext.h
+index c5af962ec039bcc344cf1f724976f4a1b2a3834e..e56375745ae01ae7708e5e8832276f4e5c1876dc 100644
+--- a/filament/backend/src/opengl/OpenGLContext.h
++++ b/filament/backend/src/opengl/OpenGLContext.h
+@@ -314,6 +314,8 @@ public:
+         void (FILAMENT_GL_APIENTRYP genQueries)(GLsizei n, GLuint* ids);
+         void (FILAMENT_GL_APIENTRYP deleteQueries)(GLsizei n, const GLuint* ids);
+         void (FILAMENT_GL_APIENTRYP beginQuery)(GLenum target, GLuint id);
++        void (FILAMENT_GL_APIENTRYP queryCounter)(GLuint id, GLenum target);
++        void (FILAMENT_GL_APIENTRYP getQueryiv)(GLenum target, GLenum pname, GLint* params);
+         void (FILAMENT_GL_APIENTRYP endQuery)(GLenum target);
+         void (FILAMENT_GL_APIENTRYP getQueryObjectuiv)(GLuint id, GLenum pname, GLuint* params);
+         void (FILAMENT_GL_APIENTRYP getQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
+diff --git a/filament/backend/src/opengl/OpenGLDriver.cpp b/filament/backend/src/opengl/OpenGLDriver.cpp
+index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..2316dc1c5dcee4029d9c18eb8f5576f5b49c5678 100644
+--- a/filament/backend/src/opengl/OpenGLDriver.cpp
++++ b/filament/backend/src/opengl/OpenGLDriver.cpp
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include "OpenGLDriver.h"
++#include "OpenGLGpuProfiler.h"
+ 
+ #include "CommandStreamDispatcher.h"
+ #include "gl_headers.h"
+@@ -152,6 +153,10 @@ using namespace utils;
+ 
+ namespace filament::backend {
+ 
++OpenGLGpuProfiler::~OpenGLGpuProfiler() {
++    if (mQueries[0]) mContext.procs.deleteQueries(QUERY_COUNT, mQueries.data());
++}
++
+ namespace {
+ 
+ CallbackHandler::Callback syncCallbackWrapper = [](void* userData) {
+@@ -392,6 +397,7 @@ Dispatcher OpenGLDriver::getDispatcher() const noexcept {
+ void OpenGLDriver::terminate() {
+     // wait for the GPU to finish executing all commands
+     glFinish();
++    if (mGpuProfiler) { mGpuProfiler->terminate(); mGpuProfiler.reset(); }
+ 
+     mShaderCompilerService.terminate();
+ 
+@@ -2396,6 +2402,12 @@ void OpenGLDriver::destroyProgram(Handle<HwProgram> ph) {
+     DEBUG_MARKER()
+     if (ph) {
+         OpenGLProgram const* p = handle_cast<OpenGLProgram*>(ph);
++        // A later program can reuse this arena address. Do not let pointer
++        // equality skip its lazy initialization, binding and descriptor setup.
++        if (mBoundProgram == p) {
++            mBoundProgram = nullptr;
++            getBackendState().useProgram(0);
++        }
+         destruct(ph, p);
+     }
+ }
+@@ -4137,6 +4149,7 @@ void OpenGLDriver::insertEventMarker(char const* string) {
+ }
+ 
+ void OpenGLDriver::pushGroupMarker(char const* string) {
++    utils::profiling::begin(FILAMENT_TRACING_CATEGORY_FILAMENT, string);
+ #ifndef __EMSCRIPTEN__
+ #ifdef GL_EXT_debug_marker
+ #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_OPENGL
+@@ -4148,12 +4161,13 @@ void OpenGLDriver::pushGroupMarker(char const* string) {
+ 
+ #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_BACKEND
+     FILAMENT_TRACING_CONTEXT(FILAMENT_TRACING_CATEGORY_FILAMENT);
+-    FILAMENT_TRACING_NAME_BEGIN(FILAMENT_TRACING_CATEGORY_FILAMENT, string);
++    FILAMENT_NATIVE_TRACING_NAME_BEGIN(FILAMENT_TRACING_CATEGORY_FILAMENT, string);
+ #endif
+ #endif
+ }
+ 
+ void OpenGLDriver::popGroupMarker(int) {
++    utils::profiling::end();
+ #ifndef __EMSCRIPTEN__
+ #ifdef GL_EXT_debug_marker
+ #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_OPENGL
+@@ -4165,7 +4179,7 @@ void OpenGLDriver::popGroupMarker(int) {
+ 
+ #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_BACKEND
+     FILAMENT_TRACING_CONTEXT(FILAMENT_TRACING_CATEGORY_FILAMENT);
+-    FILAMENT_TRACING_NAME_END(FILAMENT_TRACING_CATEGORY_FILAMENT);
++    FILAMENT_NATIVE_TRACING_NAME_END(FILAMENT_TRACING_CATEGORY_FILAMENT);
+ #endif
+ #endif
+ }
+@@ -4491,6 +4505,7 @@ void OpenGLDriver::executeGpuCommandsCompleteOps() noexcept { // NOLINT(*-except
+ // ------------------------------------------------------------------------------------------------
+ 
+ void OpenGLDriver::tick(int) {
++    if (mGpuProfiler) mGpuProfiler->poll();
+     DEBUG_MARKER()
+ #ifndef FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
+     executeGpuCommandsCompleteOps();
+@@ -4511,6 +4526,11 @@ void OpenGLDriver::beginFrame(
+     auto& gl = getBackendState();
+     insertEventMarker("beginFrame");
+     mPlatform.beginFrame(monotonic_clock_ns, refreshIntervalNs, frameId);
++    if (!mGpuProfiler && (utils::profiling::isEnabled() ||
++            utils::profiling::getContext().capture_id != 0)) {
++        mGpuProfiler = std::make_unique<OpenGLGpuProfiler>(mContext);
++    }
++    if (mGpuProfiler) { mGpuProfiler->install(); mGpuProfiler->poll(); }
+     if (UTILS_UNLIKELY(!mTexturesWithStreamsAttached.empty())) {
+         OpenGLPlatform& platform = mPlatform;
+         for (GLTexture const* t : mTexturesWithStreamsAttached) {
+@@ -4606,6 +4626,7 @@ void OpenGLDriver::flush(int) {
+ void OpenGLDriver::finish(int) {
+     DEBUG_MARKER()
+     glFinish();
++    if (mGpuProfiler) mGpuProfiler->poll();
+ #ifndef FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
+     executeGpuCommandsCompleteOps();
+     assert_invariant(mGpuCommandCompleteOps.empty());
+@@ -5064,6 +5085,7 @@ void OpenGLDriver::draw2(uint32_t const indexOffset, uint32_t const indexCount,
+             rp->gl.getIndicesType(),
+             reinterpret_cast<const void*>(indexOffset << rp->gl.indicesShift),
+             GLsizei(instanceCount));
++    if (mGpuProfiler) mGpuProfiler->recordPrimitives(rp->type, indexCount, instanceCount);
+ #endif
+ 
+ #if FILAMENT_ENABLE_MATDBG
+@@ -5099,6 +5121,7 @@ void OpenGLDriver::drawArrays(uint32_t const vertexOffset, uint32_t const vertex
+     GLRenderPrimitive const* const rp = mBoundRenderPrimitive;
+     glDrawArraysInstanced(GLenum(rp->type), GLint(vertexOffset), GLsizei(vertexCount),
+             GLsizei(instanceCount));
++    if (mGpuProfiler) mGpuProfiler->recordPrimitives(rp->type, vertexCount, instanceCount);
+ #endif
+ 
+ #if FILAMENT_ENABLE_MATDBG
+@@ -5132,6 +5155,7 @@ void OpenGLDriver::draw2GLES2(uint32_t const indexOffset, uint32_t const indexCo
+     assert_invariant(instanceCount == 1);
+     glDrawElements(GLenum(rp->type), GLsizei(indexCount), rp->gl.getIndicesType(),
+             reinterpret_cast<const void*>(indexOffset << rp->gl.indicesShift));
++    if (mGpuProfiler) mGpuProfiler->recordPrimitives(rp->type, indexCount, 1);
+ 
+ #if FILAMENT_ENABLE_MATDBG
+     CHECK_GL_ERROR_NON_FATAL()
+diff --git a/filament/backend/src/opengl/OpenGLDriver.h b/filament/backend/src/opengl/OpenGLDriver.h
+index 95beae91000866e72ffd6d37b2bd3fe51f3ec597..c6f7b06f41d3795d4f63277c2f829bbe2dbfd457 100644
+--- a/filament/backend/src/opengl/OpenGLDriver.h
++++ b/filament/backend/src/opengl/OpenGLDriver.h
+@@ -75,6 +75,8 @@
+ 
+ namespace filament::backend {
+ 
++class GpuProfiler;
++
+ class OpenGLPlatform;
+ class OpenGLState;
+ class PixelBufferDescriptor;
+@@ -230,6 +232,7 @@ public:
+ private:
+     OpenGLPlatform& mPlatform;
+     OpenGLContext mContext;
++    std::unique_ptr<GpuProfiler> mGpuProfiler;
+     OpenGLState* mBackendState = nullptr; // owned by backend thread
+     OpenGLState* mWorkerState = nullptr;  // owned by worker thread (initialized for async mode)
+     ShaderCompilerService mShaderCompilerService;
+diff --git a/filament/backend/src/opengl/OpenGLGpuProfiler.h b/filament/backend/src/opengl/OpenGLGpuProfiler.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0473ed89ff9f257f5eef4d78fa938edf390d046
+--- /dev/null
++++ b/filament/backend/src/opengl/OpenGLGpuProfiler.h
+@@ -0,0 +1,79 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++#ifndef TNT_OPENGL_GPU_PROFILER_H
++#define TNT_OPENGL_GPU_PROFILER_H
++#include "GpuProfiler.h"
++#include "OpenGLContext.h"
++
++namespace filament::backend {
++class OpenGLGpuProfiler final : public GpuProfiler {
++public:
++    explicit OpenGLGpuProfiler(OpenGLContext& context)
++        : GpuProfiler(capabilities(context)), mContext(context) {}
++    ~OpenGLGpuProfiler() override;
++private:
++    static constexpr GLenum TIMESTAMP = 0x8E28;
++    static constexpr GLenum COUNTER_BITS = 0x8864;
++    static constexpr GLenum GPU_DISJOINT = 0x8FBB;
++    OpenGLContext& mContext;
++    std::array<GLuint, QUERY_COUNT> mQueries{};
++    std::array<uint32_t, FRAME_COUNT> mLastQuery{};
++    static Caps capabilities(OpenGLContext& context) noexcept {
++        Caps caps{};
++        caps.backend = utils::profiling::GpuBackend::OPENGL;
++        caps.timestamp_period_ns = 1;
++        auto const& p = context.procs;
++        bool const supported = context.ext.EXT_disjoint_timer_query &&
++                !context.bugs.dont_use_timer_query && p.genQueries && p.deleteQueries &&
++                p.queryCounter && p.getQueryiv && p.getQueryObjectuiv && p.getQueryObjectui64v;
++        GLint bits = 0;
++        if (supported) p.getQueryiv(TIMESTAMP, COUNTER_BITS, &bits);
++        caps.timestamp_valid_bits = bits > 0 && bits <= 64 ? uint8_t(bits) : 0;
++        caps.hardware_timestamps = caps.timestamp_valid_bits > 0;
++        caps.reason = caps.hardware_timestamps ? "hardware timestamps; frame-relative clock" :
++                context.bugs.dont_use_timer_query ? "timer queries disabled by driver workaround" :
++                "timestamp queryCounter unavailable or counter bits are zero";
++        return caps;
++    }
++    bool initialize() noexcept override {
++        mContext.procs.genQueries(QUERY_COUNT, mQueries.data());
++        if (!mQueries[0] || !mQueries.back()) {
++            mCaps.reason = "dedicated timestamp query allocation failed";
++            return false;
++        }
++        return true;
++    }
++    void reset(uint32_t) noexcept override {}
++    void write(uint32_t index) noexcept override {
++        mContext.procs.queryCounter(mQueries[index], TIMESTAMP);
++        mLastQuery[index / QUERIES_PER_FRAME] = index;
++    }
++    QueryStatus read(uint32_t index, uint64_t& ticks) noexcept override {
++        GLuint available = GL_FALSE;
++        mContext.procs.getQueryObjectuiv(mQueries[index], GL_QUERY_RESULT_AVAILABLE, &available);
++        if (!available) return QueryStatus::PENDING;
++        GLuint64 result = 0;
++        mContext.procs.getQueryObjectui64v(mQueries[index], GL_QUERY_RESULT, &result);
++        ticks = uint64_t(result);
++        return QueryStatus::AVAILABLE;
++    }
++    bool ready(uint32_t slot) noexcept override {
++        uint64_t ignored = 0;
++        return read(mLastQuery[slot], ignored) == QueryStatus::AVAILABLE;
++    }
++    void close(uint32_t) noexcept override {}
++    QueryStatus validity() noexcept override {
++#if defined(BACKEND_OPENGL_VERSION_GLES) && defined(GL_EXT_disjoint_timer_query)
++        if (mCaps.hardware_timestamps) {
++            GLint disjoint = 0;
++            glGetIntegerv(GPU_DISJOINT, &disjoint);
++            if (disjoint) return QueryStatus::DISJOINT;
++        }
++#endif
++        return QueryStatus::AVAILABLE;
++    }
++};
++} // namespace filament::backend
++#endif
+diff --git a/filament/backend/src/opengl/gl_headers.cpp b/filament/backend/src/opengl/gl_headers.cpp
+index 4a99a1f72f9827e3af3a13ee60ae577105fa442a..7af1d8b18112f89b43dacc8e7f82e6bda5486e9d 100644
+--- a/filament/backend/src/opengl/gl_headers.cpp
++++ b/filament/backend/src/opengl/gl_headers.cpp
+@@ -50,6 +50,8 @@ PFNGLGETDEBUGMESSAGELOGKHRPROC glGetDebugMessageLogKHR;
+ PFNGLGENQUERIESEXTPROC glGenQueriesEXT;
+ PFNGLDELETEQUERIESEXTPROC glDeleteQueriesEXT;
+ PFNGLBEGINQUERYEXTPROC glBeginQueryEXT;
++PFNGLQUERYCOUNTEREXTPROC glQueryCounterEXT;
++PFNGLGETQUERYIVEXTPROC glGetQueryivEXT;
+ PFNGLENDQUERYEXTPROC glEndQueryEXT;
+ PFNGLGETQUERYOBJECTUIVEXTPROC glGetQueryObjectuivEXT;
+ PFNGLGETQUERYOBJECTUI64VEXTPROC glGetQueryObjectui64vEXT;
+@@ -107,6 +109,8 @@ void importGLESExtensionsEntryPoints() {
+     getProcAddress(glGenQueriesEXT, "glGenQueriesEXT");
+     getProcAddress(glDeleteQueriesEXT, "glDeleteQueriesEXT");
+     getProcAddress(glBeginQueryEXT, "glBeginQueryEXT");
++    getProcAddress(glQueryCounterEXT, "glQueryCounterEXT");
++    getProcAddress(glGetQueryivEXT, "glGetQueryivEXT");
+     getProcAddress(glEndQueryEXT, "glEndQueryEXT");
+     getProcAddress(glGetQueryObjectuivEXT, "glGetQueryObjectuivEXT");
+     getProcAddress(glGetQueryObjectui64vEXT, "glGetQueryObjectui64vEXT");
+diff --git a/filament/backend/src/opengl/gl_headers.h b/filament/backend/src/opengl/gl_headers.h
+index 3bc7eff166241f81462e890ff5502ddc9ce80900..9dd674d06fdd6ef0738c98efab859355b99561f4 100644
+--- a/filament/backend/src/opengl/gl_headers.h
++++ b/filament/backend/src/opengl/gl_headers.h
+@@ -168,6 +168,8 @@ extern PFNGLCLIPCONTROLEXTPROC glClipControlEXT;
+ extern PFNGLGENQUERIESEXTPROC glGenQueriesEXT;
+ extern PFNGLDELETEQUERIESEXTPROC glDeleteQueriesEXT;
+ extern PFNGLBEGINQUERYEXTPROC glBeginQueryEXT;
++extern PFNGLQUERYCOUNTEREXTPROC glQueryCounterEXT;
++extern PFNGLGETQUERYIVEXTPROC glGetQueryivEXT;
+ extern PFNGLENDQUERYEXTPROC glEndQueryEXT;
+ extern PFNGLGETQUERYOBJECTUIVEXTPROC glGetQueryObjectuivEXT;
+ extern PFNGLGETQUERYOBJECTUI64VEXTPROC glGetQueryObjectui64vEXT;
+diff --git a/filament/backend/src/vulkan/VulkanDriver.cpp b/filament/backend/src/vulkan/VulkanDriver.cpp
+index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d346ecc072 100644
+--- a/filament/backend/src/vulkan/VulkanDriver.cpp
++++ b/filament/backend/src/vulkan/VulkanDriver.cpp
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include "VulkanDriver.h"
++#include "VulkanGpuProfiler.h"
+ 
+ #include "CommandStreamDispatcher.h"
+ #include "SystraceProfile.h"
+@@ -63,6 +64,10 @@ using namespace bluevk;
+ 
+ namespace filament::backend {
+ 
++VulkanGpuProfiler::~VulkanGpuProfiler() {
++    if (mPool) bluevk::vkDestroyQueryPool(mDevice, mPool, nullptr);
++}
++
+ namespace {
+ 
+ static constexpr uint8_t MAX_TICKS_BETWEEN_GC = 3;
+@@ -395,6 +400,7 @@ void VulkanDriver::terminate() {
+     // Flush and wait here to make sure all queued commands are executed and resources that are tied
+     // to those commands are no longer referenced.
+     finish(0);
++    if (mGpuProfiler) { mGpuProfiler->terminate(); mGpuProfiler.reset(); }
+ 
+     mCurrentSwapChain = {};
+     mDefaultRenderTarget = {};
+@@ -456,6 +462,7 @@ void VulkanDriver::terminate() {
+ 
+ void VulkanDriver::tick(int) {
+     mCommands.updateFences();
++    if (mGpuProfiler) mGpuProfiler->poll();
+ 
+     // Destroy the resources of the readbacks that completed on the readPixels thread.
+     mReadPixels.gc();
+@@ -500,6 +507,11 @@ void VulkanDriver::collectGarbage() {
+ void VulkanDriver::beginFrame(int64_t monotonic_clock_ns,
+         int64_t refreshIntervalNs, uint32_t frameId) {
+     FVK_PROFILE_MARKER(PROFILE_NAME_BEGINFRAME);
++    if (!mGpuProfiler && (utils::profiling::isEnabled() ||
++            utils::profiling::getContext().capture_id != 0)) {
++        mGpuProfiler = std::make_unique<VulkanGpuProfiler>(*mPlatform, mCommands, mContext);
++    }
++    if (mGpuProfiler) { mGpuProfiler->install(); mGpuProfiler->poll(); }
+ 
+     // if frameId is 0, it means we're not associated to a particular frame, which is the case
+     // for standalone views. And in this case we skip the frame info timing collection.
+@@ -614,6 +626,7 @@ void VulkanDriver::finish(int dummy) {
+ 
+     // This wait() is still necessary to update the fence status.
+     mCommands.wait();
++    if (mGpuProfiler) mGpuProfiler->poll();
+ 
+     mReadPixels.runUntilComplete();
+ }
+@@ -2779,6 +2792,7 @@ void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
+     auto vbi = resource_ptr<VulkanVertexBufferInfo>::cast(&mResourceManager,
+             pipelineState.vertexBufferInfo);
+ 
++    mRenderPrimitiveState.primitiveType = pipelineState.primitiveType;
+     RasterState const& rasterState = pipelineState.rasterState;
+     PolygonOffset const& depthOffset = pipelineState.polygonOffset;
+ 
+@@ -2965,6 +2979,8 @@ void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t ins
+     VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
+ 
+     vkCmdDrawIndexed(cmdbuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstId);
++    if (mGpuProfiler) mGpuProfiler->recordPrimitives(
++            mRenderPrimitiveState.primitiveType, indexCount, instanceCount);
+ }
+ 
+ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
+@@ -2976,6 +2992,8 @@ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
+     VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
+ 
+     vkCmdDraw(cmdbuffer, vertexCount, instanceCount, vertexOffset, firstInstId);
++    if (mGpuProfiler) mGpuProfiler->recordPrimitives(
++            mRenderPrimitiveState.primitiveType, vertexCount, instanceCount);
+ }
+ 
+ void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+diff --git a/filament/backend/src/vulkan/VulkanDriver.h b/filament/backend/src/vulkan/VulkanDriver.h
+index 8b513e4ea8f03f22260d85d1489eeecd0da47c69..15770fef0c5f24bdf8d41471ae3e5b913ba74969 100644
+--- a/filament/backend/src/vulkan/VulkanDriver.h
++++ b/filament/backend/src/vulkan/VulkanDriver.h
+@@ -50,8 +50,12 @@
+ #include <utils/Allocator.h>
+ #include <utils/compiler.h>
+ 
++#include <memory>
++
+ namespace filament::backend {
+ 
++class GpuProfiler;
++
+ class VulkanPlatform;
+ 
+ // The maximum number of attachments for any renderpass (color + resolve + depth)
+@@ -156,6 +160,7 @@ private:
+     JobWorker* getJobWorker() const noexcept { return mJobWorker.get(); }
+ 
+     VulkanPlatform* mPlatform = nullptr;
++    std::unique_ptr<GpuProfiler> mGpuProfiler;
+     fvkmemory::ResourceManager mResourceManager;
+ 
+     resource_ptr<VulkanSwapChain> mCurrentSwapChain;
+@@ -226,6 +231,7 @@ private:
+     struct {
+         // Indicates whether a render primitive has been bound for draw.
+         bool bound = false;
++        PrimitiveType primitiveType = PrimitiveType::TRIANGLES;
+     } mRenderPrimitiveState {};
+ 
+     bool const mIsSRGBSwapChainSupported;
+diff --git a/filament/backend/src/vulkan/VulkanGpuProfiler.h b/filament/backend/src/vulkan/VulkanGpuProfiler.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..701cdc67e90f72e370a0ca728ca741d665b083e3
+--- /dev/null
++++ b/filament/backend/src/vulkan/VulkanGpuProfiler.h
+@@ -0,0 +1,83 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++#ifndef TNT_VULKAN_GPU_PROFILER_H
++#define TNT_VULKAN_GPU_PROFILER_H
++#include "GpuProfiler.h"
++#include "VulkanCommands.h"
++#include "VulkanContext.h"
++#include <backend/platforms/VulkanPlatform.h>
++#include <vector>
++
++namespace filament::backend {
++class VulkanGpuProfiler final : public GpuProfiler {
++public:
++    VulkanGpuProfiler(VulkanPlatform& platform, VulkanCommands& commands, VulkanContext& context)
++        : GpuProfiler(capabilities(platform, context)), mDevice(platform.getDevice()),
++          mCommands(commands) {}
++    ~VulkanGpuProfiler() override;
++private:
++    VkDevice mDevice;
++    VulkanCommands& mCommands;
++    VkQueryPool mPool = VK_NULL_HANDLE;
++    std::array<std::shared_ptr<VulkanCmdFence>, FRAME_COUNT> mFences{};
++
++    static Caps capabilities(VulkanPlatform& platform, VulkanContext& context) {
++        Caps caps{};
++        caps.backend = utils::profiling::GpuBackend::VULKAN;
++        caps.timestamp_period_ns = context.getPhysicalDeviceLimits().timestampPeriod;
++        uint32_t count = 0;
++        bluevk::vkGetPhysicalDeviceQueueFamilyProperties(platform.getPhysicalDevice(), &count, nullptr);
++        std::vector<VkQueueFamilyProperties> families(count);
++        bluevk::vkGetPhysicalDeviceQueueFamilyProperties(platform.getPhysicalDevice(), &count,
++                families.data());
++        uint32_t const family = platform.getGraphicsQueueFamilyIndex();
++        if (family < count && families[family].timestampValidBits <= 64) {
++            caps.timestamp_valid_bits = uint8_t(families[family].timestampValidBits);
++        }
++        caps.hardware_timestamps = caps.timestamp_valid_bits > 0 &&
++                std::isfinite(caps.timestamp_period_ns) && caps.timestamp_period_ns > 0;
++        caps.reason = caps.hardware_timestamps ? "hardware timestamps; frame-relative clock" :
++                "graphics queue does not expose valid hardware timestamps";
++        return caps;
++    }
++    bool initialize() noexcept override {
++        VkQueryPoolCreateInfo const info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, nullptr, 0,
++                VK_QUERY_TYPE_TIMESTAMP, QUERY_COUNT, 0};
++        if (bluevk::vkCreateQueryPool(mDevice, &info, nullptr, &mPool) != VK_SUCCESS) {
++            mCaps.reason = "dedicated timestamp query pool creation failed";
++            return false;
++        }
++        return true;
++    }
++    void reset(uint32_t slot) noexcept override {
++        mFences[slot].reset();
++        bluevk::vkCmdResetQueryPool(mCommands.get().buffer(), mPool,
++                slot * QUERIES_PER_FRAME, QUERIES_PER_FRAME);
++    }
++    void write(uint32_t index) noexcept override {
++        auto& commands = mCommands.get();
++        bluevk::vkCmdWriteTimestamp(commands.buffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                mPool, index);
++        // Remember the submission containing the last timestamp. Closing after
++        // presentation must not acquire a fresh command buffer just for a fence.
++        mFences[index / QUERIES_PER_FRAME] = commands.getFenceStatus();
++    }
++    QueryStatus read(uint32_t index, uint64_t& ticks) noexcept override {
++        std::array<uint64_t, 2> result{};
++        VkResult const status = bluevk::vkGetQueryPoolResults(mDevice, mPool, index, 1,
++                sizeof(result), result.data(), sizeof(result),
++                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
++        if (status != VK_SUCCESS && status != VK_NOT_READY) return QueryStatus::ERROR;
++        if (status == VK_NOT_READY || !result[1]) return QueryStatus::PENDING;
++        ticks = result[0];
++        return QueryStatus::AVAILABLE;
++    }
++    bool ready(uint32_t slot) noexcept override {
++        return mFences[slot] && mFences[slot]->getStatus() == VK_SUCCESS;
++    }
++    void close(uint32_t) noexcept override {}
++};
++} // namespace filament::backend
++#endif
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
+index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..9af22663cf7315ba73ace0be2d3ac4fd5164bdda 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
++++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
+@@ -244,7 +244,15 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
+         // Request all cross-platform extensions.
+         VK_KHR_SURFACE_EXTENSION_NAME,
+ 
+-    // Request these if available.
++        // HeavenBench patch (HDR display output): request the swapchain
++        // colorspace extension if available. Without it the driver will not
++        // enumerate HDR colorspaces (HDR10 ST.2084, extended-sRGB scRGB) from
++        // vkGetPhysicalDeviceSurfaceFormatsKHR, so it is a prerequisite for any
++        // HDR swapchain. Enabled only when the loader reports it as available,
++        // so non-HDR systems are unaffected.
++        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
++
++        // Request these if available.
+ #if defined(__APPLE__)
+         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+ #endif
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp
+index 8874e079def3fd55f59b675c1a464242d0768f3c..1aed885a7f5796ec6bd8fdd27430013cc9ee45db 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp
++++ b/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp
+@@ -33,7 +33,55 @@
+ #endif
+ 
+ // Platform specific includes and defines
+-#if defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
++#if defined(FILAMENT_LINUX_DUAL_WSI)
++    // ── HeavenBench dual-WSI patch ──────────────────────────────
++    //
++    // Upstream Filament compiles EITHER the Wayland surface path OR
++    // the X11 path, never both (the top-level CMake forces
++    // FILAMENT_SUPPORTS_X11 off once Wayland is requested). To get a
++    // single binary that runs natively on both X11/XWayland and
++    // Wayland we compile both paths and dispatch at runtime based on
++    // a tag the frontend stamps into the native-window pointer.
++    //
++    // FILAMENT_LINUX_DUAL_WSI is defined by our patched top-level
++    // CMakeLists.txt only in the combined build. When it is NOT
++    // defined the original mutually-exclusive behaviour below is
++    // preserved verbatim, so non-HeavenBench consumers of this vendored
++    // tree are unaffected.
++    //
++    // The frontend (benchmark/src/rhi/filament_backend.cpp) passes a
++    // pointer to a `UgxLinuxNativeWindow` struct whose first 4 bytes
++    // are a magic tag selecting Wayland vs X11.
++    #include <dlfcn.h>
++    #include <xcb/xcb.h>
++    #include <X11/Xlib.h>
++    namespace {
++        // Must match the layout in filament_backend.cpp.
++        constexpr uint32_t kUgxNativeWaylandTag = 0x57414c44u; // 'WALD'
++        constexpr uint32_t kUgxNativeX11Tag     = 0x58313158u; // 'X11X'
++        struct UgxLinuxNativeWindow {
++            uint32_t tag;
++            // Wayland fields (valid when tag == kUgxNativeWaylandTag)
++            struct wl_display* wl_display;
++            struct wl_surface* wl_surface;
++            uint32_t width;
++            uint32_t height;
++            // X11 field (valid when tag == kUgxNativeX11Tag) — the
++            // X11 Window id (an XID / unsigned long).
++            unsigned long x11_window;
++        };
++        typedef xcb_connection_t* (*XCB_CONNECT)(const char* displayname, int* screenp);
++        typedef Display* (*X11_OPEN_DISPLAY)(const char*);
++        static constexpr const char* UGX_LIBRARY_X11 = "libX11.so.6";
++        struct UgxX11Env {
++            XCB_CONNECT       xcbConnect = nullptr;
++            xcb_connection_t* connection = nullptr;
++            X11_OPEN_DISPLAY  openDisplay = nullptr;
++            Display*          display = nullptr;
++            void*             library = nullptr;
++        } g_ugx_x11;
++    } // anonymous namespace
++#elif defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
+     #include <dlfcn.h>
+     namespace {
+         typedef struct _wl {
+@@ -81,7 +129,17 @@ namespace filament::backend {
+ 
+ VulkanPlatform::ExtensionSet VulkanPlatformLinux::getSwapchainInstanceExtensions() const {
+     VulkanPlatform::ExtensionSet const ret = {
+-#if defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
++#if defined(FILAMENT_LINUX_DUAL_WSI)
++        // Dual build: advertise every Linux WSI extension so the
++        // instance can create either kind of surface at runtime.
++        VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
++    #if defined(FILAMENT_SUPPORTS_XCB)
++        VK_KHR_XCB_SURFACE_EXTENSION_NAME,
++    #endif
++    #if defined(FILAMENT_SUPPORTS_XLIB)
++        VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
++    #endif
++#elif defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
+         VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
+ #elif defined(LINUX_OR_FREEBSD) && defined(FILAMENT_SUPPORTS_X11)
+     #if defined(FILAMENT_SUPPORTS_XCB)
+@@ -105,7 +163,81 @@ VulkanPlatform::SurfaceBundle VulkanPlatformLinux::createVkSurfaceKHR(void* nati
+     // swap chain extent.
+     VkExtent2D extent;
+ 
+-    #if defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
++    #if defined(FILAMENT_LINUX_DUAL_WSI)
++        // Runtime dispatch: the frontend tagged the native window so
++        // we know whether to create a Wayland or X11 surface.
++        auto* nw = reinterpret_cast<UgxLinuxNativeWindow*>(nativeWindow);
++        if (nw && nw->tag == kUgxNativeWaylandTag) {
++            extent.width  = nw->width;
++            extent.height = nw->height;
++
++            VkWaylandSurfaceCreateInfoKHR const createInfo = {
++                    .sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
++                    .pNext = nullptr,
++                    .flags = 0,
++                    .display = nw->wl_display,
++                    .surface = nw->wl_surface,
++            };
++            VkResult const result = vkCreateWaylandSurfaceKHR(instance, &createInfo, VKALLOC,
++                    (VkSurfaceKHR*) &surface);
++            FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS)
++                    << "vkCreateWaylandSurfaceKHR error=" << static_cast<int32_t>(result);
++        } else {
++            // X11 path. Lazily open the X11 / XCB connection once.
++            FILAMENT_CHECK_PRECONDITION(nw && nw->tag == kUgxNativeX11Tag)
++                    << "HeavenBench dual-WSI: native window has unknown tag";
++            if (g_ugx_x11.library == nullptr) {
++                g_ugx_x11.library = dlopen(UGX_LIBRARY_X11, RTLD_LOCAL | RTLD_NOW);
++                FILAMENT_CHECK_PRECONDITION(g_ugx_x11.library) << "Unable to open X11 library.";
++                #if defined(FILAMENT_SUPPORTS_XCB)
++                    g_ugx_x11.xcbConnect = (XCB_CONNECT) dlsym(g_ugx_x11.library, "xcb_connect");
++                    int screen;
++                    g_ugx_x11.connection = g_ugx_x11.xcbConnect(nullptr, &screen);
++                #endif
++                #if defined(FILAMENT_SUPPORTS_XLIB)
++                    g_ugx_x11.openDisplay =
++                            (X11_OPEN_DISPLAY) dlsym(g_ugx_x11.library, "XOpenDisplay");
++                    g_ugx_x11.display = g_ugx_x11.openDisplay(nullptr);
++                    FILAMENT_CHECK_PRECONDITION(g_ugx_x11.display) << "Unable to open X11 display.";
++                #endif
++            }
++            bool useXcb = false;
++            #if defined(FILAMENT_SUPPORTS_XCB)
++                #if defined(FILAMENT_SUPPORTS_XLIB)
++                    useXcb = (flags & SWAP_CHAIN_CONFIG_ENABLE_XCB) != 0;
++                #else
++                    useXcb = true;
++                #endif
++                if (useXcb) {
++                    VkXcbSurfaceCreateInfoKHR const createInfo = {
++                            .sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR,
++                            .connection = g_ugx_x11.connection,
++                            .window = (xcb_window_t) nw->x11_window,
++                    };
++                    VkResult const result = vkCreateXcbSurfaceKHR(instance, &createInfo, VKALLOC,
++                            (VkSurfaceKHR*) &surface);
++                    FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS)
++                            << "vkCreateXcbSurfaceKHR error=" << static_cast<int32_t>(result);
++                }
++            #endif
++            #if defined(FILAMENT_SUPPORTS_XLIB)
++                if (!useXcb) {
++                    VkXlibSurfaceCreateInfoKHR const createInfo = {
++                            .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
++                            .dpy = g_ugx_x11.display,
++                            .window = (Window) nw->x11_window,
++                    };
++                    VkResult const result = vkCreateXlibSurfaceKHR(instance, &createInfo, VKALLOC,
++                            (VkSurfaceKHR*) &surface);
++                    FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS)
++                            << "vkCreateXlibSurfaceKHR error=" << static_cast<int32_t>(result);
++                }
++            #endif
++            // X11 reports surface extent through Vulkan, so leave it 0.
++            extent.width = 0;
++            extent.height = 0;
++        }
++    #elif defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
+         wl* ptrval = reinterpret_cast<wl*>(nativeWindow);
+         extent.width = ptrval->width;
+         extent.height = ptrval->height;
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
+index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..6565aabcb8dea857ac250c4695477d552bd990d7 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
++++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
+@@ -28,7 +28,7 @@
+ #include <backend/DriverEnums.h>
+ 
+ #include <errno.h>
+-
++#include <cstdlib>
+ 
+ using namespace bluevk;
+ using namespace utils;
+@@ -37,6 +37,31 @@ namespace filament::backend {
+ 
+ namespace {
+ 
++// HeavenBench patch (HDR display output): human-readable name for a
++// VkColorSpaceKHR, used by the Phase-0 surface-format probe logging below so we
++// can see whether the GPU/compositor offers any HDR colorspaces (HDR10 ST.2084,
++// extended-sRGB / scRGB) at all.
++const char* ugxColorSpaceName(VkColorSpaceKHR cs) {
++    switch (cs) {
++        case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:          return "SRGB_NONLINEAR";
++        case VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT:    return "DISPLAY_P3_NONLINEAR";
++        case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT:    return "EXTENDED_SRGB_LINEAR (scRGB)";
++        case VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT:       return "DISPLAY_P3_LINEAR";
++        case VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT:        return "DCI_P3_NONLINEAR";
++        case VK_COLOR_SPACE_BT709_LINEAR_EXT:            return "BT709_LINEAR";
++        case VK_COLOR_SPACE_BT709_NONLINEAR_EXT:         return "BT709_NONLINEAR";
++        case VK_COLOR_SPACE_BT2020_LINEAR_EXT:           return "BT2020_LINEAR";
++        case VK_COLOR_SPACE_HDR10_ST2084_EXT:            return "HDR10_ST2084 (PQ)";
++        case VK_COLOR_SPACE_DOLBYVISION_EXT:             return "DOLBYVISION";
++        case VK_COLOR_SPACE_HDR10_HLG_EXT:               return "HDR10_HLG";
++        case VK_COLOR_SPACE_ADOBERGB_LINEAR_EXT:         return "ADOBERGB_LINEAR";
++        case VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT:      return "ADOBERGB_NONLINEAR";
++        case VK_COLOR_SPACE_PASS_THROUGH_EXT:            return "PASS_THROUGH";
++        case VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT: return "EXTENDED_SRGB_NONLINEAR";
++        default:                                         return "UNKNOWN";
++    }
++}
++
+ std::tuple<VkImage, VkDeviceMemory> createImageAndMemory(VulkanContext const& context,
+         VkDevice device, VkExtent2D extent, VkFormat format, bool isProtected) {
+     bool const isDepth = fvkutils::isVkDepthFormat(format);
+@@ -158,6 +183,7 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
+       mSurface(surface),
+       mFallbackExtent(fallbackExtent),
+       mUsesRGB((flags & backend::SWAP_CHAIN_CONFIG_SRGB_COLORSPACE) != 0),
++      mUsesHDR10((flags & backend::SWAP_CHAIN_CONFIG_HDR10_ST2084) != 0),
+       mHasStencil((flags & backend::SWAP_CHAIN_HAS_STENCIL_BUFFER) != 0),
+       mIsProtected((flags & backend::SWAP_CHAIN_CONFIG_PROTECTED_CONTENT) != 0),
+       mNativeWindow(nativeWindow) {
+@@ -215,6 +241,21 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+         return VK_ERROR_SURFACE_LOST_KHR;
+     }
+ 
++    // HeavenBench patch (HDR display output) — surface-format probe.
++    // Dumping every (format, colorSpace) pair the surface advertises is handy
++    // when diagnosing why HDR is/isn't available on a given GPU + compositor,
++    // but it is noisy, so it is gated behind UGX_HDR_DEBUG. The concise
++    // "selected HDR10" / fallback lines below always print under --hdr.
++    if (std::getenv("UGX_HDR_DEBUG")) {
++        printf("[ugx-hdr] surface advertises %zu format(s):\n",
++               (size_t) surfaceFormats.size());
++        for (VkSurfaceFormatKHR const& f : surfaceFormats) {
++            printf("[ugx-hdr]   vkformat=%d colorspace=%d (%s)\n",
++                   (int) f.format, (int) f.colorSpace, ugxColorSpaceName(f.colorSpace));
++        }
++        fflush(stdout);
++    }
++
+     std::array<VkFormat, 2> expectedFormats = {
+         VK_FORMAT_R8G8B8A8_UNORM,
+         VK_FORMAT_B8G8R8A8_UNORM,
+@@ -225,19 +266,54 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+             VK_FORMAT_B8G8R8A8_SRGB,
+         };
+     }
+-    for (VkSurfaceFormatKHR const& format: surfaceFormats) {
+-        if (std::any_of(expectedFormats.begin(), expectedFormats.end(),
+-                    [&format](VkFormat f) { return f == format.format; })) {
+-            surfaceFormat = format;
+-            break;
++
++    // HeavenBench patch (HDR display output): when an HDR10 swapchain is
++    // requested, first try to match a high-precision format paired with the
++    // HDR10 ST.2084 (PQ) colorspace. fp16 is preferred (no 10-bit banding and
++    // it matches our internal RGBA16F scene buffers); 10-bit packed formats are
++    // the fallback. The application probes support before creating the swap
++    // chain. Reject a missing HDR10 pair here as well: display mode changes can
++    // race that probe, and sending PQ output to an SDR surface is invalid.
++    if (mUsesHDR10) {
++        std::array<VkFormat, 3> const hdrFormats = {
++            VK_FORMAT_R16G16B16A16_SFLOAT,        // fp16 — preferred
++            VK_FORMAT_A2B10G10R10_UNORM_PACK32,   // 10-bit fallback
++            VK_FORMAT_A2R10G10B10_UNORM_PACK32,   // 10-bit fallback
++        };
++        for (VkFormat const want : hdrFormats) {
++            for (VkSurfaceFormatKHR const& format : surfaceFormats) {
++                if (format.format == want &&
++                        format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
++                    surfaceFormat = format;
++                    break;
++                }
++            }
++            if (surfaceFormat.format != VK_FORMAT_UNDEFINED) break;
++        }
++        if (surfaceFormat.format != VK_FORMAT_UNDEFINED) {
++            printf("[ugx-hdr] selected HDR10 ST.2084 swapchain: vkformat=%d\n",
++                   (int) surfaceFormat.format);
++            fflush(stdout);
++        }
++        FILAMENT_CHECK_POSTCONDITION(surfaceFormat.format != VK_FORMAT_UNDEFINED)
++                << "HDR10 requested but no ST.2084 surface format is available. "
++                   "Enable HDR on the display or restart without --hdr.";
++    }
++
++    if (surfaceFormat.format == VK_FORMAT_UNDEFINED) {
++        for (VkSurfaceFormatKHR const& format: surfaceFormats) {
++            if (std::any_of(expectedFormats.begin(), expectedFormats.end(),
++                        [&format](VkFormat f) { return f == format.format; })) {
++                surfaceFormat = format;
++                break;
++            }
+         }
+     }
+     FILAMENT_CHECK_POSTCONDITION(surfaceFormat.format != VK_FORMAT_UNDEFINED)
+             << "Cannot find suitable swapchain format";
+ 
+-    // Verify that our chosen present mode is supported. In practice all devices support the FIFO
+-    // mode, but we check for it anyway for completeness.  (and to avoid validation warnings)
+-    VkPresentModeKHR const desiredPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++    // HeavenBench patch: prefer IMMEDIATE (no vsync) for benchmark-style
++    // rendering. Falls back to FIFO if IMMEDIATE is unavailable on this device.
+     FixedCapacityVector<VkPresentModeKHR> presentModes = fvkutils::enumerate(
+             vkGetPhysicalDeviceSurfacePresentModesKHR, mPhysicalDevice, mSurface);
+ 
+@@ -247,6 +323,15 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+         return VK_ERROR_SURFACE_LOST_KHR;
+     }
+ 
++    bool const hasImmediate = std::find(presentModes.begin(), presentModes.end(),
++                                        VK_PRESENT_MODE_IMMEDIATE_KHR) != presentModes.end();
++    VkPresentModeKHR const desiredPresentMode =
++            hasImmediate ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
++
++    printf("vkPresentMode: %s\n",
++           hasImmediate ? "IMMEDIATE (no vsync)" : "FIFO (VSync, IMMEDIATE not available)");
++    fflush(stdout);
++
+     bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
+                                             desiredPresentMode) != presentModes.end();
+     FILAMENT_CHECK_POSTCONDITION(foundSuitablePresentMode)
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
+index a44c62e75d0cefff11bb288444252286f529842e..267a496c7aa8069eba49cdce75427c358eace14b 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
++++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
+@@ -131,6 +131,8 @@ private:
+     uint32_t mCurrentImageReadyIndex;
+ 
+     bool const mUsesRGB = false;
++    // HeavenBench patch (HDR display output): request an HDR10 PQ swapchain.
++    bool const mUsesHDR10 = false;
+     bool const mHasStencil = false;
+     bool const mIsProtected = false;
+     bool mSuboptimal;
+diff --git a/filament/backend/test/test_ProfilerTrace.cpp b/filament/backend/test/test_ProfilerTrace.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..8edbd0d9609ed6ee8750e8f5c98e032c58b09ebf
+--- /dev/null
++++ b/filament/backend/test/test_ProfilerTrace.cpp
+@@ -0,0 +1,215 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++// Standalone contract test: link against utils and backend. No graphics device is required.
++#include "GpuProfiler.h"
++#include <private/utils/ProfilerTrace.h>
++#include <utils/JobSystem.h>
++#include <array>
++#include <atomic>
++#include <cstdio>
++#include <cstring>
++#include <memory>
++#include <stdexcept>
++
++namespace p = utils::profiling;
++using filament::backend::GpuProfiler;
++namespace {
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++struct Records {
++    std::array<p::CpuEvent, 1024> cpu{};
++    std::array<std::array<char, 96>, 1024> cpuNames{};
++    std::atomic<uint32_t> cpuCount{0};
++    std::array<p::GpuSample, 18000> gpu{};
++    uint32_t gpuCount = 0;
++    p::GpuCapabilities caps{};
++    uint32_t capsCount = 0;
++    p::Observer observer{this,
++        [](void* ptr, p::CpuEvent const& event) noexcept {
++            auto& r = *static_cast<Records*>(ptr);
++            uint32_t const i = r.cpuCount.fetch_add(1);
++            if (i >= r.cpu.size()) return;
++            r.cpu[i] = event;
++            if (event.name) std::strncpy(r.cpuNames[i].data(), event.name, 95);
++        },
++        [](void* ptr, p::GpuSample const& sample) noexcept {
++            auto& r = *static_cast<Records*>(ptr);
++            if (r.gpuCount < r.gpu.size()) r.gpu[r.gpuCount++] = sample;
++        },
++        [](void* ptr, p::GpuCapabilities const& caps) noexcept {
++            auto& r = *static_cast<Records*>(ptr); r.caps = caps; ++r.capsCount;
++        }};
++    void clear() { cpuCount.store(0); gpuCount = 0; capsCount = 0; }
++};
++class Queries final : public GpuProfiler {
++public:
++    explicit Queries(bool supported = true) : GpuProfiler(Caps{
++            .backend = p::GpuBackend::VULKAN, .hardware_timestamps = supported,
++            .timestamp_valid_bits = 8, .timestamp_period_ns = 2}) {}
++    ~Queries() override;
++    bool available = false;
++    bool initializeOk = true;
++    QueryStatus valid = QueryStatus::AVAILABLE;
++    uint64_t nextTick = 250;
++    uint64_t step = 3;
++    uint32_t resets = 0;
++    int32_t pendingIndex = -1;
++private:
++    std::array<uint64_t, QUERY_COUNT> ticks{};
++    bool initialize() noexcept override { return initializeOk; }
++    void reset(uint32_t) noexcept override { ++resets; }
++    void write(uint32_t index) noexcept override { ticks[index] = nextTick & 255; nextTick += step; }
++    QueryStatus read(uint32_t index, uint64_t& result) noexcept override {
++        if (!available || int32_t(index) == pendingIndex) return QueryStatus::PENDING;
++        result = ticks[index]; return QueryStatus::AVAILABLE;
++    }
++    bool ready(uint32_t) noexcept override { return available; }
++    void close(uint32_t) noexcept override {}
++    QueryStatus validity() noexcept override { return valid; }
++};
++Queries::~Queries() = default;
++p::Context context(uint64_t capture = 7) {
++    return {11, 12, 13, 14, 15, capture};
++}
++void pass(uint64_t id = 1, p::Context c = context(), GpuProfiler* draws = nullptr) {
++    p::gpuBeginPass(c, id, "color");
++    p::gpuCounters(4, 12, 3);
++    if (draws) {
++        draws->recordPrimitives(filament::backend::PrimitiveType::TRIANGLES, 6, 3);
++        draws->recordPrimitives(filament::backend::PrimitiveType::LINES, 4, 2);
++    }
++    p::gpuEndPass(id);
++}
++void cpuTests(Records& r) {
++    p::setContext(context()); p::setEnabled(true);
++    char mutableName[] = "outer";
++    p::begin("test", mutableName);
++    mutableName[0] = 'X';
++    p::begin("test", "inner"); p::end();
++    p::setEnabled(false); p::end();
++    require(r.cpuCount == 2, "balanced scopes complete after disabling");
++    require(r.cpu[0].parent_id == r.cpu[1].scope_id, "CPU parent identity");
++    require(r.cpu[0].context.capture_id == 7 && r.cpu[0].context.view_id == 15,
++            "CPU complete inherited context");
++    require(r.cpu[0].end_ns >= r.cpu[0].begin_ns, "CPU monotonic duration");
++    require(std::strcmp(r.cpuNames[1].data(), "outer") == 0, "CPU copies borrowed scope label");
++    r.clear();
++    p::begin("test", "disabled"); p::setEnabled(true); p::end();
++    require(r.cpuCount == 0, "disabled manual begin remains balanced across enable");
++    for (int i = 0; i != 129; ++i) p::begin("test", "bounded");
++    for (int i = 0; i != 129; ++i) p::end();
++    require(r.cpuCount == 129 && r.cpu[0].kind == p::CpuEventKind::DROPPED,
++            "CPU depth overflow is explicit and bounded");
++    r.clear();
++    p::begin("test", "after-overflow"); p::end();
++    require(r.cpu[0].parent_id == 0, "CPU overflow preserves later stack balance");
++
++    static_assert(sizeof(utils::JobSystem::Job) == 64, "Profiler sidecar must preserve Job ABI");
++    utils::JobSystem jobs(1, 1); jobs.adopt();
++    std::atomic<bool> parentCorrect{false}, childCorrect{false};
++    p::setContext(context(21));
++    auto* job = jobs.createJob(nullptr, [&](utils::JobSystem& js, utils::JobSystem::Job* parent) {
++        parentCorrect.store(p::getContext().capture_id == 21 && p::getContext().view_id == 15);
++        p::setContext(context(99));
++        auto* child = js.createJob(parent, [&](utils::JobSystem&, utils::JobSystem::Job*) {
++            childCorrect.store(p::getContext().capture_id == 21 && p::getContext().attempt_id == 11);
++        });
++        js.run(child);
++    });
++    p::setContext(context(22));
++    jobs.runAndWait(job);
++    require(parentCorrect && childCorrect, "queued jobs and descendants inherit creation context");
++    require(p::getContext().capture_id == 22, "job execution restores caller context");
++    jobs.emancipate();
++    p::setEnabled(false);
++}
++void gpuTests(Records& r) {
++    p::setEnabled(true); r.clear();
++    {
++        auto q = std::make_unique<Queries>(); q->install();
++        // Submission accepted while enabled, consumed after capture stopped.
++        p::setEnabled(false);
++        p::gpuBeginFrame(context()); pass(1, context(), q.get()); p::gpuEndFrame();
++        require(r.gpuCount == 1 && r.gpu[0].status == p::GpuStatus::PENDING &&
++                r.gpu[0].begin_ns == -1, "unavailable GPU queries stay pending with no zero time");
++        p::setEnabled(false); q->available = true; q->poll();
++        require(r.gpuCount == 2 && r.gpu[1].status == p::GpuStatus::AVAILABLE &&
++                r.gpu[1].begin_ns == 6 && r.gpu[1].end_ns == 12,
++                "valid-bit wrap converts to relative nanoseconds after disable");
++        require(r.gpu[1].context.capture_id == 7 && r.gpu[1].command_count == 4 &&
++                r.gpu[1].primitive_count == 22 && r.gpu[1].visible_renderables == 3 &&
++                r.gpu[1].draw_instance_invocations == 5,
++                "GPU delayed context and counters survive intact");
++        require(r.capsCount == 1 && !r.caps.cpu_clock_calibrated, "GPU clock explicitly uncalibrated");
++        q->terminate();
++    }
++    p::setEnabled(true); r.clear();
++    {
++        auto q = std::make_unique<Queries>(false); q->install();
++        p::gpuBeginFrame(context()); pass(); p::gpuEndFrame(); q->poll();
++        require(r.gpuCount == 1 && r.gpu[0].status == p::GpuStatus::UNSUPPORTED &&
++                r.gpu[0].end_ns == -1 && q->resets == 0, "unsupported GPU never queries or invents time");
++        q->terminate();
++    }
++    r.clear();
++    {
++        auto q = std::make_unique<Queries>(); q->install();
++        q->step = 100;
++        p::gpuBeginFrame(context()); pass(); p::gpuEndFrame(); q->available = true; q->poll();
++        require(r.gpu[1].status == p::GpuStatus::ERROR && r.gpu[1].begin_ns == -1,
++                "ambiguous timestamp wrap is rejected"); q->terminate();
++    }
++    r.clear();
++    {
++        auto q = std::make_unique<Queries>(); q->install();
++        for (uint32_t i = 0; i != GpuProfiler::FRAME_COUNT; ++i) {
++            p::gpuBeginFrame(context(30 + i)); pass(i + 1, context(30 + i)); p::gpuEndFrame();
++        }
++        q->valid = p::GpuStatus::DISJOINT; q->poll();
++        p::gpuBeginFrame(context(50)); pass(50, context(50)); p::gpuEndFrame();
++        require(q->resets == 16 && r.gpu[r.gpuCount - 1].status == p::GpuStatus::DROPPED,
++                "disjoint does not prematurely recycle in-flight query storage");
++        q->available = true; q->valid = p::GpuStatus::AVAILABLE; q->poll();
++        require(r.gpuCount == 33 && r.gpu[17].status == p::GpuStatus::DISJOINT,
++                "disjoint propagates explicitly after safe retirement");
++        p::gpuBeginFrame(context(51)); pass(51, context(51)); p::gpuEndFrame(); q->poll();
++        require(q->resets == 17 && r.gpu[r.gpuCount - 1].status == p::GpuStatus::AVAILABLE &&
++                r.gpu[r.gpuCount - 1].context.capture_id == 51,
++                "query slots recover and preserve new capture identity"); q->terminate();
++    }
++    r.clear();
++    {
++        auto q = std::make_unique<Queries>(); q->install(); q->step = 0;
++        p::gpuBeginFrame(context());
++        for (uint32_t i = 0; i != 257; ++i) pass(i + 1);
++        p::gpuEndFrame();
++        require(r.gpuCount == 257 && r.gpu[0].status == p::GpuStatus::DROPPED,
++                "pass invocation overflow is explicit and bounded at 256");
++        q->available = true; q->pendingIndex = 1; q->poll();
++        require(r.gpuCount == 512, "partial query availability does not stall available peers");
++        q->pendingIndex = -1; q->poll();
++        require(r.gpuCount == 513 && r.gpu[512].status == p::GpuStatus::AVAILABLE,
++                "partially available frame retires exactly once per pass"); q->terminate();
++    }
++    require(GpuProfiler::primitiveCount(filament::backend::PrimitiveType::TRIANGLES, 6, 3) == 6 &&
++            GpuProfiler::primitiveCount(filament::backend::PrimitiveType::TRIANGLE_STRIP, 2, 1) == 0 &&
++            GpuProfiler::primitiveCount(filament::backend::PrimitiveType::LINE_STRIP, 5, 2) == 8,
++            "submission counters count topology primitives and instances");
++    p::setEnabled(false);
++}
++} // namespace
++int main() {
++    try {
++        auto records = std::make_unique<Records>();
++        p::setObserver(&records->observer);
++        cpuTests(*records); gpuTests(*records);
++        p::setObserver(nullptr);
++        std::puts("ProfilerTrace contracts: PASS"); return 0;
++    } catch (std::exception const& e) {
++        p::setEnabled(false); p::setObserver(nullptr);
++        std::fprintf(stderr, "ProfilerTrace contracts: FAIL: %s\n", e.what()); return 1;
++    }
++}
+diff --git a/filament/include/filament/Renderer.h b/filament/include/filament/Renderer.h
+index 5e1ba11de269899818a8a124bdc8e25b3bddca12..d93311c785b8d7468c5e7341edc096ddad02f44d 100644
+--- a/filament/include/filament/Renderer.h
++++ b/filament/include/filament/Renderer.h
+@@ -23,6 +23,7 @@
+ 
+ #include <utils/compiler.h>
+ #include <utils/FixedCapacityVector.h>
++#include <utils/ProfilerTrace.h>
+ 
+ #include <math/vec4.h>
+ 
+@@ -130,6 +131,13 @@ public:
+      */
+     size_t getMaxFrameHistorySize() const noexcept;
+ 
++    /** Associates profiler events with application frame / View identities.
++     * Call on the Engine's main thread before beginFrame and before each View.
++     * Filament supplies filament_frame_id; GPU events retain this exact context
++     * while their asynchronous queries are pending. No rendering state changes.
++     */
++    void setProfilerContext(utils::profiling::Context context) noexcept;
++
+     /**
+      * Use FrameRateOptions to set the desired frame rate and control how quickly the system
+      * reacts to GPU load changes.
+diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/SwapChain.h
+index d1bf83894765f165566bb7feb47e63c5dc871072..ba02724dd1c9618c6afef61d40b32e4780c12615 100644
+--- a/filament/include/filament/SwapChain.h
++++ b/filament/include/filament/SwapChain.h
+@@ -252,6 +252,18 @@ public:
+      */
+     static constexpr uint64_t CONFIG_MSAA_4_SAMPLES = backend::SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES;
+ 
++    /**
++     * HeavenBench patch (HDR display output): request an HDR10 (PQ /
++     * ST.2084, Rec.2020) swap chain. When set and the Vulkan surface advertises
++     * VK_COLOR_SPACE_HDR10_ST2084_EXT, the backend selects a high-precision
++     * surface format (fp16 preferred, then 10-bit) with that colorspace. Values
++     * written to the swap chain must be PQ-encoded Rec.2020 (done by the
++     * application's HDR output pass). Requires the Vulkan backend on a Wayland
++     * surface. The application must probe HDR support before requesting this
++     * flag; the backend rejects surfaces without a suitable HDR10 format.
++     */
++    static constexpr uint64_t CONFIG_HDR10_ST2084 = backend::SWAP_CHAIN_CONFIG_HDR10_ST2084;
++
+     /**
+      * Return whether createSwapChain supports the CONFIG_PROTECTED_CONTENT flag.
+      * The default implementation returns false.
+diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManager.cpp
+index b654755d9bb1f78a7dad01e206000b1c5f47eafc..063156cfd12149d179b3cb95e71e6b6d9b4c468b 100644
+--- a/filament/src/PostProcessManager.cpp
++++ b/filament/src/PostProcessManager.cpp
+@@ -853,6 +853,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
+     // More intuitively, 2q is the width of the filter in pixels.
+     BilateralPassConfig config = {
+             .bentNormals = options.bentNormals,
++            .occludedMoments = usesOccludedMoments(options),
+             .bilateralThreshold = options.bilateralThreshold,
+     };
+ 
+@@ -922,6 +923,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
+     };
+ 
+     const bool computeBentNormals = options.bentNormals;
++    const bool occludedMoments = config.occludedMoments;
+ 
+     const bool highQualityUpsampling =
+             options.upsampling >= QualityLevel::HIGH && options.resolution < 1.0f;
+@@ -952,7 +954,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
+                         .height = desc.height,
+                         .depth = computeBentNormals ? 2u : 1u,
+                         .type = Texture::Sampler::SAMPLER_2D_ARRAY,
+-                        .format = (lowPassFilterEnabled || highQualityUpsampling || computeBentNormals) ?
++                        .format = occludedMoments ? TextureFormat::RGBA8 :
++                                (lowPassFilterEnabled || highQualityUpsampling || computeBentNormals) ?
+                                 TextureFormat::RGB8 : TextureFormat::R8
+                 });
+ 
+@@ -977,7 +980,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
+                         FrameGraphTexture::Usage::DEPTH_ATTACHMENT);
+                 builder.declareRenderPass("SSAO Target", {
+                         .attachments = { .color = { data.ao, data.bn }, .depth = depthAttachment },
+-                        .clearColor = ClearColorValue{ 1.0f, 1.0f, 1.0f, 1.0f },
++                        .clearColor = ClearColorValue{ 1.0f, 1.0f, 1.0f,
++                                occludedMoments ? 0.0f : 1.0f },
+                         .clearFlags = TargetBufferFlags::COLOR0 | TargetBufferFlags::COLOR1
+                 });
+             },
+@@ -1118,12 +1122,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
+     if (lowPassFilterEnabled) {
+         ssao = bilateralBlurPass(fg, ssao, depth, { config.scale, 0 },
+                 cameraInfo.zf,
+-                TextureFormat::RGB8,
++                occludedMoments ? TextureFormat::RGBA8 : TextureFormat::RGB8,
+                 config);
+ 
+         ssao = bilateralBlurPass(fg, ssao, depth, { 0, config.scale },
+                 cameraInfo.zf,
+-                (highQualityUpsampling || computeBentNormals) ? TextureFormat::RGB8
++                occludedMoments ? TextureFormat::RGBA8 :
++                        (highQualityUpsampling || computeBentNormals) ? TextureFormat::RGB8
+                                                               : TextureFormat::R8,
+                 config);
+     }
+@@ -1177,7 +1182,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::bilateralBlurPass(FrameGraph
+ 
+                 builder.declareRenderPass("Blurred target", {
+                         .attachments = { .color = { data.ao, data.bn }, .depth = depth },
+-                        .clearColor = ClearColorValue{ 1.0f, 1.0f, 1.0f, 1.0f },
++                        .clearColor = ClearColorValue{ 1.0f, 1.0f, 1.0f,
++                                config.occludedMoments ? 0.0f : 1.0f },
+                         .clearFlags = TargetBufferFlags::COLOR0 | TargetBufferFlags::COLOR1
+                 });
+             },
+@@ -1219,6 +1225,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::bilateralBlurPass(FrameGraph
+                 mi->setParameter("kernel", kGaussianSamples, kGaussianCount);
+                 mi->setParameter("sampleCount", kGaussianCount);
+                 mi->setParameter("farPlaneOverEdgeDistance", -zf / config.bilateralThreshold);
++                if (config.bentNormals) {
++                    mi->setParameter("occludedMoments", config.occludedMoments);
++                }
+ 
+                 mi->commit(driver, getUboManager());
+                 mi->use(driver);
+diff --git a/filament/src/PostProcessManager.h b/filament/src/PostProcessManager.h
+index 2f825ea1c9a26705d9c4696e176172162a02abd1..4afcbcd053e5df6b0d263a477887ff106cbe8ae6 100644
+--- a/filament/src/PostProcessManager.h
++++ b/filament/src/PostProcessManager.h
+@@ -480,6 +480,7 @@ private:
+     struct BilateralPassConfig {
+         uint8_t kernelSize = 11;
+         bool bentNormals = false;
++        bool occludedMoments = false;
+         float standardDeviation = 1.0f;
+         float bilateralThreshold = 0.0625f;
+         float scale = 1.0f;
+diff --git a/filament/src/RenderPass.cpp b/filament/src/RenderPass.cpp
+index af198953383d2339d95d5d946c6292519a14582f..2221fc4f4bbb3713fb4cd1f982be3e56a8d0bc1b 100644
+--- a/filament/src/RenderPass.cpp
++++ b/filament/src/RenderPass.cpp
+@@ -109,6 +109,7 @@ RenderPass::RenderPass(FEngine const& engine, backend::DriverApi& driver,
+         RenderPassBuilder const& builder) noexcept
+         : mRenderableSoa(*builder.mRenderableSoa),
+           mColorPassDescriptorSet(builder.mColorPassDescriptorSet) {
++    mVisibleRenderableCount = uint32_t(builder.mVisibleRenderables.size());
+ 
+     // compute the number of commands we need
+     updateSummedPrimitiveCounts(
+@@ -909,6 +910,12 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+ 
+     // b/479079631: Log the number of commands in this render pass.
+     size_t const commandCount = last - first;
++    if (utils::profiling::isEnabled()) {
++        uint32_t const visible = mVisibleRenderableCount;
++        driver.queueCommand([commandCount, visible] {
++            utils::profiling::gpuCounters(commandCount, 0, visible);
++        });
++    }
+     if (Platform* platform = engine.getPlatform(); platform->hasDebugUpdateStatFunc()) {
+         platform->debugUpdateStat("filament.renderer.render_pass.command_count", commandCount);
+     }
+@@ -1143,6 +1150,7 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+ 
+ RenderPass::Executor::Executor(RenderPass const& pass, Command const* b, Command const* e) noexcept
+         : mCommands(b, e),
++          mVisibleRenderableCount(pass.mVisibleRenderableCount),
+           mCustomCommands(pass.mCustomCommands.data(), pass.mCustomCommands.size()),
+           mInstancedUboHandle(pass.mInstancedUboHandle),
+           mInstancedDescriptorSetHandle(pass.mInstancedDescriptorSetHandle),
+diff --git a/filament/src/RenderPass.h b/filament/src/RenderPass.h
+index a778b612364feac390ee00eeae8ea6e6b67484fe..4d0a1ef419d44a3030a3cba5c8f3f8ccecb0aff1 100644
+--- a/filament/src/RenderPass.h
++++ b/filament/src/RenderPass.h
+@@ -360,6 +360,7 @@ public:
+ 
+         // these fields are constant after creation
+         utils::Slice<const Command> mCommands;
++        uint32_t mVisibleRenderableCount = 0;
+         utils::Slice<const CustomCommandFn> mCustomCommands;
+         BufferObjectSharedHandle mInstancedUboHandle;
+         DescriptorSetSharedHandle mInstancedDescriptorSetHandle;
+@@ -417,6 +418,7 @@ public:
+     }
+ 
+ private:
++    uint32_t mVisibleRenderableCount = 0;
+     friend class FRenderer;
+     friend class RenderPassBuilder;
+     friend class RenderPassBuilder;
+diff --git a/filament/src/Renderer.cpp b/filament/src/Renderer.cpp
+index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..241d5549bc8a6feb0ab0001f477a322dbc9ee41c 100644
+--- a/filament/src/Renderer.cpp
++++ b/filament/src/Renderer.cpp
+@@ -32,6 +32,10 @@
+ 
+ namespace filament {
+ 
++void Renderer::setProfilerContext(utils::profiling::Context context) noexcept {
++    downcast(this)->setProfilerContext(context);
++}
++
+ using namespace math;
+ using namespace backend;
+ 
+diff --git a/filament/src/ShadowMapManager.cpp b/filament/src/ShadowMapManager.cpp
+index a3c1f07259504e23de185b7ad1bfc8516e386ee5..88f2d35bbc6934b64a9ecc2ffd88e0ff4b60648a 100644
+--- a/filament/src/ShadowMapManager.cpp
++++ b/filament/src/ShadowMapManager.cpp
+@@ -36,6 +36,7 @@
+ #include "fg/FrameGraphTexture.h"
+ 
+ #include <private/filament/EngineEnums.h>
++#include <private/utils/Tracing.h>
+ 
+ #include <filament/Frustum.h>
+ #include <filament/LightManager.h>
+@@ -60,6 +61,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cmath>
+ #include <functional>
+ #include <iterator>
+ #include <limits>
+@@ -481,9 +483,69 @@ FrameGraphId<FrameGraphTexture> ShadowMapManager::render(FEngine& engine, FrameG
+                     // Note: the output of culling below is stored in view.getRenderableData()
+ 
+                     switch (shadowMap.getShadowLightType()) {
+-                        case ShadowLightType::DIRECTIONAL:
+-                            // we should never be here
++                        case ShadowLightType::DIRECTIONAL: {
++                            // The global range retains off-camera casters and supplies all UBOs.
++                            // Refine only its directional bit against this map's actual raster
++                            // frustum. Recompute it independently for every cascade, preserving
++                            // explicit culling exclusions. A depth-clamped pass can rasterize
++                            // beyond its near/far planes, so keep the global mask in that case.
++                            if (!isDepthClampEnabled(engine, view, shadowMap)) {
++                                FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_FILAMENT,
++                                        "Cull directional shadow cascade");
++                                auto& soa = view.getRenderableData();
++                                Frustum const frustum = shadowMap.getCamera().getCullingFrustum();
++                                auto const* centers = soa.data<FScene::WORLD_AABB_CENTER>();
++                                auto const* extents = soa.data<FScene::WORLD_AABB_EXTENT>();
++                                auto const* visibility = soa.data<FScene::VISIBILITY_STATE>();
++                                auto* masks = soa.data<FScene::VISIBLE_MASK>();
++                                auto const* planes = frustum.getNormalizedPlanes();
++                                auto finite3 = [](float3 const v) {
++                                    return std::isfinite(v.x) && std::isfinite(v.y) &&
++                                            std::isfinite(v.z);
++                                };
++                                bool validFrustum = true;
++                                for (size_t j = 0; j < 6; ++j) {
++                                    float4 const p = planes[j];
++                                    validFrustum &= finite3(p.xyz) && std::isfinite(p.w) &&
++                                            (p.x != 0.0f || p.y != 0.0f || p.z != 0.0f);
++                                }
++                                auto intersects = [planes, validFrustum, finite3](
++                                        float3 const c, float3 const e) {
++                                    if (!validFrustum || !finite3(c) || !finite3(e) ||
++                                            e.x < 0.0f || e.y < 0.0f || e.z < 0.0f) {
++                                        return true;
++                                    }
++                                    for (size_t j = 0; j < 6; ++j) {
++                                        float4 const p = planes[j];
++                                        double const x = double(p.x) * double(c.x);
++                                        double const y = double(p.y) * double(c.y);
++                                        double const z = double(p.z) * double(c.z);
++                                        double const radius = std::abs(double(p.x)) * double(e.x) +
++                                                std::abs(double(p.y)) * double(e.y) +
++                                                std::abs(double(p.z)) * double(e.z);
++                                        double const distance = x + y + z + double(p.w);
++                                        // Keep touching boxes and a scale-relative reserve for
++                                        // the FLOAT projection/plane and AABB arithmetic.
++                                        double const scale = std::abs(x) + std::abs(y) +
++                                                std::abs(z) + std::abs(double(p.w)) + radius;
++                                        double const tolerance = 64.0 *
++                                                std::numeric_limits<float>::epsilon() *
++                                                std::max(1.0, scale);
++                                        if (distance - radius > tolerance) {
++                                            return false;
++                                        }
++                                    }
++                                    return true;
++                                };
++                                for (uint32_t const i : entry.range) {
++                                    bool const visible = !visibility[i].culling ||
++                                            intersects(centers[i], extents[i]);
++                                    masks[i] = (masks[i] & ~VISIBLE_DIR_SHADOW_RENDERABLE) |
++                                            (visible ? VISIBLE_DIR_SHADOW_RENDERABLE : 0);
++                                }
++                            }
+                             break;
++                        }
+                         case ShadowLightType::SPOT:
+                             if (shadowMap.hasVisibleShadows()) {
+                                 ShadowMapManager::cullSpotShadowMap(shadowMap, engine, view,
+@@ -547,6 +609,14 @@ FrameGraphId<FrameGraphTexture> ShadowMapManager::render(FEngine& engine, FrameG
+                     }
+                 }
+ 
++                // The partitioned global range initially has the DIR bit set on every
++                // member. Commands now own their per-map visibility decisions; restore
++                // only this scratch bit without disturbing camera or punctual visibility.
++                auto* masks = view.getRenderableData().data<FScene::VISIBLE_MASK>();
++                for (uint32_t const i : view.getVisibleDirectionalShadowCasters()) {
++                    masks[i] |= VISIBLE_DIR_SHADOW_RENDERABLE;
++                }
++
+                 // Finally update our UBO in one batch
+                 if (mShadowUb.isDirty()) {
+                     mShadowUb.clean();
+diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.cpp
+index 53d556a02a583776272a39353b7aa422e340fe25..6ca80e9296e96bc4d81a87e49d750a9852deee8c 100644
+--- a/filament/src/details/Renderer.cpp
++++ b/filament/src/details/Renderer.cpp
+@@ -330,6 +330,11 @@ void FRenderer::skipFrame(uint64_t const vsyncSteadyClockTimeNano) {
+     }
+ 
+     mFrameId++;
++    if (utils::profiling::isEnabled()) {
++        auto context = utils::profiling::getContext();
++        context.filament_frame_id = mFrameId;
++        utils::profiling::setContext(context);
++    }
+     FILAMENT_TRACING_FRAME_ID(FILAMENT_TRACING_CATEGORY_FILAMENT, mFrameId);
+ 
+     FEngine& engine = mEngine;
+@@ -419,6 +424,13 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
+     }
+ 
+     mFrameId++;
++    if (utils::profiling::isEnabled()) {
++        auto context = utils::profiling::getContext();
++        context.filament_frame_id = mFrameId;
++        context.renderer_id = uint64_t(reinterpret_cast<uintptr_t>(this));
++        context.view_id = 0;
++        utils::profiling::setContext(context);
++    }
+     FILAMENT_TRACING_FRAME_ID(FILAMENT_TRACING_CATEGORY_FILAMENT, mFrameId);
+ 
+     // get the timestamp as soon as possible
+@@ -462,12 +474,21 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
+         // user ignored us, we'd still want mSwapChain to be set.
+         mSwapChain = swapChain;
+ 
++        mProfilerFrameActive = utils::profiling::isEnabled();
++        auto const profileContext = utils::profiling::getContext();
++        if (mProfilerFrameActive) {
++            driver.queueCommand([profileContext] { utils::profiling::setContext(profileContext); });
++        }
+         driver.beginFrame(
+                 appVsync.time_since_epoch().count(),
+                 mDisplayInfo.refreshRate == 0.0 ? 0 : int64_t(
+                         1'000'000'000.0 / mDisplayInfo.refreshRate),
+                 mFrameId);
+ 
++        if (mProfilerFrameActive) {
++            driver.queueCommand([profileContext] { utils::profiling::gpuBeginFrame(profileContext); });
++        }
++
+         auto const presentationTime = mPresentationTime;
+         auto const desiredPresentationTime = mDesiredPresentationTime;
+         auto const renderingDeadline = mRenderingDeadline;
+@@ -553,6 +574,10 @@ void FRenderer::endFrame() {
+     mSwapChain->commit(driver);
+     mSwapChain = nullptr;
+ 
++    if (mProfilerFrameActive) {
++        driver.queueCommand([] { utils::profiling::gpuEndFrame(); });
++        mProfilerFrameActive = false;
++    }
+     mFrameInfoManager.endFrame(driver);
+     mFrameSkipper.submitFrame(driver);
+ 
+@@ -674,6 +699,13 @@ void FRenderer::renderStandaloneView(FView const* view) {
+         FEngine& engine = mEngine;
+         FEngine::DriverApi& driver = engine.getDriverApi();
+ 
++        bool const profileStandalone = utils::profiling::isEnabled();
++        auto profileContext = utils::profiling::getContext();
++        profileContext.filament_frame_id = 0;
++        profileContext.renderer_id = uint64_t(reinterpret_cast<uintptr_t>(this));
++        if (profileStandalone) {
++            driver.queueCommand([profileContext] { utils::profiling::setContext(profileContext); });
++        }
+         engine.prepare(driver);
+ 
+         driver.beginFrame(
+@@ -681,6 +713,10 @@ void FRenderer::renderStandaloneView(FView const* view) {
+                 mDisplayInfo.refreshRate == 0.0 ? 0 : int64_t(
+                         1'000'000'000.0 / mDisplayInfo.refreshRate), 0);
+ 
++        if (profileStandalone) {
++            driver.queueCommand([profileContext] { utils::profiling::gpuBeginFrame(profileContext); });
++        }
++
+         // because we don't have a "present" call, we use flush so the driver can submit
+         // the command buffer; we do this before driver.endFrame() to mimic what would
+         // happen with Renderer::beginFrame/endFrame.
+@@ -688,6 +724,9 @@ void FRenderer::renderStandaloneView(FView const* view) {
+ 
+         engine.submitFrame();
+ 
++        if (profileStandalone) {
++            driver.queueCommand([] { utils::profiling::gpuEndFrame(); });
++        }
+         driver.endFrame(0);
+ 
+         // engine.flush() has already been called by renderInternal(), but we need an extra one
+@@ -719,6 +758,12 @@ void FRenderer::render(FView const* view) {
+ 
+ void FRenderer::renderInternal(DriverApi& driver, FView const* view, bool const flush) {
+     FEngine& engine = mEngine;
++    auto profileContext = utils::profiling::getContext();
++    profileContext.filament_frame_id = mSwapChain ? mFrameId : 0;
++    profileContext.renderer_id = uint64_t(reinterpret_cast<uintptr_t>(this));
++    profileContext.view_id = uint64_t(reinterpret_cast<uintptr_t>(view));
++    utils::profiling::ScopedContext const profileViewContext(profileContext);
++    FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_FILAMENT, "renderView");
+ 
+     FILAMENT_CHECK_PRECONDITION(!view->hasPostProcessPass() ||
+             engine.hasFeatureLevel(FeatureLevel::FEATURE_LEVEL_1))
+diff --git a/filament/src/details/Renderer.h b/filament/src/details/Renderer.h
+index 3032e359a0363e474b29ab761ac34be92bfdae32..2411c060ff0e9cb0629c18c5203d443ccd60326d 100644
+--- a/filament/src/details/Renderer.h
++++ b/filament/src/details/Renderer.h
+@@ -87,6 +87,11 @@ public:
+ 
+     FEngine& getEngine() const noexcept { return mEngine; }
+ 
++    void setProfilerContext(utils::profiling::Context context) noexcept {
++        context.filament_frame_id = mFrameId;
++        utils::profiling::setContext(context);
++    }
++
+     math::float4 getShaderUserTime() const { return mShaderUserTime; }
+ 
+     void setMaterialTimeEpoch(int64_t monotonic_clock_ns);
+@@ -239,6 +244,7 @@ private:
+     backend::Handle<backend::HwRenderTarget> mRenderTargetHandle;
+     FSwapChain* mSwapChain = nullptr;
+     size_t mCommandsHighWatermark = 0;
++    bool mProfilerFrameActive = false;
+     uint32_t mFrameId = 1; // id 0 is reserved for standalone views
+     uint32_t mLastSubmittedFrameId = 1;
+     FrameInfoManager mFrameInfoManager;
+diff --git a/filament/src/details/View.cpp b/filament/src/details/View.cpp
+index 52e8a7a469713a9f1bb6f95354621dcbe568f6d5..5a2a65b7a7ce27e258c44e7f21ded5da92e537cb 100644
+--- a/filament/src/details/View.cpp
++++ b/filament/src/details/View.cpp
+@@ -39,6 +39,8 @@
+ #include "details/Scene.h"
+ #include "details/Skybox.h"
+ 
++#include "materials/ssao/ssao.h"
++
+ #if FILAMENT_ENABLE_FGVIEWER
+ #include "fg/FgviewerManager.h"
+ #endif
+@@ -1214,7 +1216,9 @@ void FView::prepareSSAO(AmbientOcclusionOptions const& options) const noexcept {
+     auto& s = mUniforms.edit();
+     s.aoSamplingQualityAndEdgeDistance =
+             options.enabled ? (highQualitySampling ? edgeDistance : 0.0f) : -1.0f;
+-    s.aoBentNormals = options.enabled && options.bentNormals ? 1.0f : 0.0f;
++    bool const occludedMoments = usesOccludedMoments(options);
++    s.aoBentNormals = options.enabled && options.bentNormals
++            ? (occludedMoments ? 2.0f : 1.0f) : 0.0f;
+ }
+ 
+ void FView::prepareSSR(Handle<HwTexture> ssr) const noexcept {
+@@ -1286,7 +1290,9 @@ void FView::prepareShadowMapping(FEngine const& engine, Handle<HwTexture> textur
+ void FView::prepareShadowMapping() const noexcept {
+ 
+     ShadowMapManager::ShadowMappingUniforms uniforms{};
+-    if (needsShadowMap()) {
++    // Contact shadows also need these uniforms when no cascade or spot map
++    // is visible. Keep them zeroed only when every shadow technique is off.
++    if (hasShadowing()) {
+         uniforms = mShadowMapManager->getShadowMappingUniforms();
+     }
+ 
+diff --git a/filament/src/fg/FrameGraph.cpp b/filament/src/fg/FrameGraph.cpp
+index 28a53820e04fdb95486032a41b058e3b2d6432d7..a46e8eb0a2ab2132d8c981b578763ca90f80f0a5 100644
+--- a/filament/src/fg/FrameGraph.cpp
++++ b/filament/src/fg/FrameGraph.cpp
+@@ -42,6 +42,8 @@
+ #include <utils/StaticString.h>
+ 
+ #include <algorithm>
++#include <array>
++#include <cstring>
+ #include <functional>
+ 
+ #include <stdint.h>
+@@ -256,6 +258,10 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
+     ResourceCreationContext const context{ *this, driver, useProtectedMemory };
+ 
+     FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_FILAMENT, "FrameGraph");
++    if (utils::profiling::isEnabled()) {
++        auto const profileContext = utils::profiling::getContext();
++        driver.queueCommand([profileContext] { utils::profiling::setContext(profileContext); });
++    }
+     driver.pushGroupMarker("FrameGraph");
+ 
+     auto first = passNodes.begin();
+@@ -267,6 +273,16 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
+ 
+         FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_FILAMENT, node->getName());
+         driver.pushGroupMarker(node->getName());
++        uint64_t profilePass = 0;
++        if (utils::profiling::isEnabled()) {
++            profilePass = utils::profiling::nextId();
++            auto const context = utils::profiling::getContext();
++            std::array<char, 192> name{};
++            std::strncpy(name.data(), node->getName(), name.size() - 1);
++            driver.queueCommand([context, profilePass, name] {
++                utils::profiling::gpuBeginPass(context, profilePass, name.data());
++            });
++        }
+ 
+         // devirtualize resourcesList
+         for (VirtualResource* resource : node->devirtualize) {
+@@ -284,6 +300,9 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
+             resource->destroy(context);
+         }
+         driver.popGroupMarker();
++        if (profilePass) {
++            driver.queueCommand([profilePass] { utils::profiling::gpuEndPass(profilePass); });
++        }
+     }
+     driver.popGroupMarker();
+ 
+diff --git a/filament/src/materials/ssao/bilateralBlurBentNormals.mat b/filament/src/materials/ssao/bilateralBlurBentNormals.mat
+index 847b17871423904e6759a2792ec83bb34b53a07c..3472b2167a91da094bc3e0140b06d82d646cf0be 100644
+--- a/filament/src/materials/ssao/bilateralBlurBentNormals.mat
++++ b/filament/src/materials/ssao/bilateralBlurBentNormals.mat
+@@ -1,6 +1,10 @@
+ material {
+     name : bilateralBlurBentNormals,
+     parameters : [
++        {
++            type : bool,
++            name : occludedMoments
++        },
+         {
+             type : sampler2dArray,
+             name : ssao,
+@@ -29,7 +33,7 @@ material {
+         {
+             name : aoData,
+             target : color,
+-            type : float3
++            type : float4
+         },
+         {
+             name : bnData,
+@@ -62,15 +66,19 @@ fragment {
+     }
+ 
+     void tapAO(const highp sampler2DArray saoTexture, highp vec2 uv,
+-            out float ao, out highp float sampleDepth) {
+-        vec3 data = textureLod(saoTexture, vec3(uv, 0.0), 0.0).rgb;
++            out float ao, out highp float sampleDepth, out float occludedFraction) {
++        vec4 data = textureLod(saoTexture, vec3(uv, 0.0), 0.0);
+         ao = data.r;
+         sampleDepth = unpack(data.gb);
++        occludedFraction = data.a;
+     }
+ 
+-    void tapBN(const highp sampler2DArray saoTexture, highp vec2 uv,
++    void tapBN(const highp sampler2DArray saoTexture, highp vec2 uv, float occludedFraction,
+             out vec3 bentNormal) {
+         vec3 data = textureLod(saoTexture, vec3(uv, 1.0), 0.0).xyz;
++        if (materialParams.occludedMoments && occludedFraction <= 0.0) {
++            data = packOccludedMoment(vec3(0.0));
++        }
+         bentNormal = unpackBentNormal(data);
+     }
+ 
+@@ -78,27 +86,30 @@ fragment {
+         highp vec2 uv = variable_vertex.xy; // interpolated at pixel's center
+ 
+         float ao;
++        float occludedFraction;
+         highp float depth;
+         highp float sampleDepth;
+         vec3 bn;
+ 
+-        vec3 data = textureLod(materialParams_ssao, vec3(uv, 0.0), 0.0).rgb;
++        vec4 data = textureLod(materialParams_ssao, vec3(uv, 0.0), 0.0);
+         ao = data.r;
+         depth = unpack(data.gb);
+ 
+         if (data.g * data.b == 1.0) {
+             // This is the skybox, skip
+-            postProcess.aoData = data;
+-            postProcess.bnData = vec3(0.0);
++            postProcess.aoData = vec4(data.rgb, 0.0);
++            postProcess.bnData = materialParams.occludedMoments
++                    ? packOccludedMoment(vec3(0.0)) : vec3(0.0);
+             return;
+         }
+ 
+-        tapBN(materialParams_ssao, uv, bn);
++        tapBN(materialParams_ssao, uv, data.a, bn);
+ 
+         // we handle the center pixel separately because it doesn't participate in
+         // bilateral filtering
+         float totalWeight = materialParams.kernel[0];
+         float sumAO = ao * totalWeight;
++        float sumOccludedFraction = data.a * totalWeight;
+         vec3 sumBN = bn * totalWeight;
+ 
+         vec2 offset = materialParams.axis;
+@@ -106,18 +117,20 @@ fragment {
+             float weight = materialParams.kernel[i];
+             float bilateral;
+ 
+-            tapAO(materialParams_ssao, uv + offset, ao, sampleDepth);
++            tapAO(materialParams_ssao, uv + offset, ao, sampleDepth, occludedFraction);
+             bilateral = weight * bilateralWeight(depth, sampleDepth);
+             totalWeight += bilateral;
+-            tapBN(materialParams_ssao, uv + offset, bn);
++            tapBN(materialParams_ssao, uv + offset, occludedFraction, bn);
+             sumAO += ao * bilateral;
++            sumOccludedFraction += occludedFraction * bilateral;
+             sumBN += bn * bilateral;
+ 
+-            tapAO(materialParams_ssao, uv - offset, ao, sampleDepth);
++            tapAO(materialParams_ssao, uv - offset, ao, sampleDepth, occludedFraction);
+             bilateral = weight * bilateralWeight(depth, sampleDepth);
+             totalWeight += bilateral;
+-            tapBN(materialParams_ssao, uv - offset, bn);
++            tapBN(materialParams_ssao, uv - offset, occludedFraction, bn);
+             sumAO += ao * bilateral;
++            sumOccludedFraction += occludedFraction * bilateral;
+             sumBN += bn * bilateral;
+ 
+             offset += materialParams.axis;
+@@ -130,7 +143,7 @@ fragment {
+         // this is most useful with high quality/large blurs
+         ao += ((interleavedGradientNoise(gl_FragCoord.xy) - 0.5) / 255.0);
+ 
+-        postProcess.aoData = vec3(ao, data.gb);
++        postProcess.aoData = vec4(ao, data.gb, sumOccludedFraction / totalWeight);
+         postProcess.bnData = packBentNormal(bn);
+     }
+ }
+diff --git a/filament/src/materials/ssao/gtao.mat b/filament/src/materials/ssao/gtao.mat
+index ce949218e6ca5b5b00398f00359455cacecd6eff..6c47f4e3a3a4c12723d15fc4917eadf8652a079e 100644
+--- a/filament/src/materials/ssao/gtao.mat
++++ b/filament/src/materials/ssao/gtao.mat
+@@ -156,7 +156,10 @@ fragment {
+         vec3 bentNormal; // will be discarded
+ 
+         if (materialParams.intensity > 0.0) {
+-            groundTruthAmbientOcclusion(occlusion, bentNormal, uv, origin, normal);
++            highp float occludedFraction;
++            highp vec3 occludedMoment;
++            groundTruthAmbientOcclusion(occlusion, bentNormal, occludedFraction,
++                    occludedMoment, uv, origin, normal);
+         }
+ 
+         if (materialParams.ssctIntensity > 0.0) {
+@@ -174,4 +177,4 @@ fragment {
+ 
+         postProcess.color.rgb = vec3(aoVisibility, pack(origin.z * materialParams.invFarPlane));
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/filament/src/materials/ssao/gtaoBentNormals.mat b/filament/src/materials/ssao/gtaoBentNormals.mat
+index cb6e7065b5cdffeec827a6f8c03eda148b824259..108da991c1ab3b371b4e5cce41bb40b568858683 100644
+--- a/filament/src/materials/ssao/gtaoBentNormals.mat
++++ b/filament/src/materials/ssao/gtaoBentNormals.mat
+@@ -118,7 +118,7 @@ material {
+         {
+             name : aoData,
+             target : color,
+-            type : float3
++            type : float4
+         },
+         {
+             name : bnData,
+@@ -166,9 +166,12 @@ fragment {
+ 
+         float occlusion = 0.0;
+         vec3 bentNormal = normal;
++        highp float occludedFraction = 0.0;
++        highp vec3 occludedMoment = vec3(0.0);
+ 
+         if (materialParams.intensity > 0.0) {
+-            groundTruthAmbientOcclusion(occlusion, bentNormal, uv, origin, normal);
++            groundTruthAmbientOcclusion(occlusion, bentNormal, occludedFraction,
++                    occludedMoment, uv, origin, normal);
+         }
+ 
+         if (materialParams.ssctIntensity > 0.0) {
+@@ -185,9 +188,19 @@ fragment {
+ #endif
+ 
+         // transform to world space (we're guaranteed the view matrix is a rigid body transform)
+-        vec3 bn = mat3(getWorldFromViewMatrix()) * bentNormal;
+-
+-        postProcess.bnData = packBentNormal(bn);
+-        postProcess.aoData = vec3(aoVisibility, pack(origin.z * materialParams.invFarPlane));
++        if (materialConstants_useVisibilityBitmasks) {
++            vec3 bn = mat3(getWorldFromViewMatrix()) * bentNormal;
++            postProcess.bnData = packBentNormal(bn);
++        } else {
++            // Strength softens a fixed occluder; it must scale mass and moment
++            // together, rather than rotating its axis or changing its aperture.
++            highp float strength = saturate(materialParams.intensity);
++            occludedFraction *= strength;
++            occludedMoment *= strength;
++            vec3 worldMoment = mat3(getWorldFromViewMatrix()) * occludedMoment;
++            postProcess.bnData = packOccludedMoment(worldMoment);
++        }
++        postProcess.aoData = vec4(aoVisibility, pack(origin.z * materialParams.invFarPlane),
++                occludedFraction);
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/filament/src/materials/ssao/gtaoImpl.fs b/filament/src/materials/ssao/gtaoImpl.fs
+index 16bf7123a8eccd8cbeedf8ff86d74528652e0bff..30d543558dca17271f7b162195ce96b7ddd02298 100644
+--- a/filament/src/materials/ssao/gtaoImpl.fs
++++ b/filament/src/materials/ssao/gtaoImpl.fs
+@@ -120,7 +120,34 @@ highp uint calculateVisibilityMask(highp vec3 deltaPos, highp vec3 viewDir, floa
+     return updateSectors(frontBackHorizon.x, frontBackHorizon.y, globalOccludedBitfield);
+ }
+ 
+-void groundTruthAmbientOcclusion(out float obscurance, out vec3 bentNormal,
++#if COMPUTE_BENT_NORMAL
++highp float integrateUniformArcArea(highp float theta) {
++    return sign(theta) * (1.0 - cos(theta));
++}
++
++highp vec2 integrateUniformArcMoment(highp float theta) {
++    highp float s = sin(theta);
++    highp float c = cos(theta);
++    return 0.5 * sign(theta) * vec2(s * s, theta - s * c);
++}
++
++// Primitive of the visible direction's cosine-weighted solid-angle moment.
++// The spherical Jacobian is abs(sin(theta)); integrating unit arc midpoints
++// instead biases even an unoccluded tilted plane's bent normal toward the view.
++highp vec2 integrateBentNormalArc(highp float theta, highp float normalView,
++        highp float normalTangent) {
++    highp float s = sin(theta);
++    highp float c = cos(theta);
++    highp float s3 = s * s * s;
++    highp float c3 = c * c * c;
++    return sign(theta) * vec2(
++            normalView * (1.0 - c3) + normalTangent * s3,
++            normalView * s3 + normalTangent * (2.0 - 3.0 * c + c3)) / 3.0;
++}
++#endif
++
++void groundTruthAmbientOcclusion(out float obscurance, out highp vec3 bentNormal,
++        out highp float occludedFraction, out highp vec3 occludedMoment,
+         highp vec2 uv, highp vec3 origin, vec3 normal) {
+     vec2 uvSamplePos = uv;
+     highp vec3 viewDir = normalize(-origin);
+@@ -130,10 +157,18 @@ void groundTruthAmbientOcclusion(out float obscurance, out vec3 bentNormal,
+     float noiseDirection = spatialDirectionNoise(uv);
+ 
+     float initialRayStep = fract(noiseOffset);
++    occludedFraction = 0.0;
++    occludedMoment = vec3(0.0);
+ 
+     // The distance we want to move forward for each step
+     float stepRadius = ssRadius / (materialParams.stepsPerSlice + 1.0);
+ 
++    // An out parameter has no incoming value. Start the horizon sum at zero;
++    // visibility-bitmask mode has no bent-normal estimate, so retain its normal.
++#if COMPUTE_BENT_NORMAL
++    bentNormal = materialConstants_useVisibilityBitmasks ? normal : vec3(0.0);
++#endif
++
+     float visibility = 0.0;
+     for (float i = 0.0; i < materialParams.sliceCount.x; i += 1.0) {
+         float slice = (i + noiseDirection) * materialParams.sliceCount.y;
+@@ -208,8 +243,27 @@ void groundTruthAmbientOcclusion(out float obscurance, out vec3 bentNormal,
+             h1 = n + clamp(h1 - n, -HALF_PI, HALF_PI);
+ 
+             #if COMPUTE_BENT_NORMAL
+-                    float angle = 0.5 * (h0 + h1);
+-                    bentNormal += viewDir * cos(angle) - orthoDirection * sin(angle);
++                    highp float normalView = dot(normal, viewDir);
++                    highp float normalTangent = dot(normal, orthoDirection);
++                    highp vec2 moment = integrateBentNormalArc(h1, normalView, normalTangent)
++                            - integrateBentNormalArc(h0, normalView, normalTangent);
++                    bentNormal += viewDir * moment.x + orthoDirection * moment.y;
++
++                    // Subtract visible directions from this receiver's unoccluded
++                    // hemisphere BEFORE filtering. The receiver itself is not a
++                    // nearby blocker for the authored normal-map BRDF.
++                    highp float fullLo = n - HALF_PI;
++                    highp float fullHi = n + HALF_PI;
++                    highp float fullArea = integrateUniformArcArea(fullHi)
++                            - integrateUniformArcArea(fullLo);
++                    highp float visibleArea = integrateUniformArcArea(h1)
++                            - integrateUniformArcArea(h0);
++                    highp vec2 blocked = integrateUniformArcMoment(fullHi)
++                            - integrateUniformArcMoment(fullLo)
++                            - integrateUniformArcMoment(h1)
++                            + integrateUniformArcMoment(h0);
++                    occludedFraction += max(0.0, fullArea - visibleArea);
++                    occludedMoment += viewDir * blocked.x + orthoDirection * blocked.y;
+             #endif
+ 
+             visibility += projNormalLength * (integrateArcCosWeight(h0, n) + integrateArcCosWeight(h1, n));
+@@ -220,5 +274,7 @@ void groundTruthAmbientOcclusion(out float obscurance, out vec3 bentNormal,
+ 
+ #if COMPUTE_BENT_NORMAL
+     bentNormal = normalize(bentNormal);
++    occludedFraction = saturate(0.5 * occludedFraction * materialParams.sliceCount.y);
++    occludedMoment *= materialParams.sliceCount.y;
+ #endif
+-}
+\ No newline at end of file
++}
+diff --git a/filament/src/materials/ssao/ssao.h b/filament/src/materials/ssao/ssao.h
+index c6b53d1ca798ee8f9bec518012a1d6dd1b5cb5b9..0d8f4cf29482feaa5070bf6c0dbb6624157474b7 100644
+--- a/filament/src/materials/ssao/ssao.h
++++ b/filament/src/materials/ssao/ssao.h
+@@ -18,10 +18,22 @@
+ 
+ #include "materials/StaticMaterialInfo.h"
+ 
++#include <filament/Options.h>
++
+ #include <utils/Slice.h>
+ 
+ namespace filament {
+ 
++inline bool usesOccludedMoments(AmbientOcclusionOptions const& options) noexcept {
++#ifdef FILAMENT_DISABLE_GTAO
++    return false;
++#else
++    return options.bentNormals && options.aoType ==
++            AmbientOcclusionOptions::AmbientOcclusionType::GTAO
++            && !options.gtao.useVisibilityBitmasks;
++#endif
++}
++
+ utils::Slice<const StaticMaterialInfo> getSsaoMaterialList() noexcept;
+ 
+ } // namespace filament
+diff --git a/filament/src/materials/ssao/ssaoUtils.fs b/filament/src/materials/ssao/ssaoUtils.fs
+index 43d3696f14d92ce962e0f60bfcd7a934cf3da537..a147148d67aadeffc26dac3d952919d56be6ebb4 100644
+--- a/filament/src/materials/ssao/ssaoUtils.fs
++++ b/filament/src/materials/ssao/ssaoUtils.fs
+@@ -42,6 +42,10 @@ vec3 unpackBentNormal(vec3 bn) {
+     return bn * 2.0 - 1.0;
+ }
+ 
++vec3 packOccludedMoment(vec3 moment) {
++    // Byte128 is an exactly representable zero, including after spatial blur.
++    return moment * (127.0 / 255.0) + (128.0 / 255.0);
++}
+ 
+-#endif // FILAMENT_MATERIALS_SSAO_UTILS
+ 
++#endif // FILAMENT_MATERIALS_SSAO_UTILS
+diff --git a/libs/utils/include/private/utils/ProfilerTrace.h b/libs/utils/include/private/utils/ProfilerTrace.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdcba27c4afad7318c13a3ad2067946b6fb6a341
+--- /dev/null
++++ b/libs/utils/include/private/utils/ProfilerTrace.h
+@@ -0,0 +1,51 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++#ifndef TNT_UTILS_PRIVATE_PROFILERTRACE_H
++#define TNT_UTILS_PRIVATE_PROFILERTRACE_H
++#include <utils/ProfilerTrace.h>
++
++namespace utils::profiling {
++UTILS_PUBLIC void begin(const char* category, const char* name) noexcept;
++UTILS_PUBLIC void end() noexcept;
++UTILS_PUBLIC void event(CpuEventKind kind, const char* category, const char* name,
++        int64_t value = 0, uint64_t cookie = 0) noexcept;
++UTILS_PUBLIC void emitGpu(GpuSample const& sample) noexcept;
++UTILS_PUBLIC void emitCapabilities(GpuCapabilities const& caps) noexcept;
++
++class ScopedTrace {
++    bool mActive;
++public:
++    ScopedTrace(const char* category, const char* name) noexcept : mActive(isEnabled()) {
++        if (mActive) begin(category, name);
++    }
++    ~ScopedTrace() noexcept { if (mActive) end(); }
++    ScopedTrace(ScopedTrace const&) = delete;
++    ScopedTrace& operator=(ScopedTrace const&) = delete;
++};
++class ScopedContext {
++    Context mPrevious;
++public:
++    explicit ScopedContext(Context context) noexcept : mPrevious(getContext()) { setContext(context); }
++    ~ScopedContext() noexcept { setContext(mPrevious); }
++};
++
++// Backend adapter is thread-local: native API work stays on the driver owner.
++// Other backends retain a truthful UNSUPPORTED result through the null adapter.
++struct GpuAdapter {
++    void* user;
++    void (*beginFrame)(void*, Context) noexcept;
++    void (*endFrame)(void*) noexcept;
++    void (*beginPass)(void*, Context, uint64_t, const char*) noexcept;
++    void (*endPass)(void*, uint64_t) noexcept;
++    void (*counters)(void*, uint64_t, uint64_t, uint64_t) noexcept;
++};
++UTILS_PUBLIC void setGpuAdapter(GpuAdapter const* adapter) noexcept;
++UTILS_PUBLIC void gpuBeginFrame(Context context) noexcept;
++UTILS_PUBLIC void gpuEndFrame() noexcept;
++UTILS_PUBLIC void gpuBeginPass(Context context, uint64_t id, const char* name) noexcept;
++UTILS_PUBLIC void gpuEndPass(uint64_t id) noexcept;
++UTILS_PUBLIC void gpuCounters(uint64_t commands, uint64_t primitives, uint64_t visible) noexcept;
++} // namespace utils::profiling
++#endif
+diff --git a/libs/utils/include/private/utils/Tracing.h b/libs/utils/include/private/utils/Tracing.h
+index 25bdee0b4b84807d11173b4092a3ce2edd2cadb2..2497be3a1d8be4e556d6ace78a36707af7ffd9e0 100644
+--- a/libs/utils/include/private/utils/Tracing.h
++++ b/libs/utils/include/private/utils/Tracing.h
+@@ -36,18 +36,49 @@
+ #    include <private/utils/darwin/Tracing.h>
+ #else
+ 
+-#define FILAMENT_TRACING_ENABLE(category)
+-#define FILAMENT_TRACING_CONTEXT(category)
+-#define FILAMENT_TRACING_NAME(category, name)
+-#define FILAMENT_TRACING_FRAME_ID(category, frame)
+-#define FILAMENT_TRACING_NAME_BEGIN(category, name)
+-#define FILAMENT_TRACING_NAME_END(category)
+-#define FILAMENT_TRACING_CALL(category, ...)
+-#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie)
+-#define FILAMENT_TRACING_ASYNC_END(category, name, cookie)
+-#define FILAMENT_TRACING_VALUE(category, name, val)
+-#define FILAMENT_TRACING_EVENT(category, name, ...)
++#define FILAMENT_NATIVE_TRACING_ENABLE(category)
++#define FILAMENT_NATIVE_TRACING_CONTEXT(category)
++#define FILAMENT_NATIVE_TRACING_NAME(category, name)
++#define FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame)
++#define FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name)
++#define FILAMENT_NATIVE_TRACING_NAME_END(category)
++#define FILAMENT_NATIVE_TRACING_CALL(category, ...)
++#define FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_VALUE(category, name, val)
++#define FILAMENT_NATIVE_TRACING_EVENT(category, name, ...)
+ 
+ #endif
+ 
++#include <private/utils/ProfilerTrace.h>
++
++#define FILAMENT_TRACING_ENABLE(category) FILAMENT_NATIVE_TRACING_ENABLE(category)
++#define FILAMENT_TRACING_CONTEXT(category) FILAMENT_NATIVE_TRACING_CONTEXT(category)
++#define FILAMENT_TRACING_NAME(category, name) \
++    ::utils::profiling::ScopedTrace ___observerTrace(category, name); \
++    FILAMENT_NATIVE_TRACING_NAME(category, name)
++#define FILAMENT_TRACING_CALL(category, ...) \
++    ::utils::profiling::ScopedTrace ___observerTrace(category, __FUNCTION__); \
++    FILAMENT_NATIVE_TRACING_CALL(category, ##__VA_ARGS__)
++#define FILAMENT_TRACING_NAME_BEGIN(category, name) do { \
++    ::utils::profiling::begin(category, name); \
++    FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name); } while (false)
++#define FILAMENT_TRACING_NAME_END(category) do { \
++    FILAMENT_NATIVE_TRACING_NAME_END(category); ::utils::profiling::end(); } while (false)
++#define FILAMENT_TRACING_FRAME_ID(category, frame) do { \
++    ::utils::profiling::event(::utils::profiling::CpuEventKind::INSTANT, category, "frame", frame); \
++    FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame); } while (false)
++#define FILAMENT_TRACING_VALUE(category, name, value) do { \
++    ::utils::profiling::event(::utils::profiling::CpuEventKind::COUNTER, category, name, value); \
++    FILAMENT_NATIVE_TRACING_VALUE(category, name, value); } while (false)
++#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie) do { \
++    ::utils::profiling::event(::utils::profiling::CpuEventKind::ASYNC_BEGIN, category, name, 0, cookie); \
++    FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie); } while (false)
++#define FILAMENT_TRACING_ASYNC_END(category, name, cookie) do { \
++    ::utils::profiling::event(::utils::profiling::CpuEventKind::ASYNC_END, category, name, 0, cookie); \
++    FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie); } while (false)
++#define FILAMENT_TRACING_EVENT(category, name, ...) \
++    ::utils::profiling::ScopedTrace ___observerTrace(category, name); \
++    FILAMENT_NATIVE_TRACING_EVENT(category, name, ##__VA_ARGS__)
++
+ #endif // TNT_UTILS_FILAMENT_TRACING_H
+diff --git a/libs/utils/include/private/utils/android/Tracing.h b/libs/utils/include/private/utils/android/Tracing.h
+index 9438f18c3086037a304376023cc74126477dcec0..2b5c608695adf87d3de8f350febe1e7f60ba9a32 100644
+--- a/libs/utils/include/private/utils/android/Tracing.h
++++ b/libs/utils/include/private/utils/android/Tracing.h
+@@ -34,52 +34,52 @@ PERFETTO_USE_CATEGORIES_FROM_NAMESPACE(tracing);
+ 
+ #if FILAMENT_TRACING_ENABLED == false || !defined(FILAMENT_ENABLE_PERFETTO)
+ 
+-#define FILAMENT_TRACING_ENABLE(category)
+-#define FILAMENT_TRACING_CONTEXT(category)
+-#define FILAMENT_TRACING_NAME(category, name)
+-#define FILAMENT_TRACING_FRAME_ID(category, frame)
+-#define FILAMENT_TRACING_NAME_BEGIN(category, name)
+-#define FILAMENT_TRACING_NAME_END(category)
+-#define FILAMENT_TRACING_CALL(category, ...)
+-#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie)
+-#define FILAMENT_TRACING_ASYNC_END(category, name, cookie)
+-#define FILAMENT_TRACING_VALUE(category, name, val)
+-#define FILAMENT_TRACING_EVENT(category, name, ...)
++#define FILAMENT_NATIVE_TRACING_ENABLE(category)
++#define FILAMENT_NATIVE_TRACING_CONTEXT(category)
++#define FILAMENT_NATIVE_TRACING_NAME(category, name)
++#define FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame)
++#define FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name)
++#define FILAMENT_NATIVE_TRACING_NAME_END(category)
++#define FILAMENT_NATIVE_TRACING_CALL(category, ...)
++#define FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_VALUE(category, name, val)
++#define FILAMENT_NATIVE_TRACING_EVENT(category, name, ...)
+ 
+ #else
+ 
+-#define FILAMENT_TRACING_ENABLE(category)
+-#define FILAMENT_TRACING_CONTEXT(category)
++#define FILAMENT_NATIVE_TRACING_ENABLE(category)
++#define FILAMENT_NATIVE_TRACING_CONTEXT(category)
+ 
+-#define FILAMENT_TRACING_CALL(category, ...) \
++#define FILAMENT_NATIVE_TRACING_CALL(category, ...) \
+     auto constexpr FILAMENT_FILAMENT_TRACING_FUNCTION = perfetto::StaticString(__FUNCTION__); \
+     TRACE_EVENT(category, FILAMENT_FILAMENT_TRACING_FUNCTION, ##__VA_ARGS__)
+ 
+-#define FILAMENT_TRACING_NAME(category, name) TRACE_EVENT(category, nullptr,               \
++#define FILAMENT_NATIVE_TRACING_NAME(category, name) TRACE_EVENT(category, nullptr,               \
+         [&](perfetto::EventContext ctx) {                               \
+             ctx.event()->set_name(name);                                \
+         })
+ 
+-#define FILAMENT_TRACING_NAME_BEGIN(category, name) TRACE_EVENT_BEGIN(category, nullptr,    \
++#define FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name) TRACE_EVENT_BEGIN(category, nullptr,    \
+         [&](perfetto::EventContext ctx) {                                \
+             ctx.event()->set_name(name);                                 \
+         })
+ 
+-#define FILAMENT_TRACING_NAME_END(category) TRACE_EVENT_END(category)
++#define FILAMENT_NATIVE_TRACING_NAME_END(category) TRACE_EVENT_END(category)
+ 
+-#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie) \
++#define FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie) \
+         TRACE_EVENT_BEGIN(category, name, perfetto::Track(cookie))
+ 
+-#define FILAMENT_TRACING_ASYNC_END(category, name, cookie) \
++#define FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie) \
+         TRACE_EVENT_END(category, perfetto::Track(cookie))
+ 
+-#define FILAMENT_TRACING_FRAME_ID(category, frame) \
++#define FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame) \
+         TRACE_EVENT_INSTANT(category, "frame", "id", frame)
+ 
+-#define FILAMENT_TRACING_VALUE(category, name, val) \
++#define FILAMENT_NATIVE_TRACING_VALUE(category, name, val) \
+         TRACE_COUNTER(category, name, val)
+ 
+-#define FILAMENT_TRACING_EVENT(category, name, ...) \
++#define FILAMENT_NATIVE_TRACING_EVENT(category, name, ...) \
+         TRACE_EVENT(category, name, ##__VA_ARGS__)
+ 
+ #endif // FILAMENT_TRACING_MODE != FILAMENT_TRACING_MODE_DISABLED
+diff --git a/libs/utils/include/private/utils/darwin/Tracing.h b/libs/utils/include/private/utils/darwin/Tracing.h
+index 94de7116cb10875f981be174ae12ca865879efc4..3dc703d589d0bd332b55c2864abfe34ede298644 100644
+--- a/libs/utils/include/private/utils/darwin/Tracing.h
++++ b/libs/utils/include/private/utils/darwin/Tracing.h
+@@ -32,54 +32,54 @@
+ 
+ #if FILAMENT_TRACING_ENABLED == false
+ 
+-#define FILAMENT_TRACING_ENABLE(category)
+-#define FILAMENT_TRACING_CONTEXT(category)
+-#define FILAMENT_TRACING_NAME(category, name)
+-#define FILAMENT_TRACING_FRAME_ID(category, frame)
+-#define FILAMENT_TRACING_NAME_BEGIN(category, name)
+-#define FILAMENT_TRACING_NAME_END(category)
+-#define FILAMENT_TRACING_CALL(category)
+-#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie)
+-#define FILAMENT_TRACING_ASYNC_END(category, name, cookie)
+-#define FILAMENT_TRACING_VALUE(category, name, val)
+-#define FILAMENT_TRACING_EVENT(category, name, ...)
++#define FILAMENT_NATIVE_TRACING_ENABLE(category)
++#define FILAMENT_NATIVE_TRACING_CONTEXT(category)
++#define FILAMENT_NATIVE_TRACING_NAME(category, name)
++#define FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame)
++#define FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name)
++#define FILAMENT_NATIVE_TRACING_NAME_END(category)
++#define FILAMENT_NATIVE_TRACING_CALL(category)
++#define FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie)
++#define FILAMENT_NATIVE_TRACING_VALUE(category, name, val)
++#define FILAMENT_NATIVE_TRACING_EVENT(category, name, ...)
+ 
+ #else
+ 
+ // enable tracing
+-#define FILAMENT_TRACING_ENABLE(category) ::utils::details::Tracing::enable(category)
++#define FILAMENT_NATIVE_TRACING_ENABLE(category) ::utils::details::Tracing::enable(category)
+ 
+ /**
+  * Creates a Tracing context in the current scope. needed for calling all other Tracing
+  * commands below.
+  */
+-#define FILAMENT_TRACING_CONTEXT(category) ::utils::details::Tracing ___tracer(category)
++#define FILAMENT_NATIVE_TRACING_CONTEXT(category) ::utils::details::Tracing ___tracer(category)
+ 
+ 
+-// FILAMENT_TRACING_NAME traces the beginning and end of the current scope.  To trace
++// FILAMENT_NATIVE_TRACING_NAME traces the beginning and end of the current scope.  To trace
+ // the correct start and end times this macro should be declared first in the
+ // scope body.
+ // It also automatically creates a Tracing context
+-#define FILAMENT_TRACING_NAME(category, name) ::utils::details::ScopedTracing ___tracer(name)
++#define FILAMENT_NATIVE_TRACING_NAME(category, name) ::utils::details::ScopedTracing ___tracer(name)
+ 
+-// Treat FILAMENT_TRACING_EVENT same as FILAMENT_TRACING_NAME
+-#define FILAMENT_TRACING_EVENT(category, name, ...) \
+-  FILAMENT_TRACING_NAME(category, name)
++// Treat FILAMENT_NATIVE_TRACING_EVENT same as FILAMENT_NATIVE_TRACING_NAME
++#define FILAMENT_NATIVE_TRACING_EVENT(category, name, ...) \
++  FILAMENT_NATIVE_TRACING_NAME(category, name)
+ 
+ // Denotes that a new frame has started processing.
+-#define FILAMENT_TRACING_FRAME_ID(category, frame) \
++#define FILAMENT_NATIVE_TRACING_FRAME_ID(category, frame) \
+     ::utils::details::Tracing(category).frameId(frame)
+ 
+ extern thread_local std::stack<const char*> ___tracerSections;
+ 
+-// FILAMENT_TRACING_CALL is an FILAMENT_TRACING_NAME that uses the current function name.
+-#define FILAMENT_TRACING_CALL(category) FILAMENT_TRACING_NAME(category, __PRETTY_FUNCTION__)
++// FILAMENT_NATIVE_TRACING_CALL is an FILAMENT_NATIVE_TRACING_NAME that uses the current function name.
++#define FILAMENT_NATIVE_TRACING_CALL(category) FILAMENT_NATIVE_TRACING_NAME(category, __PRETTY_FUNCTION__)
+ 
+-#define FILAMENT_TRACING_NAME_BEGIN(category, name) \
++#define FILAMENT_NATIVE_TRACING_NAME_BEGIN(category, name) \
+         ___tracerSections.push(name) , \
+         ___tracer.traceBegin(name)
+ 
+-#define FILAMENT_TRACING_NAME_END(category) \
++#define FILAMENT_NATIVE_TRACING_NAME_END(category) \
+         ___tracer.traceEnd(___tracerSections.top()) , \
+         ___tracerSections.pop()
+ 
+@@ -90,21 +90,21 @@ extern thread_local std::stack<const char*> ___tracerSections;
+  * simultaneous events. The name and cookie used to begin an event must be
+  * used to end it.
+  */
+-#define FILAMENT_TRACING_ASYNC_BEGIN(category, name, cookie) \
++#define FILAMENT_NATIVE_TRACING_ASYNC_BEGIN(category, name, cookie) \
+         ___tracer.asyncBegin(name, cookie)
+ 
+ /**
+  * Trace the end of an asynchronous event.
+- * This should have a corresponding FILAMENT_TRACING_ASYNC_BEGIN.
++ * This should have a corresponding FILAMENT_NATIVE_TRACING_ASYNC_BEGIN.
+  */
+-#define FILAMENT_TRACING_ASYNC_END(category, name, cookie) \
++#define FILAMENT_NATIVE_TRACING_ASYNC_END(category, name, cookie) \
+         ___tracer.asyncEnd(name, cookie)
+ 
+ /**
+  * Traces an integer counter value.  name is used to identify the counter.
+  * This can be used to track how a value changes over time.
+  */
+-#define FILAMENT_TRACING_VALUE(category, name, val) \
++#define FILAMENT_NATIVE_TRACING_VALUE(category, name, val) \
+         ___tracer.value(name, val)
+ 
+ #endif // FILAMENT_TRACING_MODE != FILAMENT_TRACING_MODE_DISABLED
+diff --git a/libs/utils/include/utils/JobSystem.h b/libs/utils/include/utils/JobSystem.h
+index b4988015902dc329aa36031455e4c3ff0da1d224..58393ab0cbeb0b9d36bce013a50eef8075211aaa 100644
+--- a/libs/utils/include/utils/JobSystem.h
++++ b/libs/utils/include/utils/JobSystem.h
+@@ -26,6 +26,7 @@
+ #include <utils/Mutex.h>
+ #include <utils/ostream.h>
+ #include <utils/Slice.h>
++#include <utils/ProfilerTrace.h>
+ #include <utils/WorkStealingDequeue.h>
+ 
+ #include <atomic>
+@@ -528,6 +529,10 @@ private:
+     std::atomic<uint32_t> mAdoptableSlotsMask = { 0 };  // available slots for adoptable threads
+     std::atomic<uint16_t> mActiveThreadCount = { 0 };   // high-water mark of active threads
+     Job* const mJobStorageBase;                         // Base for conversion to indices
++    // A separate bounded sidecar preserves the cache-line-sized Job ABI.
++    // Every job publication initializes its slot before a worker can consume it.
++    std::unique_ptr<profiling::Context[]> mProfileContexts{
++            new profiling::Context[MAX_JOB_COUNT]{}};
+     uint16_t mThreadCount = 0;                          // total # of threads in the pool
+     Job* mRootJob = nullptr;
+ 
+diff --git a/libs/utils/include/utils/ProfilerTrace.h b/libs/utils/include/utils/ProfilerTrace.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b0aa69631345e5dcd0bc07ed0c320d50f2643ca
+--- /dev/null
++++ b/libs/utils/include/utils/ProfilerTrace.h
+@@ -0,0 +1,90 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++ */
++#ifndef TNT_UTILS_PROFILERTRACE_H
++#define TNT_UTILS_PROFILERTRACE_H
++
++#include <utils/compiler.h>
++#include <stdint.h>
++
++namespace utils::profiling {
++
++struct Context {
++    uint64_t attempt_id = 0;
++    uint64_t submission_id = 0;
++    uint64_t filament_frame_id = 0;
++    uint64_t renderer_id = 0;
++    uint64_t view_id = 0;
++    uint64_t capture_id = 0;
++};
++
++enum class CpuEventKind : uint8_t { SCOPE, INSTANT, COUNTER, ASYNC_BEGIN, ASYNC_END, DROPPED };
++struct CpuEvent {
++    Context context;
++    uint64_t scope_id = 0;
++    uint64_t parent_id = 0;
++    uint64_t thread_id = 0;
++    int64_t begin_ns = 0;
++    int64_t end_ns = 0;
++    const char* category = nullptr;
++    const char* name = nullptr;
++    CpuEventKind kind = CpuEventKind::SCOPE;
++    int64_t value = 0;
++    uint64_t cookie = 0;
++};
++
++enum class GpuStatus : uint8_t { AVAILABLE, UNSUPPORTED, DISJOINT, ERROR, DROPPED, PENDING };
++enum class GpuBackend : uint8_t { UNKNOWN, VULKAN, OPENGL };
++struct GpuCapabilities {
++    GpuBackend backend = GpuBackend::UNKNOWN;
++    bool hardware_timestamps = false;
++    bool cpu_clock_calibrated = false;
++    uint8_t timestamp_valid_bits = 0;
++    double timestamp_period_ns = 0;
++    uint32_t max_passes_per_frame = 256;
++    uint32_t max_frames_in_flight = 16;
++    const char* reason = nullptr;
++};
++
++// GPU times are relative to a hardware timestamp at this frame's beginning.
++// They never share the CPU steady-clock origin. Unavailable times stay -1.
++struct GpuSample {
++    Context context;
++    uint64_t pass_id = 0;
++    uint64_t parent_pass_id = 0;
++    const char* name = nullptr;
++    int64_t begin_ns = -1;
++    int64_t end_ns = -1;
++    GpuStatus status = GpuStatus::PENDING;
++    uint64_t command_count = 0;
++    uint64_t primitive_count = 0;
++    // Sum of RenderPass culler-visible input ranges executed in this FG pass.
++    // This is renderables (explicit groups count once), not instance placements.
++    uint64_t visible_renderables = 0;
++    bool name_truncated = false;
++    // Sum of the instance count of each executed draw. Repeated geometry,
++    // shadow passes and split primitives can invoke the same placement again.
++    uint64_t draw_instance_invocations = 0;
++};
++
++struct Observer {
++    void* user = nullptr;
++    void (*cpu)(void*, CpuEvent const&) noexcept = nullptr;
++    void (*gpu)(void*, GpuSample const&) noexcept = nullptr;
++    void (*capabilities)(void*, GpuCapabilities const&) noexcept = nullptr;
++};
++
++// Install before capture; the observer and its user data must outlive every
++// worker/driver call. Callbacks run on their producer threads and must not block,
++// allocate, throw, or call a graphics API. Borrowed strings last only for the call.
++UTILS_PUBLIC void setObserver(Observer const* observer) noexcept;
++UTILS_PUBLIC void setEnabled(bool enabled) noexcept;
++UTILS_PUBLIC bool isEnabled() noexcept;
++UTILS_PUBLIC Context getContext() noexcept;
++UTILS_PUBLIC void setContext(Context context) noexcept;
++UTILS_PUBLIC uint64_t nextId() noexcept;
++
++} // namespace utils::profiling
++#endif
+diff --git a/libs/utils/src/JobSystem.cpp b/libs/utils/src/JobSystem.cpp
+index c751ab00c84c92c6cfbc84d1533e5b01ce825fa7..bcfd892487b1a40ccbe21ba8a5b6deb0cf11c175 100644
+--- a/libs/utils/src/JobSystem.cpp
++++ b/libs/utils/src/JobSystem.cpp
+@@ -598,7 +598,13 @@ bool JobSystem::execute(ThreadState& state) noexcept {
+         if (UTILS_LIKELY(job->function)) {
+             HEAVY_FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_JOBSYSTEM, "job->function");
+             job->id = std::distance(mThreadStates.data(), &state);
+-            job->function(job->storage, *this, job);
++            if (profiling::isEnabled()) {
++                profiling::ScopedContext const profileContext(mProfileContexts[job - mJobStorageBase]);
++                profiling::ScopedTrace const profileJob("filament/jobsystem", "Job execution");
++                job->function(job->storage, *this, job);
++            } else {
++                job->function(job->storage, *this, job);
++            }
+             job->id = invalidThreadId;
+         }
+         finish(job);
+@@ -697,6 +703,14 @@ JobSystem::Job* JobSystem::create(Job* parent, JobFunc const func) noexcept {
+         }
+         job->function = func;
+         job->parent = uint16_t(index);
++        auto& context = mProfileContexts[job - mJobStorageBase];
++        if (profiling::isEnabled()) {
++            auto const parentContext = parent ? mProfileContexts[parent - mJobStorageBase] :
++                    profiling::Context{};
++            context = parentContext.capture_id ? parentContext : profiling::getContext();
++        } else {
++            context.capture_id = 0;
++        }
+     }
+     return job;
+ }
+diff --git a/libs/utils/src/Profiler.cpp b/libs/utils/src/Profiler.cpp
+index a5b6ee4c9e2df17c06abda41fd452862d5459883..812da626144c9b8e215a4f2f5fcab832b645a67c 100644
+--- a/libs/utils/src/Profiler.cpp
++++ b/libs/utils/src/Profiler.cpp
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include <utils/Profiler.h>
++#include <private/utils/ProfilerTrace.h>
+ 
+ #include <stdlib.h>
+ #include <string.h>
+@@ -29,6 +30,10 @@
+ #include <algorithm>
+ #include <iterator>
+ #include <memory>
++#include <atomic>
++#include <array>
++#include <thread>
++#include <cstring>
+ 
+ #if defined(__linux__)
+ 
+@@ -298,3 +303,109 @@ Profiler::Counters Profiler::readCounters() noexcept {
+ #endif // __linux__
+ 
+ } // namespace utils
++
++namespace utils::profiling {
++namespace {
++std::atomic<Observer const*> sObserver{nullptr};
++std::atomic<bool> sEnabled{false};
++std::atomic<uint64_t> sNextId{1};
++thread_local Context sContext{};
++thread_local GpuAdapter const* sGpuAdapter = nullptr;
++struct Scope {
++    CpuEvent event;
++    Observer const* observer;
++    std::array<char, 96> name{};
++    std::array<char, 64> category{};
++};
++struct ThreadScopes {
++    std::array<Scope, 128> stack{};
++    uint32_t size = 0;
++    uint32_t ignored = 0;
++    uint64_t thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
++};
++thread_local ThreadScopes sScopes;
++int64_t now() noexcept {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++}
++void setObserver(Observer const* observer) noexcept { sObserver.store(observer, std::memory_order_release); }
++void setEnabled(bool enabled) noexcept { sEnabled.store(enabled, std::memory_order_release); }
++bool isEnabled() noexcept {
++    return sEnabled.load(std::memory_order_relaxed) && sObserver.load(std::memory_order_acquire);
++}
++Context getContext() noexcept { return sContext; }
++void setContext(Context context) noexcept { sContext = context; }
++uint64_t nextId() noexcept { return sNextId.fetch_add(1, std::memory_order_relaxed); }
++void begin(const char* category, const char* name) noexcept {
++    auto& scopes = sScopes;
++    auto const* observer = sObserver.load(std::memory_order_acquire);
++    if (scopes.ignored || !sEnabled.load(std::memory_order_relaxed) || !observer || !observer->cpu) {
++        ++scopes.ignored;
++        return;
++    }
++    if (scopes.size == scopes.stack.size()) {
++        ++scopes.ignored;
++        CpuEvent lost{.context = sContext, .thread_id = scopes.thread,
++                .begin_ns = now(), .category = category, .name = name,
++                .kind = CpuEventKind::DROPPED, .value = 1};
++        lost.end_ns = lost.begin_ns;
++        observer->cpu(observer->user, lost);
++        return;
++    }
++    uint64_t const parent = scopes.size ? scopes.stack[scopes.size - 1].event.scope_id : 0;
++    auto& slot = scopes.stack[scopes.size++];
++    slot = {CpuEvent{.context = sContext, .scope_id = nextId(), .parent_id = parent,
++            .thread_id = scopes.thread, .begin_ns = now(), .category = category, .name = name}, observer};
++    if (name) std::strncpy(slot.name.data(), name, slot.name.size() - 1);
++    if (category) std::strncpy(slot.category.data(), category, slot.category.size() - 1);
++    slot.event.name = slot.name.data();
++    slot.event.category = slot.category.data();
++}
++void end() noexcept {
++    auto& scopes = sScopes;
++    if (scopes.ignored) { --scopes.ignored; return; }
++    if (!scopes.size) return;
++    auto& slot = scopes.stack[--scopes.size];
++    slot.event.end_ns = now();
++    slot.observer->cpu(slot.observer->user, slot.event);
++}
++void event(CpuEventKind kind, const char* category, const char* name,
++        int64_t value, uint64_t cookie) noexcept {
++    if (!isEnabled()) return;
++    auto const* observer = sObserver.load(std::memory_order_acquire);
++    if (!observer || !observer->cpu) return;
++    CpuEvent record{.context = sContext, .scope_id = nextId(),
++            .parent_id = sScopes.size ? sScopes.stack[sScopes.size - 1].event.scope_id : 0,
++            .thread_id = sScopes.thread, .begin_ns = now(), .category = category,
++            .name = name, .kind = kind, .value = value, .cookie = cookie};
++    record.end_ns = record.begin_ns;
++    observer->cpu(observer->user, record);
++}
++void emitGpu(GpuSample const& sample) noexcept {
++    auto const* observer = sObserver.load(std::memory_order_acquire);
++    if (observer && observer->gpu) observer->gpu(observer->user, sample);
++}
++void emitCapabilities(GpuCapabilities const& caps) noexcept {
++    auto const* observer = sObserver.load(std::memory_order_acquire);
++    if (observer && observer->capabilities) observer->capabilities(observer->user, caps);
++}
++void setGpuAdapter(GpuAdapter const* adapter) noexcept { sGpuAdapter = adapter; }
++void gpuBeginFrame(Context context) noexcept {
++    setContext(context);
++    if (sGpuAdapter) sGpuAdapter->beginFrame(sGpuAdapter->user, context);
++}
++void gpuEndFrame() noexcept { if (sGpuAdapter) sGpuAdapter->endFrame(sGpuAdapter->user); }
++void gpuBeginPass(Context context, uint64_t id, const char* name) noexcept {
++    setContext(context);
++    if (sGpuAdapter) sGpuAdapter->beginPass(sGpuAdapter->user, context, id, name);
++    else emitGpu(GpuSample{.context = context, .pass_id = id, .name = name,
++            .status = GpuStatus::UNSUPPORTED});
++}
++void gpuEndPass(uint64_t id) noexcept {
++    if (sGpuAdapter) sGpuAdapter->endPass(sGpuAdapter->user, id);
++}
++void gpuCounters(uint64_t commands, uint64_t primitives, uint64_t visible) noexcept {
++    if (sGpuAdapter) sGpuAdapter->counters(sGpuAdapter->user, commands, primitives, visible);
++}
++} // namespace utils::profiling
+diff --git a/shaders/src/common_shading.fs b/shaders/src/common_shading.fs
+index c95a99e7b691e90994ec17608dbd310e7621bcab..181ea137bae3220429854ba9c869deb6681236cd 100644
+--- a/shaders/src/common_shading.fs
++++ b/shaders/src/common_shading.fs
+@@ -1,6 +1,9 @@
+ // These variables should be in a struct but some GPU drivers ignore the
+ // precision qualifier on individual struct members
+ highp mat3  shading_tangentToWorld;   // TBN matrix
++#if defined(VARIANT_HAS_SHADOWING) && defined(HAS_ATTRIBUTE_TANGENTS)
++highp vec3  shading_contactShadowNormal; // actual receiver triangle normal, before divergent lighting
++#endif
+ highp vec3  shading_position;         // position of the fragment in world space
+       vec3  shading_view;             // normalized vector from the fragment to the eye
+ #if defined(HAS_ATTRIBUTE_TANGENTS)
+diff --git a/shaders/src/surface_ambient_occlusion.fs b/shaders/src/surface_ambient_occlusion.fs
+index 54acfd0f8b3f2d2ed716d0447c67661c9e76346e..d4a28aff3fac675560147fa798c7c2c5d24f092c 100644
+--- a/shaders/src/surface_ambient_occlusion.fs
++++ b/shaders/src/surface_ambient_occlusion.fs
+@@ -18,12 +18,24 @@ float unpack(vec2 depth) {
+ 
+ struct SSAOInterpolationCache {
+     highp vec4 weights;
++    highp float occludedFraction;
++    highp vec4 occludedSamples;
+ #if defined(BLEND_MODE_OPAQUE) || defined(BLEND_MODE_MASKED) || defined(MATERIAL_HAS_REFLECTIONS)
+     highp vec2 uv;
++    highp vec2 gatherUV;
++    highp ivec2 footprint;
+ #endif
+ };
+ 
++#if defined(BLEND_MODE_OPAQUE) || defined(BLEND_MODE_MASKED)
++vec4 fetchSSAOTexel(highp ivec2 pixel, int layer) {
++    highp ivec2 size = textureSize(sampler0_ssao, 0).xy;
++    return texelFetch(sampler0_ssao, ivec3(clamp(pixel, ivec2(0), size - 1), layer), 0);
++}
++#endif
++
+ float evaluateSSAO(inout SSAOInterpolationCache cache) {
++    cache.occludedFraction = 0.0;
+ #if defined(BLEND_MODE_OPAQUE) || defined(BLEND_MODE_MASKED)
+ 
+     if (frameUniforms.aoSamplingQualityAndEdgeDistance < 0.0) {
+@@ -36,17 +48,19 @@ float evaluateSSAO(inout SSAOInterpolationCache cache) {
+ 
+     if (frameUniforms.aoSamplingQualityAndEdgeDistance > 0.0) {
+         highp vec2 size = vec2(textureSize(sampler0_ssao, 0));
++        cache.footprint = ivec2(floor(cache.uv * size - 0.5));
++        cache.gatherUV = (vec2(cache.footprint) + 1.0) / size;
+ 
+         // Read four AO samples and their depths values
+ #if defined(FILAMENT_HAS_FEATURE_TEXTURE_GATHER)
+-        vec4 ao = textureGather(sampler0_ssao, vec3(cache.uv, 0.0), 0);
+-        vec4 dg = textureGather(sampler0_ssao, vec3(cache.uv, 0.0), 1);
+-        vec4 db = textureGather(sampler0_ssao, vec3(cache.uv, 0.0), 2);
++        vec4 ao = textureGather(sampler0_ssao, vec3(cache.gatherUV, 0.0), 0);
++        vec4 dg = textureGather(sampler0_ssao, vec3(cache.gatherUV, 0.0), 1);
++        vec4 db = textureGather(sampler0_ssao, vec3(cache.gatherUV, 0.0), 2);
+ #else
+-        vec3 s01 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 0.0), 0.0, ivec2(0, 1)).rgb;
+-        vec3 s11 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 0.0), 0.0, ivec2(1, 1)).rgb;
+-        vec3 s10 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 0.0), 0.0, ivec2(1, 0)).rgb;
+-        vec3 s00 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 0.0), 0.0, ivec2(0, 0)).rgb;
++        vec3 s01 = fetchSSAOTexel(cache.footprint + ivec2(0, 1), 0).rgb;
++        vec3 s11 = fetchSSAOTexel(cache.footprint + ivec2(1, 1), 0).rgb;
++        vec3 s10 = fetchSSAOTexel(cache.footprint + ivec2(1, 0), 0).rgb;
++        vec3 s00 = fetchSSAOTexel(cache.footprint, 0).rgb;
+         vec4 ao = vec4(s01.r, s11.r, s10.r, s00.r);
+         vec4 dg = vec4(s01.g, s11.g, s10.g, s00.g);
+         vec4 db = vec4(s01.b, s11.b, s10.b, s00.b);
+@@ -72,9 +86,23 @@ float evaluateSSAO(inout SSAOInterpolationCache cache) {
+         highp vec4 w = (vec4(d) - depths) * frameUniforms.aoSamplingQualityAndEdgeDistance;
+         w = max(vec4(MEDIUMP_FLT_MIN), 1.0 - w * w) * b;
+         cache.weights = w / (w.x + w.y + w.z + w.w);
++        if (frameUniforms.aoBentNormals > 1.0) {
++#if defined(FILAMENT_HAS_FEATURE_TEXTURE_GATHER)
++            vec4 mass = textureGather(sampler0_ssao, vec3(cache.gatherUV, 0.0), 3);
++#else
++            vec4 mass = vec4(fetchSSAOTexel(cache.footprint + ivec2(0, 1), 0).a,
++                    fetchSSAOTexel(cache.footprint + ivec2(1, 1), 0).a,
++                    fetchSSAOTexel(cache.footprint + ivec2(1, 0), 0).a,
++                    fetchSSAOTexel(cache.footprint, 0).a);
++#endif
++            cache.occludedFraction = dot(mass, cache.weights);
++            cache.occludedSamples = mass;
++        }
+         return dot(ao, cache.weights);
+     } else {
+-        return textureLod(sampler0_ssao, vec3(cache.uv, 0.0), 0.0).r;
++        vec4 data = textureLod(sampler0_ssao, vec3(cache.uv, 0.0), 0.0);
++        cache.occludedFraction = data.a;
++        return data.r;
+     }
+ #else
+     // SSAO is not applied when blending is enabled
+@@ -139,6 +167,31 @@ vec3 unpackBentNormal(vec3 bn) {
+     return bn * 2.0 - 1.0;
+ }
+ 
++float SpecularAO_OccludedMoments(vec3 encoded, float mass, float visibility,
++        float NoV, float roughness) {
++    // The screen field describes nearby blockers, excluding the receiver's
++    // hemisphere. An unblocked receiver therefore cannot mask its normal map.
++    if (mass <= 0.0 || roughness <= 0.01) {
++        return 1.0;
++    }
++    highp vec3 moment = (encoded - (128.0 / 255.0)) * (255.0 / 127.0);
++    highp float magnitude = length(moment);
++    if (magnitude <= mass) {
++        // Opposing / dispersed blockers do not have a single positive cap fit.
++        return SpecularAO_Lagarde(NoV, visibility, roughness);
++    }
++    highp vec3 axis = moment / magnitude;
++    // Fit a soft cap using both its area and vector moment. Scaling visibility
++    // strength preserves its world axis / aperture and scales its opacity.
++    float cosOccluded = clamp(magnitude / mass - 1.0, 0.0, 1.0 - mass);
++    float opacity = mass / (1.0 - cosOccluded);
++    float cosSpecular = exp2(-3.321928 * sq(roughness));
++    float overlap = sphericalCapsIntersection(cosOccluded, cosSpecular,
++            clamp(dot(axis, shading_reflected), -1.0, 1.0));
++    float occlusion = opacity * overlap / max(1.0 - cosSpecular, 1e-4);
++    return mix(1.0, saturate(1.0 - occlusion), smoothstep(0.01, 0.09, roughness));
++}
++
+ float specularAO(float NoV, float visibility, float roughness, const in SSAOInterpolationCache cache) {
+     float specularAO = 1.0;
+ 
+@@ -160,18 +213,24 @@ float specularAO(float NoV, float visibility, float roughness, const in SSAOInte
+         vec3 bn;
+         if (frameUniforms.aoSamplingQualityAndEdgeDistance > 0.0) {
+ #if defined(FILAMENT_HAS_FEATURE_TEXTURE_GATHER)
+-            vec4 bnr = textureGather(sampler0_ssao, vec3(cache.uv, 1.0), 0);
+-            vec4 bng = textureGather(sampler0_ssao, vec3(cache.uv, 1.0), 1);
+-            vec4 bnb = textureGather(sampler0_ssao, vec3(cache.uv, 1.0), 2);
++            vec4 bnr = textureGather(sampler0_ssao, vec3(cache.gatherUV, 1.0), 0);
++            vec4 bng = textureGather(sampler0_ssao, vec3(cache.gatherUV, 1.0), 1);
++            vec4 bnb = textureGather(sampler0_ssao, vec3(cache.gatherUV, 1.0), 2);
+ #else
+-            vec3 s01 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 1.0), 0.0, ivec2(0, 1)).rgb;
+-            vec3 s11 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 1.0), 0.0, ivec2(1, 1)).rgb;
+-            vec3 s10 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 1.0), 0.0, ivec2(1, 0)).rgb;
+-            vec3 s00 = textureLodOffset(sampler0_ssao, vec3(cache.uv, 1.0), 0.0, ivec2(0, 0)).rgb;
++            vec3 s01 = fetchSSAOTexel(cache.footprint + ivec2(0, 1), 1).rgb;
++            vec3 s11 = fetchSSAOTexel(cache.footprint + ivec2(1, 1), 1).rgb;
++            vec3 s10 = fetchSSAOTexel(cache.footprint + ivec2(1, 0), 1).rgb;
++            vec3 s00 = fetchSSAOTexel(cache.footprint, 1).rgb;
+             vec4 bnr = vec4(s01.r, s11.r, s10.r, s00.r);
+             vec4 bng = vec4(s01.g, s11.g, s10.g, s00.g);
+             vec4 bnb = vec4(s01.b, s11.b, s10.b, s00.b);
+ #endif
++            if (frameUniforms.aoBentNormals > 1.0) {
++                bvec4 empty = lessThanEqual(cache.occludedSamples, vec4(0.0));
++                bnr = mix(bnr, vec4(128.0 / 255.0), empty);
++                bng = mix(bng, vec4(128.0 / 255.0), empty);
++                bnb = mix(bnb, vec4(128.0 / 255.0), empty);
++            }
+             bn.r = dot(bnr, cache.weights);
+             bn.g = dot(bng, cache.weights);
+             bn.b = dot(bnb, cache.weights);
+@@ -179,10 +238,14 @@ float specularAO(float NoV, float visibility, float roughness, const in SSAOInte
+             bn = textureLod(sampler0_ssao, vec3(cache.uv, 1.0), 0.0).xyz;
+         }
+ 
+-        bn = unpackBentNormal(bn);
+-        bn = normalize(bn);
+-
+-        float ssSpecularAO = SpecularAO_Cones(bn, visibility, roughness);
++        float ssSpecularAO;
++        if (frameUniforms.aoBentNormals > 1.0) {
++            ssSpecularAO = SpecularAO_OccludedMoments(bn, cache.occludedFraction,
++                    visibility, NoV, roughness);
++        } else {
++            bn = normalize(unpackBentNormal(bn));
++            ssSpecularAO = SpecularAO_Cones(bn, visibility, roughness);
++        }
+         // Combine the specular AO from the texture with screen space specular AO
+         specularAO = min(specularAO, ssSpecularAO);
+ 
+diff --git a/shaders/src/surface_light_directional.fs b/shaders/src/surface_light_directional.fs
+index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..59e1626a000e8ae12732cdcf281afe6568387233 100644
+--- a/shaders/src/surface_light_directional.fs
++++ b/shaders/src/surface_light_directional.fs
+@@ -31,6 +31,130 @@ Light getDirectionalLight() {
+     return light;
+ }
+ 
++#if defined(VARIANT_HAS_SHADOWING) && defined(HAS_ATTRIBUTE_TANGENTS) && \
++        defined(SUN_AS_AREA_LIGHT) && MATERIAL_FEATURE_LEVEL >= 1
++
++// CDF of the tangent disk X coordinate under UNIFORM SOLID ANGLE on
++// the sun cap. This stable expression tends to the disk-area CDF as c→1.
++highp float contactSunCapCdf(highp float x, highp float c) {
++    x = clamp(x, -1.0, 1.0);
++    highp float side = sqrt(max(1.0 - x*x, 0.0));
++    highp float d = 1.0 - c;
++    highp float a = x * side / (c * side*side + x*x);
++    highp float correction = d > 0.0 ? atan(d * a) / d : x * side;
++    return saturate(0.5 + (asin(x) + correction) / PI);
++}
++
++highp float contactSunInverseCapCdf(highp float target, highp float lower,
++        highp float c) {
++    highp float upper = 1.0;
++    for (int i = 0; i < 12; ++i) {
++        highp float middle = 0.5 * (lower + upper);
++        if (contactSunCapCdf(middle, c) < target) {
++            lower = middle;
++        } else {
++            upper = middle;
++        }
++    }
++    highp float x = 0.5 * (lower + upper);
++    highp float side = sqrt(max(1.0 - x*x, 0.0));
++    highp float density = (1.0 + c) * c * side /
++            (PI * (c*c + (1.0 - c*c) * x*x));
++    if (density > 0.0) {
++        // One Newton correction remains inside the conditional bracket.
++        x = clamp(x - (contactSunCapCdf(x, c) - target) / density, lower, upper);
++    }
++    return x;
++}
++
++float screenSpaceSunContactShadow(vec3 fallbackDirection) {
++    int stepCount = (frameUniforms.directionalShadows >> 8) & 0xFF;
++    if (stepCount <= 0 || frameUniforms.ssContactShadowDistance <= 0.0) {
++        return 0.0;
++    }
++    if (frameUniforms.sun.w < 0.0 || frameUniforms.sun.y <= 0.0 ||
++            frameUniforms.sun.x <= 0.0) {
++        return screenSpaceContactShadow(fallbackDirection);
++    }
++
++    highp vec3 center = frameUniforms.lightDirection;
++    highp float normalLength2 = dot(shading_contactShadowNormal, shading_contactShadowNormal);
++    if (!(normalLength2 > 0.0 && normalLength2 < 1.0e20)) {
++        return screenSpaceContactShadow(fallbackDirection);
++    }
++    highp vec3 ng = shading_contactShadowNormal * inversesqrt(normalLength2);
++    highp vec2 radius = normalize(frameUniforms.sun.xy);
++    highp float c = radius.x;
++    highp float s = radius.y;
++    if (!(c > 0.0 && c < 1.0 && s > 0.0)) {
++        return screenSpaceContactShadow(fallbackDirection);
++    }
++    highp float mu = clamp(dot(ng, center), -1.0, 1.0);
++    if (mu <= -s) {
++        return 1.0;
++    }
++
++    // The original cone pattern has one global Sun frame everywhere.
++    highp vec3 axis = abs(center.z) < 0.999
++            ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
++    highp vec3 sunT = normalize(cross(axis, center));
++    highp vec3 sunB = cross(center, sunT);
++    highp vec3 ngT = sunT;
++    highp vec3 ngB = sunB;
++    highp float cutoff = -1.0;
++    highp float backMass = 0.0;
++    highp float frontVisibility = 1.0;
++    bool fullyFront = mu >= s;
++    if (!fullyFront) {
++        highp float q = sqrt(max(1.0 - mu*mu, 0.0));
++        ngT = normalize(ng - mu * center);
++        ngB = cross(center, ngT);
++        cutoff = clamp(-mu * c / (s * q), -1.0, 1.0);
++        backMass = contactSunCapCdf(cutoff, c);
++        frontVisibility = 1.0 - backMass;
++        if (frontVisibility <= 0.0) {
++            return 1.0;
++        }
++        // If cap mass rounds to zero, retaining the original points avoids
++        // introducing numerical transport motion at the full-front limit.
++        fullyFront = backMass <= 0.0;
++    }
++
++    highp float externalOcclusionSum = 0.0;
++    for (int i = 0; i < 16; ++i) {
++        int reversed = ((i & 1) << 3) | ((i & 2) << 1) | ((i & 4) >> 1) | ((i & 8) >> 3);
++        highp vec2 u = (vec2(float(i), float(reversed)) + 0.5) * (1.0 / 16.0);
++        highp float z = 1.0 - u.x * (1.0 - c);
++        highp float r = sqrt(max((1.0 - z) * (1.0 + z), 0.0));
++        highp float phi = 2.0 * PI * u.y;
++        highp vec3 direction = normalize(center * z + r * (sunT * cos(phi) + sunB * sin(phi)));
++        if (!fullyFront) {
++            // Recover the original point's marginal and conditional uniforms
++            // in the Ng frame, then transport only into the clipped cap.
++            // At backMass→0 this becomes the identity on the global pattern.
++            highp float scale = c / (s * dot(direction, center));
++            highp float sourceX = clamp(dot(direction, ngT) * scale, -1.0, 1.0);
++            highp float sourceY = dot(direction, ngB) * scale;
++            highp float sourceSide2 = max(1.0 - sourceX*sourceX, 0.0);
++            highp float sourceDenominator = sqrt(sourceSide2 *
++                    (c*c + s*s*(sourceX*sourceX + sourceY*sourceY)));
++            highp float sourceQ = sourceDenominator > 0.0
++                    ? clamp(sourceY / sourceDenominator, -1.0, 1.0) : 0.0;
++            highp float target = backMass + frontVisibility * contactSunCapCdf(sourceX, c);
++            // Conditional transport moves X only toward the visible side.
++            highp float x = contactSunInverseCapCdf(target, max(cutoff, sourceX), c);
++            highp float side = sqrt(max(1.0 - x*x, 0.0));
++            highp float y = sourceQ * side * sqrt((c*c + s*s*x*x) /
++                    (1.0 - s*s*sourceQ*sourceQ*side*side));
++            direction = normalize(c * center + s * (x*ngT + y*ngB));
++        }
++        externalOcclusionSum += screenSpaceContactShadow(direction);
++    }
++    return saturate(backMass + frontVisibility * externalOcclusionSum * (1.0 / 16.0));
++}
++
++#endif
++
+ void evaluateDirectionalLight(const MaterialInputs material,
+         const PixelParams pixel, inout vec3 color) {
+ 
+@@ -72,7 +196,11 @@ void evaluateDirectionalLight(const MaterialInputs material,
+         }
+         if ((frameUniforms.directionalShadows & 0x2) != 0 && visibility > 0.0) {
+             if ((object_uniforms_flagsChannels & FILAMENT_OBJECT_CONTACT_SHADOWS_BIT) != 0) {
++#if defined(SUN_AS_AREA_LIGHT) && defined(HAS_ATTRIBUTE_TANGENTS) && MATERIAL_FEATURE_LEVEL >= 1
++                ssContactShadowOcclusion = screenSpaceSunContactShadow(light.l);
++#else
+                 ssContactShadowOcclusion = screenSpaceContactShadow(light.l);
++#endif
+             }
+         }
+ 
+diff --git a/shaders/src/surface_shading_model_cloth.fs b/shaders/src/surface_shading_model_cloth.fs
+index 53d20d121d1c9e2210997af038fb6596e79fb6ae..d2d1a8043a4c4108c0963a52be6052644ee63ab6 100644
+--- a/shaders/src/surface_shading_model_cloth.fs
++++ b/shaders/src/surface_shading_model_cloth.fs
+@@ -49,7 +49,12 @@ vec3 surfaceShading(const PixelParams pixel, const Light light, float occlusion)
+     color *= light.colorIntensity.rgb * (light.colorIntensity.w * light.attenuation * occlusion);
+ #else
+ #if defined(HAS_COLORED_PENUMBRA)
+-    vec3 penumbraColor = min(vec3(1.0 / PI), Fd / max(2.0 * (1.0 - pixel.diffuseColor), vec3(FLT_EPS)));
++    // HeavenBench patch: clamp the (1.0 - pixel.diffuseColor) divisor to a
++    // small positive epsilon so it can never reach 0 on near-white/white
++    // surfaces, where it otherwise blows up to Inf/NaN and renders as bright
++    // multicolour specular "fireflies". The tint is unchanged where the divisor
++    // was already > eps. (Mirrors the standard-model fix.)
++    vec3 penumbraColor = min(vec3(1.0 / PI), Fd / (2.0 * max(1.0 - pixel.diffuseColor, vec3(1e-3))));
+     Fd = mix(penumbraColor, Fd, pow4(occlusion));
+ #endif
+ 
+diff --git a/shaders/src/surface_shading_model_standard.fs b/shaders/src/surface_shading_model_standard.fs
+index 547f63f29d0642db7a7bf37d7a475ea2795ad2d3..c97841df8fd26f60ddf3c8420777d5209c7f2933 100644
+--- a/shaders/src/surface_shading_model_standard.fs
++++ b/shaders/src/surface_shading_model_standard.fs
+@@ -136,8 +136,13 @@ vec3 surfaceShading(const PixelParams pixel, const Light light, float occlusion)
+     // TODO: attenuate the diffuse lobe to avoid energy gain
+ 
+ #if defined(HAS_COLORED_PENUMBRA)
+-    // Saturate the diffuse color to simulate subsurface scattering
+-    vec3 penumbraColor = min(vec3(1.0 / PI), Fd / max(2.0 * (1.0 - pixel.diffuseColor), vec3(FLT_EPS)));
++    // Saturate the diffuse color to simulate subsurface scattering.
++    // HeavenBench patch: the divisor (1.0 - pixel.diffuseColor) reaches 0
++    // on near-white/white surfaces (diffuseColor -> 1), making this divide blow
++    // up to Inf/NaN and rendering as bright multicolour specular "fireflies".
++    // Clamp the divisor to a small positive epsilon so it can never reach 0;
++    // the tint is visually unchanged everywhere the divisor was already > eps.
++    vec3 penumbraColor = min(vec3(1.0 / PI), Fd / (2.0 * max(1.0 - pixel.diffuseColor, vec3(1e-3))));
+     Fd = mix(penumbraColor, Fd, pow4(occlusion));
+ #endif
+ 
+diff --git a/shaders/src/surface_shading_parameters.fs b/shaders/src/surface_shading_parameters.fs
+index 3c7d3aa31bce3852c133ed9e7efa3e5e01bf6116..00b77791a873e71f5ef051707848e9e559451066 100644
+--- a/shaders/src/surface_shading_parameters.fs
++++ b/shaders/src/surface_shading_parameters.fs
+@@ -41,6 +41,19 @@ void computeShadingParams() {
+          frameUniforms.worldFromViewMatrix[2].xyz; // ortho camera backward dir
+     shading_view = normalize(sv);
+ 
++#if defined(VARIANT_HAS_SHADOWING) && defined(HAS_ATTRIBUTE_TANGENTS)
++    // Vertex normals may be smoothed or predate vertex displacement. Detect
++    // contact rays entering the actual receiver at their origin. Evaluate
++    // derivatives before alpha discard and divergent lighting/shadow tests.
++    highp vec3 plane = cross(dFdx(shading_position), dFdy(shading_position));
++    highp float planeLength2 = dot(plane, plane);
++    shading_contactShadowNormal = planeLength2 > 1e-30
++            ? plane * inversesqrt(planeLength2) : shading_geometricNormal;
++    if (dot(shading_contactShadowNormal, shading_view) < 0.0) {
++        shading_contactShadowNormal = -shading_contactShadowNormal;
++    }
++#endif
++
+     // we do this so we avoid doing (matrix multiply), but we burn 4 varyings:
+     //    p = clipFromWorldMatrix * shading_position;
+     //    shading_normalizedViewportCoord = p.xy * 0.5 / p.w + 0.5
+diff --git a/shaders/src/surface_shadowing.fs b/shaders/src/surface_shadowing.fs
+index 9838e585417e1d0cf4fdf5383d414c463f50a032..d73f83d436afda8343a8f345b22e0623fb306ee8 100644
+--- a/shaders/src/surface_shadowing.fs
++++ b/shaders/src/surface_shadowing.fs
+@@ -400,34 +400,48 @@ struct ScreenSpaceRay {
+ };
+ 
+ void initScreenSpaceRay(out ScreenSpaceRay ray, highp vec3 wsRayStart, vec3 wsRayDirection, float wsRayLength) {
+-    highp mat4 worldToClip = getClipFromWorldMatrix();
+-    highp mat4 viewToClip = getClipFromViewMatrix();
++    // The structure buffer is rendered WITHOUT the color pass TAA jitter.
++    // prepareSSR supplies this unjittered view-to-texture projection even
++    // when reflections are disabled. Its Z uses the same reversed depth.
++    highp mat4 viewToTexture = frameUniforms.ssrUvFromViewMatrix;
++    highp mat4 worldToTexture = viewToTexture * getViewFromWorldMatrix();
+ 
+     // ray end in world space
+     highp vec3 wsRayEnd = wsRayStart + wsRayDirection * wsRayLength;
+ 
+-    // ray start/end in clip space (z is inverted: [1,0])
+-    highp vec4 csRayStart = worldToClip * vec4(wsRayStart, 1.0);
+-    highp vec4 csRayEnd = worldToClip * vec4(wsRayEnd, 1.0);
+-    highp vec4 csViewRayEnd = csRayStart + viewToClip * vec4(0.0, 0.0, wsRayLength, 0.0);
++    // Homogeneous native texture coordinates (reversed Z).
++    highp vec4 csRayStart = worldToTexture * vec4(wsRayStart, 1.0);
++    highp vec4 csRayEnd = worldToTexture * vec4(wsRayEnd, 1.0);
++    highp vec4 csViewRayEnd = csRayStart + viewToTexture * vec4(0.0, 0.0, wsRayLength, 0.0);
+ 
+-    // ray start/end in screen space (z is inverted: [1,0])
++    // Projected native texture coordinates (z is inverted: [1,0]).
+     ray.ssRayStart = csRayStart.xyz * (1.0 / csRayStart.w);
+     ray.ssRayEnd = csRayEnd.xyz * (1.0 / csRayEnd.w);
+     ray.ssViewRayEnd = csViewRayEnd.xyz * (1.0 / csViewRayEnd.w);
+ 
+-    // convert all to uv (texture) space (z is inverted: [1,0])
+-    highp vec3 uvRayEnd = vec3(ray.ssRayEnd.xy * 0.5 + 0.5, ray.ssRayEnd.z);
+-    ray.uvRayStart = vec3(ray.ssRayStart.xy * 0.5 + 0.5, ray.ssRayStart.z);
++    // Convert native texture UV back to logical UV. The sampler below applies
++    // uvToRenderTargetUV once; this Y flip is its own inverse on Vulkan/Metal.
++    highp vec3 uvRayEnd = vec3(uvToRenderTargetUV(ray.ssRayEnd.xy), ray.ssRayEnd.z);
++    ray.uvRayStart = vec3(uvToRenderTargetUV(ray.ssRayStart.xy), ray.ssRayStart.z);
+     ray.uvRay = uvRayEnd - ray.uvRayStart;
+ }
+ 
+ float screenSpaceContactShadow(vec3 lightDirection) {
+-    // cast a ray in the direction of the light
+-    float occlusion = 0.0;
+     int kStepCount = (frameUniforms.directionalShadows >> 8) & 0xFF;
+     float kDistanceMax = frameUniforms.ssContactShadowDistance;
++    if (kStepCount <= 0 || kDistanceMax <= 0.0) {
++        return 0.0;
++    }
+ 
++    // A ray entering the actual receiver is occluded at t=0. A finite first
++    // step can jump beyond the depth slab on steep faces, randomly missing
++    // this intersection as its dither changes. Do not march past that hit.
++    if (dot(shading_contactShadowNormal, lightDirection) < 0.0) {
++        return 1.0;
++    }
++
++    // Cast the remaining rays towards the light through the depth buffer.
++    float occlusion = 0.0;
+     ScreenSpaceRay rayData;
+     initScreenSpaceRay(rayData, shading_position, lightDirection, kDistanceMax);
+ 
+@@ -443,12 +457,46 @@ float screenSpaceContactShadow(vec3 lightDirection) {
+     // normalized position on the ray (0 to 1)
+     highp float t = dt * dither + dt;
+ 
++    highp vec2 depthSize = vec2(textureSize(sampler0_structure, 0));
+     highp vec3 ray;
+     for (int i = 0 ; i < kStepCount ; i++, t += dt) {
+         ray = rayData.uvRayStart + rayData.uvRay * t;
+-        highp float z = textureLod(sampler0_structure, uvToRenderTargetUV(ray.xy), 0.0).r;
+-        highp float dz = z - ray.z;
+-        if (abs(tolerance - dz) < tolerance) {
++        highp vec2 nativeUv = uvToRenderTargetUV(ray.xy);
++        // Reconstruct the continuous surface without connecting silhouettes:
++        // require both point and bilinear depths to intersect the ray slab.
++        // This tests sampled geometry consistently across triangle boundaries.
++        // See Tomasz Stachowiak's dual-depth reconstruction discussion:
++        // https://gist.github.com/h3r2tic/9c8356bdaefbe80b1a22ae0aaee192db
++        // Gather also supplies the nearest value, so no fifth fetch is needed.
++        // ESSL 300 cannot gather; explicitly clamp four texelFetch samples.
++        highp vec2 samplePosition = nativeUv * depthSize - 0.5;
++        highp vec2 basePosition = floor(samplePosition);
++#if defined(FILAMENT_HAS_FEATURE_TEXTURE_GATHER)
++        // Gather coordinates can have fewer fractional bits than shader math.
++        // Sample the footprint center so hardware and interpolation weights
++        // cannot select different 2x2 neighborhoods at texel boundaries.
++        highp vec4 depths = textureGather(sampler0_structure,
++                (basePosition + 1.0) / depthSize, 0);
++#else
++        ivec2 base = ivec2(basePosition);
++        ivec2 last = ivec2(depthSize) - 1;
++        highp vec4 depths = vec4(
++                texelFetch(sampler0_structure, clamp(base + ivec2(0, 1), ivec2(0), last), 0).r,
++                texelFetch(sampler0_structure, clamp(base + ivec2(1, 1), ivec2(0), last), 0).r,
++                texelFetch(sampler0_structure, clamp(base + ivec2(1, 0), ivec2(0), last), 0).r,
++                texelFetch(sampler0_structure, clamp(base, ivec2(0), last), 0).r);
++#endif
++        highp vec2 f = samplePosition - basePosition;
++        highp float filtered = mix(mix(depths.w, depths.z, f.x),
++                mix(depths.x, depths.y, f.x), f.y);
++        highp float nearest = f.y < 0.5
++                ? (f.x < 0.5 ? depths.w : depths.z)
++                : (f.x < 0.5 ? depths.x : depths.y);
++        highp float minimumDelta = min(filtered, nearest) - ray.z;
++        highp float maximumDelta = max(filtered, nearest) - ray.z;
++        // Only a small relative FP32 allowance remains. Per-triangle origin
++        // offsets and plane rejection create discontinuities on curved meshes.
++        if (minimumDelta > abs(ray.z) * 2e-6 && maximumDelta < 2.0 * tolerance) {
+             occlusion = 1.0;
+             break;
+         }

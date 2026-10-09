@@ -1,0 +1,28 @@
+// Heaven Benchmark — Debug arrow material
+
+// Solid-color unlit material used to visualise wind direction at
+// each flag during cloth-sim debugging. The renderable is a
+// thin elongated cuboid scaled and oriented to match the wind
+// vector in world space; this material just gives it a constant
+// emissive colour so it stands out against the scene.
+
+// `color` is set per-instance via setParameter so we can use a
+// distinct hue for each flag if helpful.
+
+material {
+    name : heaven_debug_arrow,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    parameters : [
+        { type : float3, name : color }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(materialParams.color, 1.0);
+    }
+}

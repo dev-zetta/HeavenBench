@@ -1,0 +1,42 @@
+{
+  "runtime_commit": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+  "runtime_sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+  "files": [
+    {
+      "path": "AppImage-runtime-LICENSE",
+      "source": "https://raw.githubusercontent.com/AppImage/type2-runtime/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/LICENSE",
+      "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1"
+    },
+    {
+      "path": "musl-COPYRIGHT",
+      "source": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+    },
+    {
+      "path": "libfuse-LGPL2.txt",
+      "source": "https://raw.githubusercontent.com/libfuse/libfuse/fuse-3.15.0/LGPL2.txt",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+    },
+    {
+      "path": "squashfuse-LICENSE",
+      "source": "https://raw.githubusercontent.com/vasi/squashfuse/0.5.2/LICENSE",
+      "sha256": "9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13"
+    },
+    {
+      "path": "zstd-LICENSE",
+      "source": "https://raw.githubusercontent.com/facebook/zstd/v1.5.6/LICENSE",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+    },
+    {
+      "path": "zlib-LICENSE",
+      "source": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+    },
+    {
+      "path": "mimalloc-LICENSE",
+      "source": "https://raw.githubusercontent.com/microsoft/mimalloc/v2.1.7/LICENSE",
+      "sha256": "19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d"
+    }
+  ],
+  "runtime_url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
+}

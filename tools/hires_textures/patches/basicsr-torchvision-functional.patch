@@ -1,0 +1,10 @@
+diff --git a/basicsr/data/degradations.py b/basicsr/data/degradations.py
+index 4d1de83..d1f5434 100644
+--- a/basicsr/data/degradations.py
++++ b/basicsr/data/degradations.py
+@@ -8 +8,4 @@
+-from torchvision.transforms.functional_tensor import rgb_to_grayscale
++try:
++    from torchvision.transforms.functional_tensor import rgb_to_grayscale
++except ModuleNotFoundError:
++    from torchvision.transforms.functional import rgb_to_grayscale

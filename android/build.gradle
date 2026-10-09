@@ -1,0 +1,10 @@
+plugins {
+    id 'com.android.application' apply false
+}
+
+def outputRoot = providers.gradleProperty('heavenBuildRoot')
+    .getOrElse(new File(rootDir, '../build/android-gradle').absolutePath)
+layout.buildDirectory.set(file(outputRoot))
+subprojects {
+    layout.buildDirectory.set(new File(outputRoot, project.name))
+}

@@ -1,0 +1,965 @@
+// Heaven Benchmark — Rain-impact splashes / ripples (Splash_System)
+
+// Part of the weather system.
+// Renders rain-impact ripples on near-horizontal ground beneath the
+// camera-centered precipitation volume.
+
+// ── Why this is a SCREEN-SPACE fullscreen pass (the 5th, correct approach) ──
+
+// The previous four attempts built discrete 3D ripple QUADS and placed each by
+// projecting one per-slot world anchor to a SINGLE screen pixel, sampling the
+// depth buffer there, and dropping the quad at that surface. The scene depth
+// buffer contains trees, grass blades and distant islands — not just ground —
+// so a single probe pixel routinely landed on foliage/grass tips, leaving rings
+// floating in mid-air above the real surface. As the camera moved, that one
+// projected pixel swept across different surfaces frame-to-frame, so the rings
+// jumped, pulsed and popped. A single per-splash screen probe simply cannot
+// reliably find "ground" in a foliage-filled scene.
+
+// This material replaces that entirely with the Breath-of-the-Wild
+// screen-space rain technique, adapted to the repo's existing godrays / volfog
+// depth-sampling infrastructure. It is a FULLSCREEN world-space quad placed in
+// front of the camera each frame (exactly like heaven_godrays.mat /
+// heaven_volumetric_fog.mat), and it shades EVERY visible pixel:
+
+//   1. Sample the LINEAR scene depth (F, eye-space FORWARD distance in
+//      metres) at the Y-flipped UV (LOCKED convention, scene-depth-pipeline
+//      — same as godrays / volfog / heat haze / lens flare). Sky /
+//      no-geometry pixels read the far clear value (~2000 m) and output zero —
+//      no ripple in the sky. A null/unbound texture reads <= 0 and is treated
+//      as far.
+//   2. Reconstruct the pixel's WORLD-SPACE position from the linear distance
+//      using FILAMENT'S OWN getWorldFromClipMatrix() to unproject the view ray
+//      (guaranteed consistent with how the scene + depth pre-pass were
+//      rendered), then place the surface point at its eye-forward distance along
+//      that ray (worldPos = camWorld + rayDir * dist / dot(rayDir, camFwd)).
+//      This yields TRUE camera-relative Z-up world space: flat ground
+//      reconstructs the SAME +Z up-normal at every camera angle. (The depth is
+//      no longer a reversed-Z value fed straight to clip.z — that attachment is
+//      gone; only the linear distance along the unprojected ray is used.)
+//   3. Reconstruct the surface NORMAL with an EDGE-AWARE multi-tap method
+//      (NOT raw dFdx/dFdy, which is noisy on the half-res depth buffer and
+//      garbage at silhouettes). Sample depth at the centre and +/-1 half-res
+//      texel in X and Y (5 taps), reconstruct each tap's world position, and on
+//      each axis pick the neighbour whose depth is CLOSER to the centre — the
+//      standard "improved normal from depth" trick (Turánszki / Yuwen Wu).
+//      Building the normal from the two NEAR edge vectors avoids reconstructing
+//      across a silhouette/foliage discontinuity. n = normalize(cross(hVec,
+//      vVec)); the cross product of two screen derivatives of a PLANAR surface
+//      points the same way (+Z for flat ground) at ANY viewing angle, so this
+//      is foreshortening-invariant by construction.
+//   4. GROUND TEST (the realism step), both parts VIEW-ANGLE-INVARIANT:
+//        - Upward-facing only: accept where abs(n.z) >= cos(45°) (Z-up). A
+//          planar surface reconstructs the SAME up-normal regardless of how
+//          foreshortened it is on screen, so flat ground passes at every angle
+//          while trunks / walls (n.z ~ 0) fail. The cone is deliberately LOOSER
+//          than weather_shader_ref::splash_accepted's nominal 30° because the
+//          half-res depth makes the reconstructed normal wobble a few degrees;
+//          a literal 30° over-rejected real ground. weather_shader_ref.h is
+//          unchanged.
+//        - Edge / foliage rejection as a RELATIVE DEPTH-DISCONTINUITY test, NOT
+//          an absolute world-step. A planar surface (even fully foreshortened)
+//          has depth that varies SMOOTHLY across neighbours — its second
+//          difference is ~0 — whereas a foliage/grass/silhouette edge has a
+//          depth JUMP, i.e. a large second difference. We measure the relative
+//          second difference of LINEAR depth (camera distance) across the taps,
+//          |linZ(L)+linZ(R)-2*linZ(C)| / linZ(C), and reject when it exceeds a
+//          small threshold. Because it is normalised by linZ(C) it is
+//          scale/distance invariant, and because a foreshortened plane is
+//          locally linear in depth it stays ~0 at ANY angle — so flat ground
+//          passes at grazing angles while real discontinuities are rejected.
+//          This replaces the old length(fwidth(worldPos)) world-step test,
+//          which scaled with perspective foreshortening: at a grazing angle two
+//          adjacent pixels on flat ground map to world points many metres apart,
+//          so that test misclassified flat ground as an edge and rejected it
+//          (the green-only-when-top-down symptom).
+//   5. Tile ripples in ABSOLUTE WORLD XY so they are world-anchored and stable
+//      (do NOT slide with the camera). worldFromClip reconstructs a
+//      CAMERA-RELATIVE world position, so we add the pushed ABSOLUTE camera
+//      world position (cameraPos uniform) to get an absolute world XY:
+//      worldAbs = worldPos + cameraPos. As the camera moves by Δ the
+//      camera-relative worldPos decreases by Δ while cameraPos increases by Δ,
+//      so worldAbs is camera-INVARIANT for a fixed ground point → the ripple
+//      cell grid is world-locked. A ripple cell is floor(worldAbs.xy /
+//      rippleSpacing). The cell id is hashed for a per-cell spawn phase, a
+//      sub-cell jitter for the ripple centre, a SPATIAL spawn-probability gate,
+//      and a per-CYCLE temporal spawn gate — both gates scale with rain
+//      intensity so the spatial density AND the temporal rate of impacts track
+//      intensity; at medium intensity only a sparse scatter of cells
+//      ripple, fewer than the visible falling streaks.
+//   6. Animate each spawned cell by age = mod(time - cellPhase, period) with the
+//      period hard-capped at <= 2.0 s — mirroring weather_shader_ref::splash_age
+//      semantics. An expanding ring grows with age and fades out
+//      as age → period, so every impact completes and disappears within 2.0 s.
+//      ONE ripple per spawn (a discrete impact, not a constant pulsing pair).
+//      Ripples are evaluated by scanning the 3x3 world-space neighbourhood of
+//      cells around the fragment and accumulating each neighbour cell's ripple,
+//      so a ring centred in one cell spills smoothly into adjacent cells instead
+//      of being clipped at the cell boundary (no hard seams between impacts).
+//   7. Composite a subtle, cool, translucent highlight over the scene (NOT bold
+//      white circles). Alpha is modulated by the ground-accept flag, intensity,
+//      a soft distance fade, and the ring profile, and output premultiplied for
+//      the transparent blender (same convention as volfog / heaven_unlit).
+
+// Correctness: every shaded ripple pixel comes from a REAL visible depth sample
+// that passed the upward-normal (45° visual cone) AND relative depth-discontinuity
+// (foliage/edge) tests — both VIEW-ANGLE-INVARIANT — so ripples can only appear
+// on visible, near-horizontal, non-foliage ground at ALL viewing angles, never
+// on trees / grass / walls. Because the animation is tiled by WORLD XY and is a
+// continuous function of world position + time (no discrete quad re-placed per
+// frame), the rings are stable in world space and cannot jump / pulse as the
+// camera moves. The <= 2.0 s capped age guarantees each ripple completes and
+// clears (mirrors splash_age).
+
+// The geometry (the single fullscreen quad) is BUILT ONCE; the splash quad is
+// pulled out of the scene during the depth pre-pass
+// (RainFeature::on_depth_prepass_begin/end) so it never reads the depth
+// attachment it would otherwise be written into — no Vulkan read/write feedback
+// hazard.
+
+// Material parameters (pushed per frame by RainFeature::update):
+//   depthTexture: sampler2d — shared scene-depth pre-pass (frame.depth_texture)
+//   time: float     — global animation time (getUserTime(), seconds)
+//   splashIntensity: float     — effective rain intensity in [0,1] (0 => nothing)
+//   cameraPos: float3     — ABSOLUTE camera world position (engine Z-up),
+//                                        used to recover absolute world XY for the
+//                                        world-anchored ripple tiling (Issue 1) and,
+//                                        via cameraPos.z, the dropTopZ of the shared
+//                                        fall law
+//   volumeExtent: float     — camera-centered volume half-extent (matches
+//                                        the streak uniform / weather_ref::kVolumeExtent)
+//   fallSpeed: float     — nominal fall speed (matches the streak uniform /
+//                                        RainFeature kFallSpeed); the splash retimes each
+//                                        ripple from the SAME shared fall law the streaks
+//                                        use, so a ripple blooms where + when a streak lands
+
+// World reconstruction uses Filament's built-in getWorldFromClipMatrix() inside
+// the shader, which yields a CAMERA-RELATIVE world position. The distance fade
+// uses the camera-relative camera origin (frameUniforms.worldFromViewMatrix[3].xyz,
+// the same value the streak shader uses). The ripple TILING instead needs an
+// ABSOLUTE world XY so the cell grid is world-locked, so it adds the pushed
+// absolute `cameraPos` uniform (worldAbs = worldPos + cameraPos) — exactly the
+// absolute-camera anchoring trick the streak shader (heaven_rain.mat) uses to
+// keep drops world-static.
+
+// Ripple tuning (spacing, period, ring width, colour, …) are compile-time
+// consts in the fragment shader so the per-frame uniform set stays minimal.
+
+// Compiled with: matc -a opengl -p desktop -o heaven_splash.filamat heaven_splash.mat
+
+material {
+    name : heaven_splash,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    // World-space fullscreen quad (NOT vertexDomain:device), same shell as
+    // heaven_volumetric_fog.mat. The CPU places this quad just inside the far
+    // plane in front of the camera each frame so every screen pixel runs the
+    // fragment shader; the fragment stage does all the work.
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        // Linear scene depth (F, eye-space FORWARD distance in metres) from
+        // the depth pre-pass / heaven_depth proxy render (FrameContext::depth_texture).
+        { type : sampler2d, name : depthTexture, precision : high, filterable : false },
+
+        // Animation + density.
+        { type : float,    name : time },
+        { type : float,    name : splashIntensity },
+
+        // ABSOLUTE camera world position (engine Z-up world), pushed per frame
+        // from frame.camera->position — exactly the value the streak shader
+        // (heaven_rain.mat) pushes and uses to keep drops world-static. This is
+        // RE-ADDED to fix the ripples-slide-with-camera bug (Issue 1): the
+        // reconstructed worldPos is in Filament's CAMERA-RELATIVE world space
+        // (origin near the camera), so worldPos.xy for a FIXED ground point
+        // shifts as the camera moves and the ripple cell grid slid with it. We
+        // recover an ABSOLUTE world XY for tiling as worldPos + cameraPos: as
+        // the camera moves by Δ the camera-relative worldPos decreases by Δ
+        // while cameraPos increases by Δ, so the sum is camera-INVARIANT for a
+        // fixed ground point → the cell grid is world-locked → ripples stop
+        // sliding. (The normal/orientation never needed this because a normal
+        // is translation-invariant; only the tiling does.) Used for the XY
+        // tiling AND, via cameraPos.z, as the camera Z that anchors the shared
+        // fall law's dropTopZ = cameraPos.z + volumeExtent. The distance fade
+        // keeps using the camera-relative camWorld.
+        { type : float3,   name : cameraPos, precision : high },
+
+        // Camera-centered precipitation volume half-extent (world units) and the
+        // nominal fall speed — RE-ADDED for the rain/splash UNIFICATION. The
+        // splash now retimes each ripple from the SAME shared lattice + fall law
+        // the streak shader uses (engine/weather_shader_ref.h): the impact time
+        // of the drop that lands in a ground cell is a closed form in these two
+        // values plus the reconstructed ground height, so a ripple blooms
+        // exactly where and when a streak comes down. Pushed per frame by
+        // RainFeature::update from weather_ref::kVolumeExtent and kFallSpeed —
+        // the SAME values the streak uniforms carry, so the two agree.
+        { type : float,    name : volumeExtent, precision : high },
+        { type : float,    name : fallSpeed,    precision : high },
+        { type : float4,   name : splashShapeTuning },
+        { type : float4,   name : splashShadingTuning }
+    ],
+}
+
+vertex {
+    // No-op vertex stage. The CPU positions the quad in world space (same as
+    // godrays / volfog); we just need UV0 to flow through to the fragment
+    // shader.
+    void materialVertex(inout MaterialVertexInputs material) {}
+}
+
+fragment {
+    // Cheap 2D hash → [0,1). Used to derive a per-ripple-cell spawn phase,
+    // sub-cell jitter and a spawn-probability gate from the world-space cell id.
+    float hash21(float2 p) {
+        float3 p3 = fract(float3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    float2 hash22(float2 p) {
+        float3 p3 = fract(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.xx + p3.yz) * p3.zy);
+    }
+
+    // One expanding ring at a given age fraction t01 (0..1 within its cycle) at
+    // radial distance `r` (world metres) from the ripple centre. The ring front
+    // marches outward with age and fades out as age → period, so every impact
+    // completes and disappears within the (<= 2.0 s) period.
+
+    // LOOK PASS: the old profile was a symmetric band (equal bright inner +
+    // outer edge), which read as a uniform bright stripe. A real water ripple
+    // has a bright THIN leading edge at the expanding front and a fainter
+    // trailing wash behind it. We now build a sharp leading edge right at the
+    // front (narrow smoothstep just inside `front`) and let it decay gently
+    // toward the centre (the trailing wash), so the ring reads as water rather
+    // than a solid band.
+    float rippleRing(float r, float t01, float maxRadius, float ringWidth) {
+        float front = t01 * maxRadius;
+        // Bright thin leading edge: peaks just inside the marching front and
+        // falls off quickly outward (so nothing draws ahead of the front).
+        float lead  = smoothstep(front - ringWidth, front, r)
+                    * (1.0 - smoothstep(front, front + ringWidth * 0.5, r));
+        // Faint trailing wash inside the ring (everything behind the front),
+        // decaying toward the centre so the interior is only a soft glint.
+        float trail = smoothstep(front - ringWidth * 4.0, front, r) * 0.25;
+        float band  = max(lead, trail * (1.0 - smoothstep(front, front + ringWidth, r)));
+        // Fade the whole ripple out over its life.
+        float fade = 1.0 - t01;
+        return band * fade;
+    }
+
+    // Reconstruct a world-space position from a screen-space UV and the LINEAR
+    // eye-space FORWARD distance (metres) sampled from the linear scene-depth
+    // texture (F, produced by the depth pre-pass / heaven_depth proxy render).
+    // The depth source is NO LONGER a reversed-Z attachment, so we do not feed a
+    // clip-z into getWorldFromClipMatrix; instead we unproject the pixel's view
+    // ray with Filament's OWN getWorldFromClipMatrix() (guaranteed consistent
+    // with how the scene was rendered) and place the surface point at its
+    // eye-forward distance along that ray:
+    //     worldPos = camWorld + rayDir * (dist / dot(rayDir, camFwd))
+    // The ray is formed by unprojecting a far-plane clip point (Filament
+    // reversed-Z far = 0) and subtracting the camera origin; dividing the
+    // forward distance by dot(rayDir, camFwd) converts the FORWARD distance into
+    // a length along the (possibly off-axis) ray — the same forward-cosine
+    // conversion volfog uses (sceneRayLen = sceneDist / cosTheta).
+
+    // camWorld / camFwd are Filament's CAMERA-RELATIVE world camera origin and
+    // forward axis, so the result is in the SAME camera-relative Z-up world the
+    // old reconstruction produced: flat ground reconstructs the SAME +Z up-normal
+    // at every camera angle, and worldAbs = worldPos + cameraPos still recovers
+    // the absolute world XY the ripple tiling needs.
+    float3 worldFromUV(float2 screenUV, float dist, highp mat4 worldFromClip,
+                       float3 camWorld, float3 camFwd) {
+        float2 ndcXY   = screenUV * 2.0 - 1.0;
+        float4 farClip = float4(ndcXY, 0.0, 1.0);
+        float4 wp4     = worldFromClip * farClip;
+        float3 worldFar = wp4.xyz / wp4.w;
+        float3 rayDir   = normalize(worldFar - camWorld);
+        float  cosF     = max(dot(rayDir, camFwd), 1e-3);
+        return camWorld + rayDir * (dist / cosF);
+    }
+
+    // Sample the linear scene-depth texture (F, eye-space FORWARD distance in
+    // metres) at a SCREEN uv. Applies the LOCKED Y-flip (scene-depth-pipeline
+    // the offscreen RT is stored top-down versus the quad UV (Vulkan
+    // framebuffer orientation), the same convention as heaven_blit / godrays /
+    // volfog / heat haze / lens flare. Graceful fallback: a null/unbound
+    // texture reads a non-positive value — treat that as "far / no geometry"
+    // (2000 m) so splashes are NOT spuriously occluded before the depth pre-pass
+    // produces a valid texture.
+    float sampleSceneDist(float2 screenUV) {
+        float2 dUV = uvToRenderTargetUV(screenUV);
+        float d = texture(materialParams_depthTexture, dUV).r;
+        return d <= 0.0 ? 2000.0 : d;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // ─────────────────────────────────────────────────────────────────
+        // STAGED DEBUG VISUALIZATION (diagnostic only)
+
+        // We cannot see the screen; the USER runs the build and reports what
+        // they observe. These modes bisect the splash pipeline so we can find
+        // empirically WHERE the pixels are lost. Each mode (except 0) outputs
+        // an OPAQUE, unmistakable solid colour (full alpha) and returns
+        // immediately, BEFORE the ripple animation. Re-point SPLASH_DEBUG to
+        // a different number and re-run `./scripts/build.sh --materials` to
+        // switch views.
+
+        //   0 = real shader (no debug)
+        //   1 = solid CYAN for EVERY pixel, no tests at all
+        //         → confirms the fullscreen quad is actually rendering and is
+        //           not culled / occluded / mis-placed. If the screen does NOT
+        //           go cyan, the problem is structural, not the shader logic.
+        //   2 = sampled LINEAR depth as greyscale (eye-forward metres / 300,
+        //         using the same Y-flipped sample the real path uses)
+        //         → confirms the depth texture is bound + readable and shows
+        //           the on-screen depth range (near ground dark, far/sky bright).
+        //   3 = GREEN where the sky test passes (sceneDist < kSkyDist, i.e.
+        //         scene geometry), RED where it fails (sky / far plane)
+        //         → how much of the screen is "scene" vs "sky" to this pass.
+        //   4 = GREEN where sky + upward-normal cone pass, RED otherwise
+        //         → isolates the NORMAL test. With the edge-aware multi-tap
+        //           reconstruction this should be GREEN on flat ground at ALL
+        //           viewing angles, not just top-down.
+        //   5 = GREEN where sky + normal + RELATIVE planarity (edge/foliage)
+        //         test pass, RED otherwise
+        //         → isolates the foliage rejection test (relative 2nd-difference
+        //           of linear depth; flat ground ~0 at any angle, edges large).
+        //   6 = GREEN where ALL ground tests incl. distance fade pass (every
+        //         pixel that COULD host a ripple), RED otherwise
+        //         → KEY view: flat ground in front GREEN ⇒ acceptance is fine
+        //           and the problem is the ripple gate/profile (tuning); RED
+        //           ⇒ acceptance is the culprit and modes 4/5 say which test.
+        //   7 = solid YELLOW gated ONLY by splashIntensity > 0.0001 (no other
+        //         test); BLACK otherwise
+        //         → confirms the splashIntensity uniform reaches the shader as
+        //           > 0 during the user's run. If MODE 7 is black, the
+        //           intensity uniform is the bug (e.g. effective_intensity()
+        //           is 0 in interactive mode).
+        //   8 = the reconstructed, edge-aware surface NORMAL encoded as RGB:
+        //         baseColor = float4(normalize(n)*0.5 + 0.5, 1). This is the
+        //         AXIS-DISAMBIGUATION view. It shows which world axis the
+        //         reconstructed ground normal points along, telling us the real
+        //         up axis of the reconstructed worldPos space unambiguously:
+        //           - flat ground reads BLUE-ish  → n ≈ +Z → space is Z-UP
+        //             (matches the code analysis: inverse(perspective*view) with
+        //             view = lookAt(.., up=+Z) reconstructs the engine Z-up
+        //             world). If so, the abs(n.z) up-test is on the RIGHT axis
+        //             and the inversion must come from the normal reconstruction
+        //             itself, NOT the up axis.
+        //           - flat ground reads GREEN-ish → n ≈ +Y → space is Y-UP and
+        //             the up-test must use abs(n.y).
+        //           - flat ground reads RED-ish   → n ≈ +X → space is X-up.
+        //         (Sky / degenerate pixels read ~grey 0.5,0.5,0.5 since n≈0.)
+        //   9 = abs(normal) up-axis probe: baseColor = float4(abs(n.y), 0,
+        //         abs(n.z), 1) using the normalized n. One image shows BOTH
+        //         candidate up axes at once:
+        //           - flat ground BLUE  → abs(n.z)≈1 → Z is up (expected).
+        //           - flat ground RED   → abs(n.y)≈1 → Y is up.
+        //         A clean grayscale abs(n.z) alone would also be WHITE on flat
+        //         ground iff Z is up; the red/blue split just makes the Y-vs-Z
+        //         decision a single glance.
+
+        // NOTE: the `intensity <= 0.0001` early-out is bypassed in every debug
+        // mode (guarded to MODE 0 only) so the debug colours still show even
+        // if the intensity plumbing is the bug.
+        // ─────────────────────────────────────────────────────────────────
+        #define SPLASH_DEBUG 0
+
+        // MODE 1: solid CYAN for every pixel — NO tests at all. Earliest
+        // possible return, before depth is even sampled, so this purely
+        // answers "is the quad rendering to the screen?".
+        #if SPLASH_DEBUG == 1
+            material.baseColor = float4(0.0, 1.0, 1.0, 1.0);
+            return;
+        #endif
+
+        // Solid debug colours reused by the GREEN/RED pass-fail modes.
+        const float4 DBG_GREEN = float4(0.0, 1.0, 0.0, 1.0);
+        const float4 DBG_RED   = float4(1.0, 0.0, 0.0, 1.0);
+
+        // ── Ripple tuning constants (kept off the per-frame uniform set) ──
+        // World spacing between ripple cells (metres). Issue 2: raised 0.6 ->
+        // 1.2 so each cell covers ~4x the area and far fewer impacts appear per
+        // unit ground — the splashes read as clearly separated discrete events,
+        // fewer than the visible falling streaks, like real rain.
+        const float kRippleSpacing = 1.2;
+        // Fraction of cells eligible to ripple at full intensity. Lowered to
+        // 0.25 so at medium intensity (0.5) only a sparse scatter of cells ever
+        // ripple. This SPATIAL gate scales with rain intensity so splash density
+        // tracks intensity; at intensity 0 the shader early-outs entirely
+        // so nothing draws. The temporal rate now follows from the shared
+        // fall law (how often a drop lands in a cell vs the ripple duration),
+        // not a separate per-cycle spawn gate.
+        const float kActiveFrac    = 0.25;
+        // Ring geometry. With cross-cell spill (the 3x3 world-space scan below)
+        // a ripple may now grow up to ~half the spacing and bleed into the
+        // neighbouring cells without being clipped, so the max radius is a
+        // fraction of the FULL spacing (kept < kRippleSpacing so a cell only
+        // ever reaches its immediate neighbours, which the 3x3 scan covers).
+        // TUNING: max radius REDUCED 30% per user request (0.5 -> 0.5*0.7 =
+        // 0.35 stays well under kRippleSpacing (1.2), so the cross-cell
+        // ripple spill still falls within the 3x3 / 5x5 scan neighbourhood
+        // (0.35 << 1.2) and rings are never clipped at cell boundaries.
+        const float kMaxRadiusFrac = 0.35;
+        const float kRingWidth     = 0.12;
+
+        // ── GROUND-TEST constants ────────────────────────────────────────
+        // Upward-facing cone half-angle. The reference (weather_shader_ref::
+        // splash_accepted) uses a nominal 30° cone, but the SHADER reconstructs
+        // its normal from a HALF-RES depth buffer (edge-aware multi-tap, below),
+        // which is noisier than an analytic normal: a genuinely flat ground
+        // fragment can wobble several degrees off +Z. A literal 30° cone
+        // therefore over-rejects real ground. This shader-local visual cone is
+        // deliberately LOOSER than the reference's nominal 30° — 45° — so genuine
+        // flat ground reliably passes while trunks / walls (n.z ~ 0, ~90° off up)
+        // still fail by a wide margin. The KEY point is that the up-normal of a
+        // PLANAR surface is the same at every viewing angle, so this test is
+        // foreshortening-invariant. weather_shader_ref.h is left untouched; only
+        // this visual constant changes. cos(45°) = 0.70710678.
+        const float COS_UP_CONE    = 0.70710678;
+
+        // Half-res depth texel size in UV. The depth pre-pass is rendered at
+        // w/2 x h/2 (depth_prepass.cpp), so one half-res texel spans 2 screen
+        // pixels. We sample +/-1 half-res texel for the multi-tap normal +
+        // planarity tests. textureSize() on the bound sampler gives the exact
+        // half-res dimensions, so the tap offset is correct at any resolution
+        // and we never hardcode a viewport size.
+        // (Computed below from textureSize once `depth` is sampled.)
+
+        // Edge / foliage rejection as a RELATIVE second-difference of LINEAR
+        // depth (camera distance), NOT an absolute world-step.
+
+        // WHY THE OLD WORLD-STEP TEST KILLED FLAT GROUND AT GRAZING ANGLES: it
+        // rejected any pixel where length(fwidth(worldPos)) exceeded an
+        // allowance growing with camera distance. But fwidth(worldPos) is the
+        // world-space distance between two ADJACENT screen pixels, and under
+        // perspective that distance EXPLODES with the viewing angle: looking
+        // level/grazing across flat ground, two neighbouring pixels project to
+        // world points many metres apart (the ground "stretches" toward the
+        // horizon), so length(fwidth(worldPos)) for perfectly flat ground was
+        // huge and the test misclassified it as a foliage edge and rejected it.
+        // Only top-down (where adjacent pixels stay close in world space) passed
+        // — exactly the green-only-when-looking-straight-down symptom.
+
+        // THE FIX is a planarity measure that does NOT depend on viewing angle:
+        // the relative second difference of linear depth across the neighbour
+        // taps. A planar surface has depth that is locally LINEAR in screen
+        // space, so its second difference linZ(L)+linZ(R)-2*linZ(C) is ~0 no
+        // matter how foreshortened it is; a foliage/grass/silhouette edge has a
+        // depth JUMP, i.e. a large second difference. Normalising by linZ(C)
+        // makes it scale/distance invariant:
+        //     planarErr = |linZ(L)+linZ(R)-2*linZ(C)| / linZ(C)   (and up/down)
+        //     reject if max(planarErrX, planarErrY) > kPlanarityTol
+        // For a flat courtyard viewed at 15° above grazing, planarErr ~ 0 (the
+        // surface is linear between taps) so it PASSES; a foliage edge has a
+        // second difference of order the depth jump itself, planarErr >> tol, so
+        // it is rejected — at ANY viewing angle. 0.15 is loose enough for
+        // half-res depth quantisation on flat ground, tight enough to catch the
+        // metre-scale jumps at foliage/silhouette boundaries.
+        const float kPlanarityTol  = 0.15;
+
+        // Soft distance fade so distant ground is not speckled with sub-pixel
+        // rings (metres). Pushed out 45/90 -> 60/140 so that in a LEVEL view —
+        // where flat ground recedes to mid-distance rather than sitting right
+        // under the camera — near AND mid ground in front of the player still
+        // host ripples.
+        const float kFadeStart     = 60.0;
+        const float kFadeEnd       = 140.0;
+        // Watery, more saturated blue-cyan highlight. TUNING (user request:
+        // "more water-like"): the previous 0.60,0.70,0.82 was a desaturated
+        // grey-blue. Pull the RED channel down and keep BLUE highest for a
+        // cooler, more chromatic blue-cyan that reads like real water — red
+        // lowered, green mid, blue highest. (0.60,0.70,0.82 -> 0.42,0.62,0.82.)
+        const float3 kRippleColor  = float3(0.42, 0.62, 0.82);
+        // Overall alpha gain. LOOK PASS: dropped 0.9 -> 0.42 so the highlight is
+        // markedly more translucent/watery and stops blowing out to solid white.
+        // (Combined with the per-cell alpha randomisation below, individual
+        // impacts now range from faint to moderate, never opaque.)
+        // TUNING: alpha DECREASED a further 10% per user request (0.42 -> 0.42
+        // * 0.9 = 0.378) for an even more translucent glint. TUNING: alpha
+        // LOWERED a further 20% per user request (0.378 -> 0.378 * 0.8 = 0.3024
+        // -> 0.302) for an even more translucent glint.
+        const float  kAlphaGain    = 0.302;
+
+        // Open-sky / no-geometry threshold in metres. Geometry reads its
+        // (nearer) eye-forward distance; open sky / no geometry reads the far
+        // clear value (~2000 m), so a sample at or beyond kSkyDist is "sky" and
+        // hosts no ripple — matching the godrays / volfog / SSGI sky cutoff.
+        const float  kSkyDist      = 1500.0;
+
+        float intensity = materialParams.splashIntensity;
+
+        // MODE 7: solid YELLOW iff the splashIntensity uniform arrives > 0,
+        // BLACK otherwise. No other test. This is the FIRST thing gated by
+        // intensity, so it isolates the uniform plumbing: if the user sees
+        // black here, effective_intensity() is reaching the shader as 0.
+        #if SPLASH_DEBUG == 7
+            if (intensity > 0.0001) {
+                material.baseColor = float4(1.0, 1.0, 0.0, 1.0);
+            } else {
+                material.baseColor = float4(0.0, 0.0, 0.0, 1.0);
+            }
+            return;
+        #endif
+
+        // Intensity 0 (e.g. --rain-intensity 0 / --no-rain) ⇒ nothing drawn,
+        // Shipping_Look preserved. BYPASSED in debug modes so the debug
+        // colours still show even if intensity plumbing is the bug — only the
+        // real path (MODE 0) honours this early-out.
+        #if SPLASH_DEBUG == 0
+        if (intensity <= 0.0001) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+        #endif
+
+        float2 uv = getUV0();
+
+        // Sample the LINEAR scene depth (F, eye-space FORWARD distance in
+        // metres) produced by the depth pre-pass / heaven_depth proxy render —
+        // NOT the old reversed-Z attachment. sampleSceneDist applies the LOCKED
+        // Y-flip (offscreen RT is top-down vs the quad UV, same convention as
+        // heaven_blit / godrays / volfog / heat haze / lens flare) and the
+        // null/unbound guard (reads <= 0 → far 2000 m → treated as sky).
+        float sceneDist = sampleSceneDist(uv);
+
+        // Sky test result, reused by the GREEN/RED pass-fail debug modes (4/5/6)
+        // which do NOT early-return on sky — they paint sky pixels RED instead.
+        // Geometry reads its (nearer) eye-forward distance; open sky / no
+        // geometry reads the far clear value (~2000 m) ≥ kSkyDist.
+        bool skyPass = (sceneDist < kSkyDist);
+
+        // MODE 2: sampled LINEAR depth as greyscale, normalised by 300 m (near
+        // ground dark, far / sky bright), using the SAME Y-flipped sample the
+        // real path uses (inside sampleSceneDist). Confirms the depth texture is
+        // bound + readable and shows the on-screen depth range.
+        #if SPLASH_DEBUG == 2
+            float dbgD = clamp(sceneDist / 300.0, 0.0, 1.0);
+            material.baseColor = float4(dbgD, dbgD, dbgD, 1.0);
+            return;
+        #endif
+
+        // MODE 3: GREEN where the sky test passes (scene geometry), RED where
+        // it fails (sky / far plane). Shows how much of the screen is "scene"
+        // vs "sky" to this pass.
+        #if SPLASH_DEBUG == 3
+            material.baseColor = (sceneDist < kSkyDist) ? DBG_GREEN : DBG_RED;
+            return;
+        #endif
+
+        // Sky / far pixels read the far clear value (~2000 m) ≥ kSkyDist. No
+        // ripple there. In debug modes 4/5/6 we do NOT early-return here; RED
+        // marks the failing pixels so the whole screen stays informative.
+        #if SPLASH_DEBUG == 0
+        if (sceneDist >= kSkyDist) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+        #endif
+
+        // Reconstruct the pixel's world-space position from the LINEAR scene
+        // depth (see worldFromUV): unproject the view ray with Filament's own
+        // getWorldFromClipMatrix() and place the surface at its eye-forward
+        // distance along that ray. camWorld / camFwd are Filament's
+        // CAMERA-RELATIVE world camera origin and forward axis (the same values
+        // volfog uses), so worldPos is TRUE camera-relative Z-up world: flat
+        // ground reconstructs +Z at every camera angle, and worldAbs = worldPos
+        // + cameraPos still recovers the absolute world XY the ripple tiling
+        // needs. The previous reversed-Z reconstruction (sampled depth fed
+        // straight to clip.z) is gone with the depth attachment it read.
+        highp mat4 worldFromClip = getWorldFromClipMatrix();
+        float3 camWorld  = frameUniforms.worldFromViewMatrix[3].xyz;
+        float3 camFwd    = -normalize(frameUniforms.worldFromViewMatrix[2].xyz);
+        float3 worldPos  = worldFromUV(uv, sceneDist, worldFromClip, camWorld, camFwd);
+
+        // ── Edge-aware multi-tap depth sampling (5 taps) ─────────────────
+        // Sample the linear depth at +/-1 HALF-RES texel in X and Y around the
+        // centre. The depth pre-pass is half-res (depth_prepass.cpp renders
+        // w/2 x h/2), so textureSize() returns the half-res dimensions and
+        // 1/size is exactly one half-res texel in UV — i.e. two screen pixels.
+        // Using the real texel size keeps the taps on distinct depth samples at
+        // any resolution (raw dFdx/dFdy can stay inside one half-res texel and
+        // degenerate).
+        float2 texel = 1.0 / float2(textureSize(materialParams_depthTexture, 0));
+
+        // Each neighbour is BOTH sampled and reconstructed at its own SCREEN uv:
+        // sampleSceneDist applies the LOCKED Y-flip internally, so the sampled
+        // distance and the reconstructed NDC position are the SAME pixel — the
+        // reconstructed neighbours of a planar surface are coplanar with the
+        // centre, which is what makes the normal view-invariant (the per-tap-
+        // consistent mapping proven by depth_reconstruct_ref.h, also mirrored by
+        // heaven_ssgi.mat). With the linear depth + Y-flip-in-helper the manual
+        // depthUV Y-negation the reversed-Z path needed is gone.
+        float2 oL = float2(-texel.x, 0.0);
+        float2 oR = float2( texel.x, 0.0);
+        float2 oD = float2(0.0, -texel.y);
+        float2 oU = float2(0.0,  texel.y);
+        float dL = sampleSceneDist(uv + oL);
+        float dR = sampleSceneDist(uv + oR);
+        float dD = sampleSceneDist(uv + oD);
+        float dU = sampleSceneDist(uv + oU);
+
+        float3 wL = worldFromUV(uv + oL, dL, worldFromClip, camWorld, camFwd);
+        float3 wR = worldFromUV(uv + oR, dR, worldFromClip, camWorld, camFwd);
+        float3 wD = worldFromUV(uv + oD, dD, worldFromClip, camWorld, camFwd);
+        float3 wU = worldFromUV(uv + oU, dU, worldFromClip, camWorld, camFwd);
+
+        // Edge-aware normal reconstruction (Turánszki / Yuwen Wu "improved
+        // normal from depth"): on each axis pick the neighbour whose depth is
+        // CLOSER to the centre depth, so the edge vector never straddles a
+        // silhouette/foliage discontinuity (which produced garbage normals
+        // before). Build the horizontal + vertical edge vectors from the two
+        // chosen NEAR neighbours, then n = cross(hVec, vVec). For a planar
+        // surface this cross product points the same way (+Z up for flat ground)
+        // regardless of viewing angle, so the up-test is foreshortening-invariant.
+        float3 hVec = (abs(dR - sceneDist) < abs(dL - sceneDist))
+            ? (wR - worldPos) : (worldPos - wL);
+        float3 vVec = (abs(dU - sceneDist) < abs(dD - sceneDist))
+            ? (wU - worldPos) : (worldPos - wD);
+        float3 n   = cross(hVec, vVec);
+        float  nl  = length(n);
+        // |dot(n, +Z)| — winding-agnostic up-alignment. A degenerate normal
+        // (nl ≈ 0) cannot be shown to face up, so treat it as rejected.
+        float  upAlign = (nl > 1e-8) ? abs(n.z) / nl : 0.0;
+
+        // MODE 8 (AXIS DISAMBIGUATION): output the reconstructed, edge-aware
+        // surface normal as RGB = normalize(n)*0.5 + 0.5. This is the decisive
+        // view for the "which axis is up in the reconstructed worldPos space?"
+        // question. Flat ground reads BLUE → n ≈ +Z (space is Z-up, the code
+        // analysis prediction; the abs(n.z) up-test is then on the correct axis
+        // and any inversion is in the normal reconstruction, not the axis).
+        // GREEN → n ≈ +Y (Y-up; up-test must use abs(n.y)). RED → n ≈ +X. A
+        // degenerate / sky normal (nl ≈ 0) reads mid-grey (0.5,0.5,0.5).
+        #if SPLASH_DEBUG == 8
+            float3 nDir8 = (nl > 1e-8) ? (n / nl) : float3(0.0);
+            material.baseColor = float4(nDir8 * 0.5 + 0.5, 1.0);
+            return;
+        #endif
+
+        // MODE 9 (Y-vs-Z up probe): one image encoding both candidate up axes
+        // of the normalized normal — red = abs(n.y), blue = abs(n.z). Flat
+        // ground BLUE → abs(n.z) ≈ 1 → Z is up (expected). Flat ground RED →
+        // abs(n.y) ≈ 1 → Y is up. (Blue channel alone doubles as the grayscale
+        // abs(n.z): WHITE-blue on flat ground iff Z is up.)
+        #if SPLASH_DEBUG == 9
+            float3 nDir9 = (nl > 1e-8) ? (n / nl) : float3(0.0);
+            material.baseColor = float4(abs(nDir9.y), 0.0, abs(nDir9.z), 1.0);
+            return;
+        #endif
+
+        // MODE 4: GREEN where sky + upward-normal cone pass, RED otherwise.
+        // Isolates whether the NORMAL test over-rejects. With the edge-aware
+        // multi-tap reconstruction this should now be GREEN on flat ground at
+        // ALL viewing angles, not just top-down.
+        #if SPLASH_DEBUG == 4
+            material.baseColor = (skyPass && upAlign >= COS_UP_CONE)
+                ? DBG_GREEN : DBG_RED;
+            return;
+        #endif
+
+        // ── GROUND TEST ──────────────────────────────────────────
+        // Upward-facing only (rejects trunks / walls / near-vertical grass).
+        // Uses the looser visual cone (45°) — see COS_UP_CONE above. The planar
+        // up-normal is the same at every viewing angle, so this is
+        // foreshortening-invariant.
+        #if SPLASH_DEBUG == 0
+        if (upAlign < COS_UP_CONE) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+        #endif
+
+        // Camera distance to this ground fragment, used both as the LINEAR depth
+        // measure for the planarity test and for the soft distance fade below.
+        // worldPos was reconstructed in Filament's CAMERA-RELATIVE world space
+        // (see above), so the camera position is taken in that SAME space —
+        // Filament's camera world position frameUniforms.worldFromViewMatrix[3]
+        // .xyz (already bound above as camWorld), NOT the absolute CPU cameraPos
+        // uniform (a different origin), or the distance term would be wrong.
+        float camDist  = length(worldPos - camWorld);
+
+        // Edge / foliage rejection as a RELATIVE second difference of LINEAR
+        // depth (camera distance) across the neighbour taps. A planar surface is
+        // locally linear in depth, so linZ(L)+linZ(R)-2*linZ(C) ≈ 0 at ANY
+        // viewing angle (foreshortening cancels in the second difference); a
+        // foliage / grass / silhouette edge has a depth JUMP, so the second
+        // difference is large. Normalising by the centre distance makes it
+        // scale/distance invariant. This replaces the old length(fwidth(worldPos))
+        // world-step test, which blew up with foreshortening at grazing angles
+        // and rejected flat ground.
+        float linC = camDist;
+        float linL = length(wL - camWorld);
+        float linR = length(wR - camWorld);
+        float linD = length(wD - camWorld);
+        float linU = length(wU - camWorld);
+        float invC = 1.0 / max(linC, 1e-3);
+        float planarX = abs(linL + linR - 2.0 * linC) * invC;
+        float planarY = abs(linD + linU - 2.0 * linC) * invC;
+        float planarErr = max(planarX, planarY);
+
+        // MODE 5: GREEN where sky + normal + relative-planarity (edge/foliage)
+        // test pass, RED otherwise. Isolates the foliage rejection test. Flat
+        // ground (planarErr ≈ 0) is GREEN at any angle; foliage/silhouette
+        // edges (planarErr >> tol) are RED.
+        #if SPLASH_DEBUG == 5
+            material.baseColor =
+                (skyPass && upAlign >= COS_UP_CONE && planarErr <= kPlanarityTol)
+                ? DBG_GREEN : DBG_RED;
+            return;
+        #endif
+
+        #if SPLASH_DEBUG == 0
+        if (planarErr > kPlanarityTol) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+        #endif
+
+        // Soft distance fade so distant ground isn't speckled.
+        float distFade = 1.0 - smoothstep(kFadeStart, kFadeEnd, camDist);
+
+        // MODE 6 (KEY VIEW): GREEN where ALL ground tests incl. distance fade
+        // pass — every pixel that COULD host a ripple — RED otherwise. With the
+        // foreshortening-invariant tests, flat ground/paths/courtyard in front
+        // of the camera at a NORMAL (level / slightly-down) angle must now be
+        // GREEN; trees, grass, walls and sky must stay RED.
+        #if SPLASH_DEBUG == 6
+            material.baseColor =
+                (skyPass && upAlign >= COS_UP_CONE && planarErr <= kPlanarityTol
+                 && distFade > 0.0)
+                ? DBG_GREEN : DBG_RED;
+            return;
+        #endif
+
+        #if SPLASH_DEBUG == 0
+        if (distFade <= 0.0) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+        #endif
+
+        // ── World-XY ripple tiling (ABSOLUTE-world-anchored, Issue 1) ─────
+        // worldPos is in Filament's CAMERA-RELATIVE world space (origin near
+        // the camera), so worldPos.xy for a FIXED ground point shifts as the
+        // camera moves — tiling on it slid the cell grid with the camera. We
+        // recover an ABSOLUTE world position by adding the pushed absolute
+        // camera world position: worldAbs = worldPos + cameraPos. As the camera
+        // moves by Δ the camera-relative worldPos decreases by Δ while cameraPos
+        // increases by Δ, so worldAbs is camera-INVARIANT for a fixed ground
+        // point → the cell grid is world-locked and ripples no longer slide.
+        // (The normal never needed this: a normal is translation-invariant; the
+        // tiling is NOT.) Only the XY tiling uses worldAbs; camWorld/camDist
+        // above stay in camera-relative space for the distance fade.
+        float3 worldAbs = worldPos + materialParams.cameraPos;
+
+        // ── Shared WIND constants (mirror weather_shader_ref::kWindDir /
+        //    kWindStrength* / kWindGustFreq AND heaven_rain.mat byte-for-byte) ──
+        // The splash applies the IDENTICAL wind model the streak uses so a
+        // slanted drop splashes exactly where it lands: the ripple centre is the
+        // cell's drop column PLUS the wind drift at the moment of impact
+        // (windStrength(impactT) * (dropTopZ - groundZ) along kWindDir). At
+        // windStrength 0 the drift is exactly zero, so the centre is the column
+        // and the no-wind match is unchanged.
+
+        // APPROXIMATION (documented): with wind the drop that LANDS at a given
+        // ground XY started from a column OFFSET upwind, so the exact inverse
+        // (which lattice cell lands here) is non-trivial. We keep tiling by the
+        // GROUND cell and offset each cell's ripple CENTRE by the wind drift at
+        // impact. The streak shader uses the IDENTICAL cell + identical wind
+        // offset (drop_xy_at_z at z = groundZ), so the streak's landing point and
+        // this ripple centre coincide by construction — proven by the extended
+        // (prop_rain_splash_match.cpp), which asserts the shared
+        // drop_xy_at_z formula equals this centre.
+        const float2 kWindDir          = normalize(float2(1.0, 0.4));
+        const float  kWindStrengthBase = 0.18;
+        const float  kWindStrengthAmp  = 0.005;
+        const float  kWindGustFreq     = 0.3;
+
+        // ── Continuous world-space ripple scan, WIND-AWARE (Issue 1 + wind) ──
+        // Evaluate ripples in CONTINUOUS world space by scanning a neighbourhood
+        // of cells around the fragment and accumulating each neighbour cell's
+        // ripple, so a ripple centred in one cell spills smoothly into adjacent
+        // cells instead of being clipped at the cell boundary (the hard-seam
+        // bug). With WIND each cell's ripple centre is shifted downwind by
+        // kWindDir * windStrength(impactT) * (dropTopZ - groundZ): the BASE part
+        // of that offset is identical for every cell at this ground height, so
+        // we shift the cell LOOKUP by the base offset (recovering the cells whose
+        // wind-shifted centres land near the fragment); only the small gust AMP
+        // scatters centres per-cell (< kRippleSpacing). A 5x5 scan (±2 cells)
+        // covers the base-shifted cell plus that amp residual plus the ripple
+        // radius spill (maxRadius < kRippleSpacing), so no impact is clipped.
+        float  windBase    = kWindStrengthBase * (materialParams.cameraPos.z + materialParams.volumeExtent - worldAbs.z);
+        float2 windBaseOff = kWindDir * windBase;
+        float2 baseCell    = floor((worldAbs.xy - windBaseOff) / kRippleSpacing);
+        float  maxRadius   = kMaxRadiusFrac * kRippleSpacing;
+
+        // LOOK PASS — per-cell appearance randomisation. Real rain impacts vary
+        // in size, brightness and ring width; we derive independent per-cell
+        // hashes from the cell id `cid` (DISTINCT seeds so radius/alpha/width do
+        // not correlate into a visible pattern) and remap each into a tuning
+        // range. Everything stays a pure function of cid, so ripples remain
+        // world-stable and frame-rate independent — no per-frame randomness.
+
+        // ── UNIFICATION: impact-driven ripple timing ──
+        // The ripple is NO LONGER timed by an arbitrary per-cell spawn phase +
+        // cycle gate. Instead each cell is retimed from the SAME shared lattice
+        // + fall law the streak shader uses (engine/weather_shader_ref.h): the
+        // drop that lands in this ground cell impacts at drop_impact_time(...),
+        // and the ripple animates over [impactT, impactT + rippleDuration). So a
+        // ripple blooms exactly where AND when a streak comes down (the streak
+        // column drop_column_xy(cell) is this cell's ripple centre). The fall
+        // span is fixed at 2*volumeExtent and only the per-cell SPEED varies, so
+        // the closed-form impact time is exact for ground within the fall band.
+
+        // The shared fall-law constants below mirror weather_shader_ref
+        // byte-for-byte (kFallPeriodVary*, the per-cell hash seeds, the ripple
+        // duration band). drop_ripple_duration is HARD-CLAMPED to <= 2.0 s so the
+        // active ripple window can never exceed the lifetime cap.
+        const float kFallPeriodVaryMin = 0.8;
+        const float kFallPeriodVaryMax = 1.4;
+        float rippleDurMin = materialParams.splashShapeTuning.y;
+        // TUNING: minimum ripple expansion speed INCREASED a further 30% per
+        // user request. Expansion speed ~= maxRadius / rippleDuration, so the
+        // slowest ripples are the longest-duration ones governed by this max.
+        // Raising the min speed by another 30% means shortening the longest
+        // duration by 1/1.3 again: 1.385 / 1.3 = 1.0654 -> 1.065. Still >
+        // kRippleDurMin (0.9) so the mix() band stays valid, and still <= the
+        // 2.0  cap, so the cap is unaffected. MIRRORED byte-for-byte in
+        // weather_shader_ref.h (kRippleDurationMax) — keep both in lockstep
+
+        float rippleDurMax = materialParams.splashShapeTuning.z;
+        const float kRippleDurCap      = 2.0;   // hard lifetime cap
+
+        float  volExtent = materialParams.volumeExtent;
+        float  fallSpeed = materialParams.fallSpeed;
+        float  dropTopZ  = materialParams.cameraPos.z + volExtent;  // drop_top_z
+        float  fallSpan  = 2.0 * volExtent;
+        float  groundZ   = worldAbs.z;
+
+        float ring = 0.0;
+        float core = 0.0;
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                float2 cid = baseCell + float2(float(dx), float(dy));
+
+                // Spatial spawn gate: only a fraction of cells are eligible, the
+                // fraction scaling with rain intensity so splash DENSITY tracks
+                // intensity; intensity 0 already early-outs. Cells
+                // above the gate stay dry this run.
+                float gate = hash21(cid + 11.7);
+                if (gate > kActiveFrac * intensity) {
+                    continue;
+                }
+
+                // ── Per-cell randomised appearance (distinct hash seeds) ──
+                // Radius scale ~[0.6, 1.3]: impacts come in different sizes.
+                float rndR = hash21(cid + 23.1);
+                float cellMaxRadius =
+                    maxRadius *
+                    mix(materialParams.splashShadingTuning.w, 1.3, rndR);
+                // Brightness/alpha scale ~[0.5, 1.0]: some impacts faint, some
+                // stronger, so the field stops looking uniform.
+                float rndA = hash21(cid + 47.9);
+                float cellAlpha = mix(0.5, 1.0, rndA);
+                // Ring width scale ~[0.7, 1.3]: vary the band thickness a touch.
+                float rndW = hash21(cid + 71.3);
+                float cellRingWidth = kRingWidth * mix(0.7, 1.3, rndW);
+
+                // ── Shared fall law for this cell (mirrors drop_fall_period /
+                //    drop_fall_speed / drop_phase byte-for-byte) ──
+                float periodVary = mix(kFallPeriodVaryMin, kFallPeriodVaryMax,
+                                       hash21(cid + 29.7));
+                float fallPeriod = (fallSpan / fallSpeed) * periodVary;
+                float fallSpeedC = fallSpan / fallPeriod;               // = 2E/T
+                float cellPhase  = hash21(cid + 5.3) * fallPeriod;
+
+                // The ripple centre is this cell's jittered drop column — the
+                // SAME world XY the streak comes down at (drop_column_xy) — PLUS
+                // the wind drift at impact (added below once impactT is known).
+                float2 jitter = hash22(cid * 1.37 + 3.1);
+                float2 columnXY = (cid + jitter) * kRippleSpacing;
+
+                // The drop physically reaches groundZ only when groundZ lies in
+                // its fall band (dropTopZ - 2E, dropTopZ]. Outside that band the
+                // drop never lands here, so no ripple (avoids spurious impacts
+                // on ground far below the camera volume).
+                if (groundZ <= dropTopZ - fallSpan || groundZ > dropTopZ) {
+                    continue;
+                }
+
+                // ── Impact-driven timing (mirrors drop_impact_time) ──
+                // Most-recent time <= now at which the drop crossed groundZ:
+                //   tau     = (dropTopZ - groundZ) / fallSpeedC ∈ [0, fallPeriod)
+                //   impactT = cellPhase + tau + floor((t - base)/T) * T
+                float tau     = (dropTopZ - groundZ) / fallSpeedC;
+                float base    = cellPhase + tau;
+                float k       = floor((materialParams.time - base) / fallPeriod);
+                float impactT = base + k * fallPeriod;
+
+                // ── WIND-shifted ripple centre (mirrors drop_xy_at_z at
+                //    z = groundZ with windStrength(impactT)) ──
+                // The drop drifts kWindDir * windStrength * (dropTopZ - groundZ)
+                // horizontally by the time it reaches the ground; using the
+                // strength at IMPACT places the centre where the drop actually
+                // was when it hit. The streak shader applies the identical
+                // offset to its landing point, so they coincide. At windStrength
+                // 0 this is exactly the column.
+                float windStrengthAtImpact = kWindStrengthBase
+                    + kWindStrengthAmp * sin(impactT * kWindGustFreq);
+                float2 centreWorldXY = columnXY
+                    + kWindDir * windStrengthAtImpact * (dropTopZ - groundZ);
+
+                // Ripple animates over [impactT, impactT + rippleDuration). The
+                // duration is per-cell, hard-clamped <= 2.0 s. Outside the
+                // window this cell contributes nothing.
+                float rippleDur = min(mix(rippleDurMin, rippleDurMax,
+                                          hash21(cid + 91.7)), kRippleDurCap);
+                float rippleAge = materialParams.time - impactT;
+                if (rippleAge < 0.0 || rippleAge >= rippleDur) {
+                    continue;
+                }
+                float t01 = rippleAge / rippleDur;
+
+                // World-metre radius from this cell's ripple centre.
+                float r = length(worldAbs.xy - centreWorldXY);
+
+                // Per-cell alpha scales the whole contribution (size already
+                // varied via cellMaxRadius / cellRingWidth).
+                ring += rippleRing(r, t01, cellMaxRadius, cellRingWidth) * cellAlpha;
+
+                // Faint, brief central birth sparkle. LOOK PASS: a weak (0.3),
+                // tight (0.008 Gaussian), brief (first ~12% of life) pin sparkle
+                // at the moment of impact, scaled by the per-cell alpha so faint
+                // impacts have a faint flash too.
+                core += materialParams.splashShadingTuning.y
+                      * exp(-r * r /
+                            (materialParams.splashShapeTuning.w *
+                             kRippleSpacing * kRippleSpacing))
+                      * (1.0 - smoothstep(0.0, 0.12, t01))
+                      * cellAlpha;
+            }
+        }
+
+        float profile = ring + core;
+
+        if (profile <= 0.0) {
+            material.baseColor = float4(0.0);
+            return;
+        }
+
+        // ── Composite: watery translucent highlight ──
+        float alpha = profile * intensity * distFade * kAlphaGain;
+        alpha = clamp(alpha, 0.0, 1.0);
+
+        // Premultiplied alpha for Filament's `transparent` blender (same
+        // convention as heaven_volumetric_fog / heaven_unlit / heaven_smoke).
+        material.baseColor = float4(kRippleColor * alpha, alpha);
+    }
+}

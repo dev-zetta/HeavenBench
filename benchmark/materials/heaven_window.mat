@@ -1,0 +1,402 @@
+// Heaven Benchmark — Window material (opaque, glass-aware)
+
+// Dedicated lit material for Heaven's `*window*` surfaces (building_windows,
+// fort_window, fort_small_window, lab_windows, building_tessellation_windows).
+// These are OPAQUE WALL surfaces with the panes, mullions, and frame baked into
+// a full PBR texture set (`_d/_n/_s/_h/_t`) plus a night-emission map (`_e`) —
+// NOT transparent glass (see engine/glass_material_ref.h for why they must not
+// route through screen-space refraction). They were previously rendered with
+// the plain heaven_lit material, which (1) clamps dielectric roughness to a
+// matte floor so the painted glass never caught a reflection and read as flat
+// paint, and (2) blew the night emission out to a clipped, flat, saturated
+// yellow card.
+
+// This material is heaven_lit re-authored for windows. Two changes give the
+// realism win while keeping the surface opaque and the wall behaviour intact:
+
+//   1. Glass-aware microsurface. The authored specular map marks the glass
+//      panes (high spec) apart from the matte frame/mullions (low spec). We use
+//      that as a "glassiness" mask: glass texels get a low roughness + true
+//      dielectric reflectance so they pick up the sky/IBL (and, with SSR on,
+//      the scene) as a real pane would, while the frame stays matte. Screen-
+//      space reflections are compiled in (as in heaven_glass) so the panes
+//      reflect the scene, not just the IBL probe.
+
+//   2. Tamed warm night emission. The lit panes glow warmly through bloom
+//      instead of clipping to a flat saturated yellow: the emission ramp is far
+//      gentler than heaven_lit's, the colour is nudged toward warm white so it
+//      reads as a lit interior rather than neon, and the luminance mask keeps
+//      the dark mullions/frame from glowing.
+
+// Displacement is handled by CPU tessellation at load time (not POM), exactly
+// as heaven_lit — the parameter set is identical so the C++ instance wiring in
+// MaterialInstanceCache::get_or_create is shared unchanged.
+
+// IMPORTANT — these surfaces are ALPHA-MASKED. Heaven's window diffuse maps
+// carry a cutout in their alpha channel (≈half of building_windows_d is
+// alpha≈0) that defines the window's shape against the wall; the surfaces are
+// therefore authored with alpha_test and currently render through the masked,
+// double-sided heaven_lit_twosided material. heaven_window must match that
+// (blending: masked, maskThreshold: 0.5, doubleSided: true) or the cutout is
+// lost and the window's transparent regions fill in solid. The diffuse alpha is
+// kept (NOT forced to 1) so Filament's mask test discards the cutout texels.
+
+// Compiled with: matc --api vulkan --api opengl -o heaven_window.filamat heaven_window.mat
+
+material {
+    name : heaven_window,
+    requires : [ uv0, uv1, custom0, custom1, custom2, custom3, custom4, custom5, custom6, custom7 ],
+    shadingModel : lit,
+    blending : masked,
+    maskThreshold : 0.5,
+    alphaToCoverage : true,
+    doubleSided : true,
+    flipUV : false,
+    specularAmbientOcclusion : bentNormals,
+    multiBounceAmbientOcclusion : true,
+    reflections : screenspace,
+    specularAntiAliasing : true,
+    parameters : [
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasBaseColor },
+        { type : sampler2d, name : normalMap },
+        { type : bool,      name : hasNormal },
+        { type : float,     name : normalStrength },
+        { type : sampler2d, name : specularMap },
+        { type : bool,      name : hasSpecular },
+        { type : sampler2d, name : emissiveMap },
+        { type : bool,      name : hasEmissive },
+        { type : float3,    name : emissionTint },
+        { type : float,     name : emissionScale },
+        { type : sampler2d, name : detailMap },
+        { type : sampler2d, name : detailNormalMap },
+        { type : sampler2d, name : detailSpecularMap },
+        { type : bool,      name : hasDetail },
+        { type : int,       name : detailMode },
+        { type : float3,    name : detailStrength },
+        { type : bool,      name : detailUsesBaseAlpha },
+        { type : float4,    name : detailTransform },
+        { type : float4,    name : baseTransform },
+        { type : sampler2d, name : heightMap },
+        // Windows already use the full sampler budget with screen-space
+        // reflections. Integer vertex fetches reuse the existing height map.
+        { type : float,     name : geometryHeightMaxLod },
+        { type : bool,      name : geometryDisplacement },
+        { type : float4,    name : displacementParams },
+        { type : bool,      name : hasHeight },
+        { type : float,     name : displacementScale },
+        { type : bool,      name : isMetallic },
+        { type : bool,      name : specGlossWorkflow },
+        { type : float4,    name : surfaceSamplingTuning },
+        { type : float4,    name : surfaceMetallicTuning },
+        { type : float4,    name : surfaceDielectricTuning },
+        { type : float4,    name : surfaceReflectanceTuning },
+        { type : float4,    name : surfaceEmissionTuning },
+        { type : float4,    name : surfaceMaskedEmissionTuning },
+        { type : float4,    name : surfaceWetnessTuning },
+        { type : float2,    name : surfaceWetnessShape },
+        { type : float4,    name : windowGlassTuning },
+        { type : float4,    name : windowEmissionTuning },
+        { type : float4,    name : windowEmissionColorTuning }
+    ],
+}
+
+vertex {
+    #include "includes/bounded_displacement.glsl"
+    // Reconstruct the isotropic bilinear field from decoded texels. Explicit
+    // integer fetches bypass the fragment sampler's anisotropic filtering.
+    highp float windowGeometryHeightMip(highp float2 uv, int mip) {
+        int2 dimensions = textureSize(materialParams_heightMap, mip);
+        highp float2 texelPosition = uv * float2(dimensions) - 0.5;
+        int2 lower = int2(floor(texelPosition));
+        highp float2 weight = fract(texelPosition);
+        int2 p00 = ((lower % dimensions) + dimensions) % dimensions;
+        int2 p10 = (((lower + int2(1, 0)) % dimensions) + dimensions) % dimensions;
+        int2 p01 = (((lower + int2(0, 1)) % dimensions) + dimensions) % dimensions;
+        int2 p11 = (((lower + int2(1, 1)) % dimensions) + dimensions) % dimensions;
+        highp float h00 = texelFetch(materialParams_heightMap, p00, mip).r;
+        highp float h10 = texelFetch(materialParams_heightMap, p10, mip).r;
+        highp float h01 = texelFetch(materialParams_heightMap, p01, mip).r;
+        highp float h11 = texelFetch(materialParams_heightMap, p11, mip).r;
+        return mix(mix(h00, h10, weight.x),
+                   mix(h01, h11, weight.x), weight.y);
+    }
+
+    highp float windowGeometryHeight(highp float2 uv, highp float lod) {
+        // The cache supplies the last level of the actual bound texture;
+        // partial mip chains and single-level placeholders remain valid.
+        highp float lastMip = max(materialParams.geometryHeightMaxLod, 0.0);
+        highp float clampedLod = clamp(lod, 0.0, lastMip);
+        int lowerMip = int(floor(clampedLod));
+        int upperMip = min(lowerMip + 1, int(lastMip));
+        highp float hLower = windowGeometryHeightMip(uv, lowerMip);
+        highp float hUpper = windowGeometryHeightMip(uv, upperMip);
+        return mix(hLower, hUpper, fract(clampedLod));
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.geometryDisplacement && getCustom7().w > 0.0) {
+            applyParentChord(material);
+        } else if (materialParams.geometryDisplacement) {
+            float3 userWorldPosition =
+                    (getUserWorldFromWorldMatrix() * material.worldPosition).xyz;
+            float distance = length(userWorldPosition - getMaterialGlobal1().xyz);
+            float normalizedDistance = clamp(
+                    (distance - materialParams.displacementParams.z)
+                    * materialParams.displacementParams.w, 0.0, 8.0);
+            float fade = pow(saturate(1.0 - normalizedDistance),
+                             materialParams.displacementParams.y);
+            float2 uv = material.uv0.xy * materialParams.baseTransform.xy
+                      + materialParams.baseTransform.zw;
+            // A vertex is one sample of the height field. Filter frequencies
+            // finer than its incident UV edges before moving the geometry;
+            // otherwise sparse triangles alias into false shadow-casting folds.
+            // CUSTOM0.yz is the UV footprint, populated by MeshStore. Keep the
+            // authored distance fade independent of this sampling LOD.
+            float2 footprint = getCustom0().yz * abs(materialParams.baseTransform.xy)
+                             * float2(textureSize(materialParams_heightMap, 0));
+            float meshLod = log2(max(max(footprint.x, footprint.y), 1.0));
+            float heightLod = max(normalizedDistance, meshLod);
+            float height = windowGeometryHeight(uv, heightLod);
+            float offset = (height - 127.0 / 255.0)
+                         * materialParams.displacementParams.x * fade
+                         * getCustom0().x;
+            material.worldPosition.xyz += normalize(material.worldNormal) * offset;
+        }
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        // Per-material UV transform — uv*scale + offset (identity for most
+        // window surfaces). Matches heaven_lit.
+        float2 uv = getUV0() * materialParams.baseTransform.xy
+                  + materialParams.baseTransform.zw;
+        float4 baseSample = materialParams.hasBaseColor
+                ? texture(materialParams_baseColorMap, uv)
+                : float4(materialParams.surfaceSamplingTuning.xxx, 1.0);
+        float4 detailSample =
+            float4(materialParams.surfaceSamplingTuning.yyy, 1.0);
+        float3 detailBlend = float3(0.0);
+        float2 detailUV = uv;
+        if (materialParams.hasDetail) {
+            float2 detailBaseUV =
+                    (materialParams.detailMode == 2 || materialParams.detailMode == 4)
+                    ? getUV1() : uv;
+            detailUV = detailBaseUV * materialParams.detailTransform.xy
+                     + materialParams.detailTransform.zw;
+            detailSample = texture(materialParams_detailMap, detailUV);
+            float blendAlpha = detailSample.a;
+            if (materialParams.detailUsesBaseAlpha) blendAlpha *= baseSample.a;
+            detailBlend = materialParams.detailStrength * blendAlpha;
+        }
+
+        // ── Normal map + height bump — MUST precede prepareMaterial() ──
+        float3 tangentNormal = float3(0.0, 0.0, 1.0);
+        if (materialParams.hasNormal) {
+            float3 n = texture(materialParams_normalMap, uv).xyz;
+            if (n.b < materialParams.surfaceSamplingTuning.z) {
+                n.xy = n.xy * 2.0 - 1.0;
+                n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
+            } else {
+                n = n * 2.0 - 1.0;
+            }
+            n = normalize(float3(
+                    n.xy * materialParams.normalStrength, max(n.z, 1e-4)));
+            tangentNormal = n;
+        }
+        if (materialParams.hasDetail && detailBlend.y > 0.0) {
+            float2 detailNormal = texture(materialParams_detailNormalMap, detailUV).xy
+                                * 2.0 - 1.0;
+            tangentNormal.xy += detailNormal * detailBlend.y
+                              * materialParams.normalStrength;
+        }
+        if (materialParams.hasHeight) {
+            float texel = materialParams.surfaceSamplingTuning.w;
+            float hc = texture(materialParams_heightMap, uv).r;
+            float hx = texture(materialParams_heightMap, uv + float2(texel, 0.0)).r;
+            float hy = texture(materialParams_heightMap, uv + float2(0.0, texel)).r;
+            float3 bump = float3(hc - hx, hc - hy, 0.0) * 2.0;
+            tangentNormal = normalize(tangentNormal + bump);
+        }
+        if (materialParams.hasNormal || materialParams.hasDetail ||
+            materialParams.hasHeight) {
+            material.normal = normalize(tangentNormal);
+        }
+
+        prepareMaterial(material);
+
+        material.baseColor = baseSample;
+
+        if (materialParams.hasDetail) {
+            if (materialParams.detailMode <= 2) {
+                material.baseColor.rgb = clamp(
+                        material.baseColor.rgb
+                        + (detailSample.rgb * 2.0 - 1.0) * detailBlend.x,
+                        0.0, 1.0);
+            } else {
+                material.baseColor.rgb *= clamp(
+                        detailSample.rgb + 1.0 - detailBlend.x, 0.0, 1.0);
+            }
+        }
+
+        // ── Glass-aware microsurface ────────────────────────────────
+        // The window's specular map distinguishes the reflective glass panes
+        // (high spec) from the matte frame / mullions / surrounding wall (low
+        // spec). We read it as a glassiness mask: where it is high the surface
+        // becomes a smooth dielectric pane (low roughness, F0 ≈ 0.04 via
+        // reflectance 0.5) that mirrors the sky/IBL and, with SSR enabled, the
+        // scene; where it is low the surface keeps the matte plaster/wood look
+        // heaven_lit gives. Windows are never metal.
+        material.metallic = 0.0;
+        if (materialParams.hasSpecular) {
+            float3 specColor = texture(materialParams_specularMap, uv).rgb;
+            if (materialParams.hasDetail && detailBlend.z > 0.0) {
+                float3 detailSpec =
+                        texture(materialParams_detailSpecularMap, detailUV).rgb;
+                if (materialParams.detailMode <= 2) {
+                    specColor = clamp(
+                            specColor + (detailSpec * 2.0 - 1.0) * detailBlend.z,
+                            0.0, 1.0);
+                } else {
+                    specColor *= clamp(
+                            detailSpec + 1.0 - detailBlend.z, 0.0, 1.0);
+                }
+            }
+            float spec = clamp(dot(specColor, float3(0.2126, 0.7152, 0.0722)),
+                               0.0, 1.0);
+
+            // Glassiness mask. Measured from the building_windows maps: the
+            // glass panes are the dark-diffuse / HIGH-spec texels (spec ≈ 0.55),
+            // while the frame, mullions and surrounding wall are LOW-spec
+            // (≈ 0.13). This narrow mid-low threshold therefore drives the panes
+            // fully to glass (mask → 1) and leaves the frame fully matte
+            // (mask → 0), instead of the previous half-strength blend that left
+            // the panes semi-gloss.
+            float glassMask =
+                smoothstep(materialParams.windowGlassTuning.x,
+                           materialParams.windowGlassTuning.y, spec);
+
+            // Matte dielectric end (frame/wall): identical to heaven_lit's
+            // dielectric branch so non-pane texels are unchanged.
+            float matteRough = clamp(
+                1.0 - spec * materialParams.surfaceDielectricTuning.x,
+                materialParams.surfaceDielectricTuning.y,
+                materialParams.surfaceDielectricTuning.z);
+            float matteRefl =
+                mix(materialParams.surfaceDielectricTuning.w,
+                    materialParams.surfaceReflectanceTuning.x, spec);
+
+            // Glassy pane end: sharp, mirror-like, with reflectance pushed a
+            // touch above real window glass (F0 ≈ 0.06) so the sky/scene
+            // reflection actually reads on the dark panes when viewed head-on
+            // (a perfectly physical F0 ≈ 0.04 is nearly invisible on a near-
+            // black pane until grazing angles).
+            float glassRough = materialParams.windowGlassTuning.z;
+            float glassRefl = materialParams.windowGlassTuning.w;
+
+            material.roughness = materialParams.specGlossWorkflow
+                    ? clamp(1.0 - spec,
+                            materialParams.surfaceReflectanceTuning.w, 1.0)
+                    : mix(matteRough, glassRough, glassMask);
+            material.reflectance = materialParams.specGlossWorkflow
+                    ? clamp(spec, 0.16, 1.0)
+                    : mix(matteRefl, glassRefl, glassMask);
+        } else {
+            // No spec map → matte dielectric (matches heaven_lit).
+            material.roughness = materialParams.surfaceReflectanceTuning.y;
+            material.reflectance = materialParams.surfaceReflectanceTuning.z;
+        }
+
+        // ── Tamed warm night emission ────────────────────────────────
+        // Heaven lights windows at night via an `_e` map. heaven_lit ramps this
+        // by (scale-1)*4 which clips the panes to a flat saturated yellow card.
+        // Here the ramp is far gentler and the colour is nudged toward warm
+        // white, so a lit pane reads as a glowing interior — bright enough to
+        // bloom, but with the mullions still legible and the hue believable.
+        if (materialParams.hasEmissive) {
+            float4 esample = texture(materialParams_emissiveMap, uv);
+            float  lum     = max(esample.r, max(esample.g, esample.b));
+
+            // Keep the dark mullion/frame texels from glowing.
+            float mask =
+                smoothstep(materialParams.windowEmissionTuning.x,
+                           materialParams.windowEmissionTuning.y, lum);
+
+            // Gentle ramp: scale 1 → off, higher scales glow but do not nuke.
+            // Capped so even a high authored/forced scale stays in a plausible
+            // lit-window range rather than clipping to white.
+            float scl_in   = materialParams.emissionScale;
+            float scl_out = clamp(
+                max(0.0, scl_in - materialParams.windowEmissionTuning.z),
+                0.0, materialParams.windowEmissionTuning.w);
+
+            // Warm the pane toward a lit-interior colour and desaturate the
+            // raw texture's harsh yellow a touch toward warm white.
+            float3 warmWhite =
+                materialParams.windowEmissionColorTuning.yzw;
+            float3 emitCol =
+                mix(esample.rgb, float3(lum),
+                    materialParams.windowEmissionColorTuning.x) *
+                warmWhite;
+            emitCol         *= materialParams.emissionTint;
+
+            material.emissive = float4(emitCol * mask * scl_out, 0.0);
+        }
+
+        // ── Wetness (Weather_System) — parity with heaven_lit ────────
+        // g.z = wet amount; default {0,0,0,1} ⇒ no change (dry parity).
+        vec4 g = getMaterialGlobal0();
+        float wetAmt = g.z;
+        if (wetAmt > 0.0) {
+            float up = clamp(getWorldNormalVector().z, 0.0, 1.0); // Heaven world is Z-up
+            float wet = wetAmt * up;
+            float pool = up * up;
+            float darken = g.y * wet
+                         + wet * materialParams.surfaceWetnessTuning.x
+                         + wetAmt * pool * materialParams.surfaceWetnessTuning.y;
+            material.baseColor.rgb *=
+                clamp(1.0 - darken, materialParams.surfaceWetnessShape.x, 1.0);
+            float wetGloss =
+                clamp(wet * materialParams.surfaceWetnessShape.y, 0.0, 1.0);
+            material.roughness = clamp(
+                mix(material.roughness, materialParams.surfaceWetnessTuning.z,
+                    wetGloss),
+                materialParams.surfaceWetnessTuning.w, 1.0);
+            material.reflectance  = clamp(material.reflectance + g.x * wet, 0.0, 1.0);
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // DIAGNOSTIC TOGGLE (default 0 = real shading; ship value).
+
+        // I cannot see the screen — you run the build and report what you see.
+        // If a window change ever "looks the same", flip this to a non-zero
+        // mode and rerun `./scripts/build.sh --materials` to prove what this
+        // material is doing on the window surfaces:
+
+        //   1 = paint every heaven_window surface MAGENTA. If the windows turn
+        //       magenta, this material IS being applied (so any "no change" is a
+        //       shading-strength issue); if they DON'T, the surface is not being
+        //       routed here (a classification problem) and the fix is upstream.
+        //   2 = show the specular map as greyscale — the glass panes should read
+        //       bright, the frame/wall dark (confirms the glass mask source).
+        //   3 = show the computed glass mask as greyscale — WHITE on the panes
+        //       we treat as glass, BLACK on the matte frame/wall.
+        // ─────────────────────────────────────────────────────────────────
+        #define WINDOW_DEBUG 0
+        #if WINDOW_DEBUG == 1
+            material.baseColor.rgb = float3(1.0, 0.0, 1.0);
+            material.emissive = float4(0.0);
+        #elif WINDOW_DEBUG == 2
+            float dbgSpec = materialParams.hasSpecular
+                          ? texture(materialParams_specularMap, uv).r : 0.0;
+            material.baseColor.rgb = float3(dbgSpec);
+            material.emissive = float4(0.0);
+        #elif WINDOW_DEBUG == 3
+            float dbgSpec2 = materialParams.hasSpecular
+                           ? texture(materialParams_specularMap, uv).r : 0.0;
+            material.baseColor.rgb = float3(smoothstep(0.18, 0.42, dbgSpec2));
+            material.emissive = float4(0.0);
+        #endif
+    }
+}

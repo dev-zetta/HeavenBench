@@ -1,0 +1,135 @@
+// Heaven Benchmark — Volumetric light scattering (god rays)
+
+// Screen-space depth-buffer raymarching approach. For each pixel, marches
+// toward the projected sun position in screen space, sampling the linear
+// scene-depth texture at each step. Open-sky pixels (far / no geometry)
+// contribute scattered light; pixels covered by nearer opaque geometry block
+// it. Uses exponential decay for physically-motivated Mie scattering
+// approximation.
+
+// Rendered as a fullscreen transparent quad composited additively over the
+// scene. Requires the depth texture to be passed as a sampler parameter.
+
+// Compiled with: matc -a opengl -p desktop -o heaven_godrays.filamat heaven_godrays.mat
+
+material {
+    name : heaven_godrays,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    blending : add,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        // Depth texture from the main scene render
+        { type : sampler2d, name : depthTexture },
+
+        // Sun position in screen space [0,1] (projected from world space)
+        { type : float2,    name : sunScreenPos },
+
+        // Whether the sun is visible (in front of camera, on screen)
+        { type : bool,      name : sunVisible },
+
+        // Scattering parameters
+        { type : float,     name : density },      // ray density (0.5-1.0)
+        { type : float,     name : weight },       // per-sample weight (0.01-0.05)
+        { type : float,     name : decayRate },    // per-sample decay (0.95-0.99)
+        { type : float,     name : exposure },     // final exposure (0.1-0.5)
+
+        // Sun/light color for tinting the rays
+        { type : float3,    name : sunColor },
+        { type : int,       name : activeSamples },
+        { type : float4,    name : rayTuning }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        if (!materialParams.sunVisible) {
+            material.baseColor = float4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        float2 uv = getUV0();
+        float2 sunPos = materialParams.sunScreenPos;
+
+        // Direction from this pixel toward the sun in screen space
+        float2 delta = uv - sunPos;
+
+        // Number of samples along the ray
+        const int MAX_SAMPLES = 64;
+        int sampleCount = clamp(materialParams.activeSamples, 1, MAX_SAMPLES);
+        delta *= 1.0 / float(sampleCount) * materialParams.density;
+
+        float2 sampleUV = uv;
+        float illuminationDecay = 1.0;
+        float3 accumColor = float3(0.0);
+
+        for (int i = 0; i < MAX_SAMPLES; i++) {
+            if (i >= sampleCount) break;
+            sampleUV -= delta;
+
+            // Clamp to valid UV range
+            if (sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
+                sampleUV.y < 0.0 || sampleUV.y > 1.0) break;
+
+            // Sample the linear scene-depth texture (F, eye-space
+            // forward distance in metres) produced by the depth pre-pass
+            // heaven_depth proxy render. Sampling convention is LOCKED
+            // (scene-depth-pipeline): the offscreen RT is
+            // Y-flipped versus the quad UV (Vulkan top-down framebuffer),
+            // matching heaven_blit / volfog / heat haze / lens flare.
+            float2 depthUV = uvToRenderTargetUV(sampleUV);
+            float sceneDist = texture(materialParams_depthTexture, depthUV).r;
+
+            // Graceful fallback: a null/unbound depth texture reads
+            // a non-positive value. Treat that as "far / no geometry" so
+            // the shaft is NOT occluded before the depth pre-pass produces
+            // a valid texture.
+            if (sceneDist <= 0.0) sceneDist = 2000.0;
+
+            // Open sky / no-geometry pixels read the far clear value
+            // (~2000 m); real geometry reads its (nearer) eye-space
+            // distance. A sample contributes scattered light only where it
+            // is open sky, and is blocked by nearer opaque geometry — so
+            // shafts are occluded by geometry between the camera and the
+            // light and continue to pass through sky. Soft band so
+            // distant geometry doesn't pop, while the far clear value reads
+            // as full sky.
+            float skyness = smoothstep(materialParams.rayTuning.x,
+                                       materialParams.rayTuning.y, sceneDist);
+
+            // Accumulate scattered light with exponential decay
+            accumColor += skyness * illuminationDecay * materialParams.weight
+                        * materialParams.sunColor;
+            illuminationDecay *= materialParams.decayRate;
+        }
+
+        // Apply exposure and output
+        float3 finalColor = accumColor * materialParams.exposure;
+
+        // Fade rays near screen edges to avoid hard cutoff
+        float2 edgeFade =
+            smoothstep(float2(0.0), float2(materialParams.rayTuning.z), uv) *
+            smoothstep(float2(0.0), float2(materialParams.rayTuning.z),
+                       float2(1.0) - uv);
+        float fade = edgeFade.x * edgeFade.y;
+
+        // Tight sun halo radius (0.3 UV). The radial blur is a halo
+        // around the visible sun, decaying to zero well before the
+        // screen edges. Earlier wider radii allowed the warm blur
+        // to bleed onto buildings near the sun — even when the sun
+        // itself was off-screen it still wrote a flare onto the
+        // closest screen edge.
+        float distFromSun = length(uv - sunPos);
+        float sunFade =
+            1.0 - smoothstep(0.0, materialParams.rayTuning.w, distFromSun);
+
+        finalColor *= fade * sunFade;
+
+        material.baseColor = float4(finalColor, 1.0);
+    }
+}

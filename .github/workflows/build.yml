@@ -1,0 +1,49 @@
+name: Linux AppImage
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux / Docker / Clang 21 / ${{ matrix.cpu-arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.cpu-arch == 'portable' && 180 || 120 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cpu-arch: [portable, zen1, zen5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build, test and package in Docker
+        run: |
+          ./scripts/build_docker.sh linux --cpu-arch "${{ matrix.cpu-arch }}" \
+            --jobs 2 --output-dir build/release/linux
+      - name: Upload AppImage, matching sources and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-linux-x86_64-${{ matrix.cpu-arch }}
+          path: |
+            build/release/linux/*.AppImage
+            build/release/linux/*-source.tar.gz
+            build/release/linux/*.sha256
+            build/release/linux/source-manifest.json
+            build/release/linux/build-environment.txt
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload build and verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-linux-${{ matrix.cpu-arch }}-logs
+          path: build/release/linux/logs/
+          if-no-files-found: ignore

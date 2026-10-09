@@ -1,0 +1,8 @@
+# Preserve the upstream license text, including its title's trailing space.
+packaging/licenses/nlohmann-json-LICENSE.MIT whitespace=-blank-at-eol
+
+# Dependency patches preserve exact bytes, including blank diff context lines.
+patches/filament/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
+
+# Bash entry points must also run from Git for Windows checkouts.
+*.sh text eol=lf

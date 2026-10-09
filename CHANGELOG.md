@@ -1,0 +1,59 @@
+# Changelog
+
+## 1.0.0 — 2026-10-10
+
+HeavenBench 1.0.0 establishes a fresh source baseline containing the benchmark, cross-platform build and packaging pipelines, asset preparation tools, rendering fixtures and microprofiler. This version does not by itself publish a release or qualify every platform; remaining runtime, visual and signing gates are recorded in [release readiness](docs/RELEASE_READINESS.md). Original Heaven assets remain external.
+
+The benchmark version is **1.0.0** and Android versionCode is **2**. Extraction tools remain **0.3.1**, result schema remains **2**, and score version remains **3**. Compare benchmark results using matching workloads, effective settings and score versions.
+
+## Daily development history
+
+The summaries below preserve the development record before the history reset. They cover **173 distinct commits across 45 active days**, fetched from the original development and private release-candidate branches, using author dates in Europe/Prague. Stash and agent checkpoint commits are excluded. October 9 summarizes the subsequently documented working-tree integration, and October 10 records this source baseline; these two entries are not counted among the historical commits. Historical changes describe work at the time, including implementations later replaced or refined.
+
+- **2026-10-10:** Set the benchmark version to 1.0.0, retain this daily changelog, exclude reproducible asset packs and local build/cache/report/tooling state, and consolidate the reviewed source tree into one initial commit. Retire the completed root plan, organize user/build/development documentation, and add original Heaven, extraction-tool and HeavenBench credits in the docs and app toolbar. Preserve the prior history and working source in a local recovery backup. Expand the feature overview with optional 4K textures and a benchmark screenshot, and rename the repository to HeavenBench.
+- **2026-10-09:** Integrate asynchronous loading and tessellation caches, bounded displacement seam fixes and geometry levels, performance labels, spatial instancing/grass/shadow culling and CPU optimizations. Add nested CPU/worker/GPU microprofiling with live controls and offline reports; refine moonlight/stars, lamp lighting, lit smoke, flare visibility and emissive reflective lamp glass, with focused regression evidence.
+- **2026-10-08:** Add matched real-mesh airship AO regressions; correct GTAO bent-normal integration, material AO policy and receiver masking in screen-space specular occlusion.
+- **2026-10-07:** Keep Android benchmark playback controls accessible and add an authored airship rendering fixture.
+- **2026-10-05:** Prepare bounded displaced geometry, rendering fixes and isolated feature scenes; verify CPU dependency notices and initialize the private release-candidate repository. Repair native Windows flags, fixture paths, resources and CI preflights; correct Android surface sizing and scaled input, and reduce the optional preview workload.
+- **2026-10-03:** Reproduce residual roof contact-shadow artifacts, trace their relationship to displaced geometry, and filter vertex displacement to the mesh's actual sampling footprint.
+- **2026-10-01:** Refine contact-shadow self-intersection, grazing and steep-surface behavior; add temporal GPU checks and frame profiling for flicker diagnosis.
+- **2026-09-30:** Audit and harden project code, static analysis, runtime portability and source hygiene. Add Linux AppImage, Windows ZIP and Android APK packaging, shared Docker/CI pipelines, external asset preparation and offline tools; rebase Filament to 1.77.2 and record HDR, visual and package validation limits.
+- **2026-08-10:** Package optional high-resolution textures as an extension archive and add the renderer diagnostics sidebar.
+- **2026-08-01:** Add generated village-ground relief, improve its shading, and introduce the 4K texture preparation pipeline.
+- **2026-07-31:** Add Zen 4/Zen 5 builds and result build identity; introduce ZIP-backed assets and tessellation storage, bundle the loading screen, and restore ZIP grass assets with authored flower variation.
+- **2026-07-30:** Introduce rendering presets, texture semantic handling, output calibration and scaled SDR sizing fixes. Add reproducible CI and dependency pins, organize settings by performance impact, unify build directories, restore scene-lit grass, centralize tuning and modernize project C++ to C++23.
+- **2026-07-29:** Correct tessellation camera space and mouse look, expose geometry diagnostics, update dirty-instance smoke tests, and rebuild materials for Filament 1.74.
+- **2026-07-28:** Optimize frame work and culling, revise benchmark scoring and GPU selection, add automatic result reports, repair bridges, and reproduce authored depth of field, detail mapping and tessellation behavior.
+- **2026-07-27:** Improve sky and volumetric clouds and bundle the renderer's sky assets.
+- **2026-07-08:** Rename the benchmark to HeavenBench and update compiled renderer materials.
+- **2026-07-07:** Add default configuration loading, startup diagnostics and a loading screen; improve screen-space effects, material variants and build documentation.
+- **2026-06-20:** Implement GPU instancing and skinning with focused tests; add double-sided lit materials and thin-surface depth proxies.
+- **2026-06-19:** Add live settings editing with configuration save/load.
+- **2026-06-18:** Expand advanced materials, shadows, color grading and dynamic resolution; add Ogg Vorbis background music playback.
+- **2026-06-17:** Add grass depth proxies for procedural vegetation occlusion.
+- **2026-06-16:** Introduce shared linear-depth rendering through proxy renderables.
+- **2026-06-15:** Add recorder-based used-asset packing and strengthen loader/configuration validation and robustness.
+- **2026-06-13:** Centralize asset path resolution and add JSON configuration support with CLI-equivalent validation.
+- **2026-06-11:** Add HDR paper-white control, authored displacement UV transforms and boundary handling, a typed CLI parser, and system/settings result metadata. Freeze floating-island animation during scored tours and honor the cloud toggle in IBL generation.
+- **2026-06-10:** Improve atmospheric and grass lighting, add minimum/present FPS tracking, implement SSGI color capture and bilateral depth filtering, and introduce HDR10 output with the colored-penumbra define fix.
+- **2026-06-09:** Expand rendering quality controls, refine volumetric clouds and depth culling, unify soft-shadow tuning, and add CPU frame-rate tracking and an FPS overlay.
+- **2026-06-08:** Unify rain and splashes on a world-anchored lattice; add wind and per-drop variation, tune wet surfaces and grass, and refine splash ripples.
+- **2026-06-07:** Improve world-anchored rain and wet-surface reflections.
+- **2026-06-05:** Add Bezier camera-path interpolation and weather with rain and wet reflections.
+- **2026-06-04:** Extract backend infrastructure into subsystems and complete benchmark scoring, overlay integration and the initial smoke-test suite.
+- **2026-06-03:** Add firefly/flame/glow effects, dual X11/Wayland support and camera collision. Refine LOD/grass handling and split rendering effects, sky IBL generation and utilities into maintainable modules.
+- **2026-06-02:** Optimize material lookups, load authored animation parameters, repair cloth mass/constraints/wind, and consolidate rendering on Filament by removing the legacy OpenGL backend.
+- **2026-06-01:** Classify metallic materials by inheritance and add heat-haze distance fading, culling and a CLI toggle.
+- **2026-05-29:** Add PBD cloth with tracked anchors and screen-space heat-haze refraction.
+- **2026-05-28:** Add per-material UV transforms and tessellation of skinned meshes.
+- **2026-05-27:** Correct reversed-Z handling in god rays and volumetric fog; improve texture variation and lighting in grass and lit materials.
+- **2026-05-25:** Add a procedural sky and starfield, improve night lighting, fix clustered-light artifacts and detail-map parsing, load authored dynamic lights, and implement per-light volumetric scattering.
+- **2026-05-24:** Add GPU smoke particles, refine emission tint/strength and smoke shading, and repair camera controls.
+- **2026-05-21:** Refine foliage and SSAO, add build helpers, remove the legacy Vulkan backend, and improve tessellation height filtering and boundary detection.
+- **2026-05-10:** Optimize grass animation and rendering.
+- **2026-05-08:** Refine material blending and specular maps.
+- **2026-05-04:** Add CPU tessellation for displacement mapping.
+- **2026-05-03:** Integrate Filament and its material system.
+- **2026-04-30:** Iterate grass blade geometry, lighting, wind and visual variety; add a compute-generation reference implementation.
+- **2026-04-29:** Add parallax occlusion mapping, SSAO, atmospheric/post-processing effects, smoke/fire particles and skeletal animation. Implement rope/bridge simulation with Jolt and improve grass geometry and lighting.
+- **2026-04-28:** Initialize archive extraction and mesh-conversion tools and the first benchmark renderer with a multi-backend RHI.

@@ -1,0 +1,367 @@
+// Heaven Benchmark — Falling rain precipitation streaks (Rain_Feature)
+
+// Part of the weather system.
+// Renders falling precipitation as camera-facing, vertically elongated streak
+// quads inside a camera-centered bounded volume. Like the smoke / grass / splash
+// materials, the geometry is built ONCE (one renderable of up to kMaxStreaks
+// (20000) streak quads) and every per-streak position + length is computed in
+// the vertex shader from a per-streak seed and a handful of uniforms — zero CPU
+// work per frame after the buffer is built once. The CPU never
+// moves a vertex; it only pushes uniforms.
+
+// UNIFICATION: a streak is now a DROP ON THE SHARED LATTICE, not an arbitrary
+// hash3 cell with its own fall term. Each streak slot maps to a world-anchored
+// lattice cell around the camera; its world XY is that cell's jittered column
+// (drop_column_xy) and its Z is the shared fall law (drop_z). The splash shader
+// derives the SAME cell from a ground pixel and the SAME fall law, so a streak
+// column and the splash cell it lands in agree byte-for-byte.
+
+// The math here MIRRORS engine/weather_shader_ref.h (namespace
+// heaven::weather_ref) byte-for-byte — that header is the authoritative CPU
+// reference and the property-based tests assert the two stay in lockstep:
+
+//     world-anchored lattice cell for this seed (streak_seed_cell):
+//     float3 h     = hash3(seed);
+//     float  seedX = (h.x*2 - 1) * E;   float seedY = (h.y*2 - 1) * E;
+//     float  relX  = mod(seedX - camAbs.x + E, 2E) - E; nearest tiled instance
+//     float  relY  = mod(seedY - camAbs.y + E, 2E) - E;
+//     float2 cell  = floor(vec2(camAbs.x+relX, camAbs.y+relY) / kDropSpacing);
+//     shared fall law (fixed span 2E, per-cell speed) — drop_z:
+//     float  fallPeriod = (2E/fallSpeed) * mix(0.8, 1.4, hash21(cell+29.7));
+//     float  vSpeed     = 2E / fallPeriod; drop_fall_speed
+//     float  cellPhase  = hash21(cell+5.3) * fallPeriod; drop_phase
+//     float  z          = (camAbs.z+E) - vSpeed*mod(time-cellPhase, fallPeriod);
+//     jittered column world XY (drop_column_xy):
+//     float2 colXY = (cell + hash22(cell*1.37+3.1)) * kDropSpacing;
+//     vec3   absWorld = vec3(dropXY, z); dropXY = colXY + wind drift
+//     vec3   world    = absWorld - camAbs + camShading; map to shading space
+//     float  len      = mix(streakLenMin, streakLenMax, hash1(seed.x));
+
+//   - WORLD-ANCHORING: relX/relY wrap the tiled instance of this seed nearest
+//     the ABSOLUTE camera into [-E, E), so the snapped lattice cell holds its
+//     world position as the camera moves (camera flies THROUGH the rain) and
+//     wraps by one window when the seed drifts a full span away (active set
+//     stays centered on the camera, density constant —).
+//   - BOUNDED, CAMERA-CENTERED: the fall span is FIXED at exactly 2E
+//     (vSpeed*fallPeriod == 2E), so z = drop_z sweeps (camAbs.z - E, camAbs.z + E]
+//     — strictly inside the camera-centered 140-unit cube — and only the per-cell
+//     SPEED varies (the approved design tradeoff: vary speed, not span). The XY
+//     column lies within one kDropSpacing cell of the wrapped [-E, E) band.
+//   - `mod(..., 2E)` / `mod(time-cellPhase, fallPeriod)` are GLSL
+//     `mod(x,y)=x-y*floor(x/y)`, exactly the reference header's glsl_mod (NOT a
+//     sign-preserving fmod).
+//   - FRAME-RATE INDEPENDENT: the cell + column carry no time dependence
+//     so XY is bit-identical across cadences; z is a pure function of the
+//     absolute `time`, so the distance fallen per real second is frame-rate
+//     independent.
+//   - The streak length is in [0.12, 0.7] world units, driven by hash1,
+//     and each drop also gets a per-drop brightness + width jitter so drops
+//     differ (appearance only).
+//   - WIND: a slow time-varying horizontal gust (kWindDir, windStrength(time))
+//     drifts each drop downwind by an amount that grows with the distance it has
+//     fallen (dropXY = colXY + kWindDir*windStrength*(dropTopZ - z)); the streak
+//     billboard is elongated along the drop's VELOCITY (down + wind) so slanted
+//     rain reads as slanted. The SAME wind model is applied by heaven_splash.mat
+//     (at z = groundZ, strength at impact) so a slanted drop splashes exactly
+//     where it lands. At windStrength 0 this reduces to the pure vertical fall.
+
+// TWO CAMERA REFERENCES (shader) vs ONE (header) — read carefully:
+//   Filament shades in CAMERA-RELATIVE world space (the default; no
+//   setCameraRelative override). So material.worldPosition and the clip
+//   matrices live in a SHADING space translated so the camera sits near the
+//   origin. The proven, non-drifting placement is therefore to ADD the
+//   SHADING-space camera `frameUniforms.worldFromViewMatrix[3].xyz` (camShading)
+//   for the final world position — that is why the volume correctly surrounds
+//   the camera.
+//   But to make drops appear WORLD-STATIC, the per-drop OFFSET must be anchored
+//   to the ABSOLUTE camera world position, still available as the pushed uniform
+//   `materialParams.cameraPos`. The identity `camShading = cameraPos + const`
+//   (constant per frame) means using cameraPos for the wrap/anchor terms and
+//   camShading for the final translate makes the drop world-static regardless of
+//   which convention Filament uses: as cameraPos moves by Δ the offset moves by
+//   −Δ (mod the window), cancelling the camera's motion.
+//   The CPU reference header has no notion of two camera spaces, so it adds its
+//   single `cameraPos` param for BOTH the anchor terms and the final placement —
+//   that is expected; the OFFSET expressions (cell, relX/relY, fallen, relZ) are
+//   byte-for-byte identical, which is all the property tests check.
+
+// World convention is Z-up (the Heaven world): the streak is elongated along
+// the drop's VELOCITY direction (world -Z plus the horizontal wind drift), and
+// the quad is rotated about that axis to face the camera (billboard) so the flat
+// face always points at the viewer. With no wind the long axis is world
+// +Z (pure vertical), exactly as before.
+
+// Streaks whose slot is inactive (streakIndex >= activeStreaks) or that occur at
+// rain intensity 0 collapse to a degenerate point so they render nothing.
+
+// Vertex attributes (one quad = 4 vertices), matching design.md:
+//   POSITION.xyz = unused base (the world position is computed in the shader)
+//   UV0.xy       = corner id in [0,1] (x = across the streak, y = along it)
+//   CUSTOM0.xyzw = (seed.x, seed.y, seed.z, streakIndex)
+//                  seed.xyz is the per-streak seed; the 4th ("spare") slot
+//                  carries the streak's slot index, used for the activeStreaks
+//                  cull. RainFeature::build_rain  fills these once.
+
+// Material parameters (pushed per frame by RainFeature::update —).
+// This is exactly the implementation.md RainFeature::update streak uniform list:
+//   time: float  — global animation time (getUserTime(), seconds)
+//   rainIntensity: float  — effective rain intensity in [0,1] (0 => nothing)
+//   activeStreaks: int    — round(intensity * kMaxStreaks); slots >= this collapse
+//   cameraPos: float3 — world-space camera position (volume centre)
+//   volumeExtent: float  — half-extent of the camera-centered cube (70.0)
+//   fallSpeed: float  — world units fallen per second
+//   streakLenMin: float  — minimum streak length (0.12)
+//   streakLenMax: float  — maximum streak length (0.7)
+
+// volumeExtent is a uniform (default/pushed 70.0) so the camera-centered cube
+// tracks the C++ kVolumeExtent used by weather_shader_ref / RainFeature.
+
+// Compiled with: matc -a opengl -p desktop -o heaven_rain.filamat heaven_rain.mat
+
+material {
+    name : heaven_rain,
+    requires : [ uv0, custom0 ],
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    // Falling rain is occluded by closer scene geometry (depth test on, the
+    // default) but must not write depth, so transparent streaks behind it still
+    // composite correctly — same convention as the smoke particles.
+    depthWrite : false,
+    parameters : [
+        { type : float,  name : time },
+        { type : float,  name : rainIntensity },
+        { type : int,    name : activeStreaks },
+        { type : float3, name : cameraPos, precision : high },
+        { type : float,  name : volumeExtent },
+        { type : float,  name : fallSpeed },
+        { type : float,  name : streakLenMin },
+        { type : float,  name : streakLenMax },
+        { type : float4, name : rainShaderTuning }
+    ],
+    variables : [
+        // .x = accept flag (1 = active streak, 0 = collapsed) — fades the
+        //      fragment so inactive / non-raining streaks draw nothing.
+        // .y = per-drop brightness/alpha scale in ~[0.5, 1.0] (a pure function
+        //      of the per-streak seed) so drops differ in brightness — the
+        //      fragment multiplies its alpha by this.
+        streakParams
+    ]
+}
+
+vertex {
+    // Scalar hash to [0,1). Mirrors weather_shader_ref::hash1 exactly:
+    //   fract(sin(n) * 43758.5453123)
+    float hash1(float n) {
+        return fract(sin(n) * 43758.5453123);
+    }
+
+    // Vec3 hash to [0,1)^3. Mirrors weather_shader_ref::hash3 exactly, including
+    // the dot constants — these MUST match the CPU reference byte-for-byte.
+    float3 hash3(float3 seed) {
+        return float3(
+            hash1(dot(seed, float3(127.1, 311.7, 74.7))),
+            hash1(dot(seed, float3(269.5, 183.3, 246.1))),
+            hash1(dot(seed, float3(113.5, 271.9, 124.6))));
+    }
+
+    // ── Shared drop-lattice hashes (mirror weather_shader_ref::hash21/hash22 and
+    //    heaven_splash.mat byte-for-byte) ──
+    // These are the Dave-Hoskins style hashes the SPLASH shader uses to derive
+    // the per-cell jitter / phase. The streak shader uses the SAME ones so a
+    // streak column and the splash cell it lands in agree on the same world XY.
+    float hash21(float2 p) {
+        float3 p3 = fract(float3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+    float2 hash22(float2 p) {
+        float3 p3 = fract(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.xx + p3.yz) * p3.zy);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Half thickness of a streak in world units (camera-facing width).
+        // Issue 2 tuning: thinned from 0.08 -> 0.03 so each streak reads as a
+        // fine rain line rather than a fat bright dash. Combined with the lower
+        // fragment alpha gain and cooler/darker tint below, this keeps streaks
+        // from blowing out to white against the bright overcast sky.
+        float streakHalfWidth = materialParams.rainShaderTuning.x;
+
+        // Shared drop-lattice constants. kDropSpacing MUST equal
+        // weather_shader_ref::kDropSpacing AND the kRippleSpacing constant in
+        // heaven_splash.mat so the streak column and the splash cell tile on the
+        // SAME absolute world XY grid. The fall-period variation band and the
+        // per-cell hash seeds below also mirror weather_shader_ref byte-for-byte.
+        const float kDropSpacing       = 1.2;
+        const float kFallPeriodVaryMin = 0.8;
+        const float kFallPeriodVaryMax = 1.4;
+
+        // ── Shared WIND constants (mirror weather_shader_ref::kWindDir /
+        //    kWindStrength* / kWindGustFreq byte-for-byte) ──
+        // The wind is a horizontal drift that grows with how far a drop has
+        // fallen; the SAME model is applied by heaven_splash.mat so a slanted
+        // drop splashes exactly where it lands. windStrength is a slow,
+        // purely-time-driven gust (base > amp so it never reverses); at
+        // strength 0 the drift is exactly zero (no-wind fall unchanged).
+        const float2 kWindDir          = normalize(float2(1.0, 0.4));
+        const float  kWindStrengthBase = 0.18;
+        const float  kWindStrengthAmp  = 0.005;
+        const float  kWindGustFreq     = 0.3;
+
+        float4 c0    = getCustom0();
+        float3 seed  = c0.xyz;        // per-streak seed (CUSTOM0.xyz)
+        float  idx   = c0.w;          // streak slot index (CUSTOM0.w)
+        float2 corner = material.uv0.xy * 2.0 - 1.0; // [0,1] -> [-1,1]
+
+        // ── Two camera references (see file header) ──
+        // Filament shades in CAMERA-RELATIVE world space, so the FINAL placement
+        // of material.worldPosition must be relative to the SHADING-space camera
+        // `camShading` (read from the view matrix). The per-drop lattice math is
+        // done in ABSOLUTE world space against `materialParams.cameraPos`
+        // (camAbs); the final translate maps absolute world -> shading space via
+        // `+ camShading - camAbs` (a constant per-frame offset), which makes the
+        // drops world-static while keeping the volume correctly around the camera.
+        float3 camShading = frameUniforms.worldFromViewMatrix[3].xyz;
+        float3 camAbs     = materialParams.cameraPos;
+        float  E          = materialParams.volumeExtent;
+        float  span       = 2.0 * E;
+
+        // ── Shared lattice CELL for this streak slot (mirrors
+        //    weather_shader_ref::streak_seed_cell byte-for-byte) ──
+        // World-anchored: snap the tiled instance of this seed nearest the
+        // camera to the kDropSpacing lattice, so the cell holds still in world
+        // space as the camera moves (camera flies THROUGH the rain) and wraps by
+        // one window when the seed drifts a full span away (density constant).
+        float3 h     = hash3(seed);
+        float  seedX = (h.x * 2.0 - 1.0) * E;
+        float  seedY = (h.y * 2.0 - 1.0) * E;
+        float  relX  = mod(seedX - camAbs.x + E, span) - E;
+        float  relY  = mod(seedY - camAbs.y + E, span) - E;
+        float  absX  = camAbs.x + relX;
+        float  absY  = camAbs.y + relY;
+        float2 cell  = floor(float2(absX, absY) / kDropSpacing);
+
+        // ── Shared fall law for this cell (mirrors drop_fall_period /
+        //    drop_fall_speed / drop_phase / drop_z byte-for-byte) ──
+        // The fall span is FIXED at exactly 2*E (vSpeed*period == 2E) so the drop
+        // stays inside the camera-centered cube [camAbs.z - E, camAbs.z + E];
+        // only the per-cell SPEED varies.
+        float  base       = (2.0 * E) / materialParams.fallSpeed;
+        float  periodVary = mix(kFallPeriodVaryMin, kFallPeriodVaryMax, hash21(cell + 29.7));
+        float  fallPeriod = base * periodVary;
+        float  vSpeed     = (2.0 * E) / fallPeriod;
+        float  cellPhase  = hash21(cell + 5.3) * fallPeriod;
+        float  dropTopZ   = camAbs.z + E;                       // drop_top_z
+        float  z          = dropTopZ - vSpeed * mod(materialParams.time - cellPhase, fallPeriod);
+
+        // ── Jittered column world XY (mirrors drop_column_xy byte-for-byte) ──
+        // This is the SAME world XY the splash shader blooms its ripple at,
+        // BEFORE wind drift; with wind the landing point is offset (below) and
+        // the splash applies the identical offset, so they still coincide.
+        float2 jitter = hash22(cell * 1.37 + 3.1);
+        float2 colXY  = (cell + jitter) * kDropSpacing;
+
+        // ── WIND drift (mirrors wind_strength / drop_wind_offset / drop_xy_at_z
+        //    byte-for-byte) ──
+        // Horizontal drift grows with the distance fallen below the top of the
+        // volume; windStrength is the slow time-varying gust. At strength 0 the
+        // drift is exactly zero so this reduces to the pure vertical fall.
+        float windStrength = kWindStrengthBase
+                           + kWindStrengthAmp * sin(materialParams.time * kWindGustFreq);
+        float fallenDist   = dropTopZ - z;                      // >= 0 in the band
+        float2 windOffset  = kWindDir * windStrength * fallenDist;
+        float2 dropXY      = colXY + windOffset;
+
+        // Absolute world drop position; map into camera-relative shading space.
+        float3 absWorld = float3(dropXY.x, dropXY.y, z);
+        float3 center   = absWorld - camAbs + camShading;
+
+        // ── Per-drop randomised appearance (distinct hash seeds so length,
+        //    brightness and width do not correlate) ──
+        // length in [streakLenMin, streakLenMax] (mirrors
+        // weather_shader_ref::streak_length, hash1(seed.x)); brightness ~[0.5,1]
+        // and a small width jitter ~[0.7,1.3] give each drop its own look.
+        float len       = mix(materialParams.streakLenMin, materialParams.streakLenMax, hash1(seed.x));
+        float halfLen   = 0.5 * len;
+        float bright    = mix(0.5, 1.0, hash1(seed.y * 1.7 + 3.1));
+        float widthRand = mix(0.7, 1.3, hash1(seed.z * 2.3 + 7.9));
+        float halfWidth = streakHalfWidth * widthRand;
+
+        // ── Camera-facing billboard, elongated along the drop's VELOCITY ──
+        // The streak's long axis is the drop's velocity direction (down + the
+        // per-second wind drift), so slanted rain visibly slants. Velocity =
+        // (windOffsetPerSec, -vSpeed): the horizontal component is the wind
+        // drift per second (windStrength * vSpeed along kWindDir, since the drop
+        // falls vSpeed m/s and drifts windStrength per metre fallen) and the
+        // vertical component is the downward fall speed. At windStrength 0 this
+        // is exactly world -Z (pure vertical), matching the old billboard.
+        float3 velDir   = float3(kWindDir * (windStrength * vSpeed), -vSpeed);
+        float  vl       = length(velDir);
+        float3 longAxis = (vl > 1e-5) ? (velDir / vl) : float3(0.0, 0.0, -1.0);
+
+        // Width axis is horizontal, perpendicular to both the long axis and the
+        // line of sight, so the flat face points at the camera (billboard).
+        float3 toCam = camShading - center;
+        float3 right = cross(longAxis, toCam);
+        float  rl    = length(right);
+        right = (rl > 1e-5) ? right / rl : float3(1.0, 0.0, 0.0);
+
+        float3 world = center
+                     + right    * (corner.x * halfWidth)
+                     + longAxis * (corner.y * halfLen);
+
+        // ── Active-streak cull  ──
+        // idx >= activeStreaks, or rain intensity 0, collapses the whole quad to
+        // a single point (zero area => renders nothing), keeping the active
+        // count / density driven purely by activeStreaks.
+        float active_  = step(idx + 0.5, float(materialParams.activeStreaks));
+        float raining = step(0.0001, materialParams.rainIntensity);
+        float accept  = active_ * raining;
+        world = mix(camShading, world, accept);
+
+        material.worldPosition = float4(world, 1.0);
+        material.streakParams  = float4(accept, bright, 0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float accept = variable_streakParams.x;   // 0 => collapsed, nothing to draw
+        float bright = variable_streakParams.y;   // per-drop brightness scale ~[0.5,1]
+
+        // Quad-local coordinates: x across the streak width, y along its length.
+        float2 p      = getUV0() * 2.0 - 1.0;      // [-1, 1]
+        float  across = abs(p.x);
+        float  along  = abs(p.y);
+
+        // Soft vertical streak: a bright thin core that falls off toward the
+        // horizontal edges, tapered at the top and bottom ends so the streak
+        // fades rather than ending in a hard rectangle.
+        float core = 1.0 - smoothstep(0.0, 1.0, across);
+        float ends = 1.0 - smoothstep(0.55, 1.0, along);
+
+        // Modulate the whole streak by rain intensity: denser rain reads
+        // as stronger streaks; intensity 0 contributes nothing. LOOK PASS: the
+        // alpha gain dropped 0.55 -> 0.35 so streaks are clearly translucent
+        // dashes rather than bright white lines, and each drop is scaled by its
+        // own per-drop brightness (variable_streakParams.y) so drops differ.
+        float alpha = accept * bright * core * ends *
+                      materialParams.rainIntensity *
+                      materialParams.rainShaderTuning.y;
+
+        // Cool rain tint. LOOK PASS: cooled/darkened from (0.62, 0.68, 0.78)
+        // toward a deeper, less-luminant grey-blue so streaks no longer read as
+        // bright white against the overcast sky. Output premultiplied alpha for
+        // Filament's `transparent` blender (same convention as heaven_unlit /
+        // heaven_splash).
+        float3 col = float3(materialParams.rainShaderTuning.z,
+                            0.58,
+                            materialParams.rainShaderTuning.w);
+        material.baseColor = float4(col * alpha, alpha);
+    }
+}

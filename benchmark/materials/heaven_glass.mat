@@ -1,0 +1,131 @@
+// Heaven Benchmark — Screen-space refractive glass material
+
+// A surface (not post-process) lit material that refracts the rendered
+// scene color behind it using Filament's screen-space refraction path
+// (refractionMode: screenspace). `refractionType: solid` treats the
+// glass as a solid volume of index `ior`, so the refracted ray is bent
+// at the surface and the scene behind reads displaced through the pane —
+// the look used for windows, the airship canopy, and lab glassware.
+
+// Surfaces are routed here (instead of heaven_lit) only when the
+// `--refraction` feature is enabled AND the xml0-derived glass predicate
+// matches (see engine/material_rhi.cpp). With refraction disabled the
+// caller binds the opaque heaven_lit material instead, so this material's
+// existence never changes the Shipping_Look.
+
+// Authoring mirrors heaven_lit.mat: a base-color/normal sampler pair with
+// `has*` guards plus the per-material UV transform. The refraction set
+// (transmission / absorption / ior / thickness / roughness) carries the
+// glass appearance.
+
+material {
+    name : heaven_glass,
+    requires : [ uv0 ],
+    shadingModel : lit,
+    blending : opaque,
+    refractionMode : screenspace,
+    refractionType : solid,
+    reflections : screenspace,
+    doubleSided : false,
+    flipUV : false,
+    specularAmbientOcclusion : bentNormals,
+    multiBounceAmbientOcclusion : true,
+    specularAntiAliasing : true,
+    parameters : [
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasBaseColor },
+        { type : sampler2d, name : normalMap },
+        { type : bool,      name : hasNormal },
+        { type : float,     name : normalStrength },
+        { type : float4,    name : baseTransform },
+        // Bulb emission is independent of Fresnel/refraction and flare angle.
+        // The cache supplies the same authored map, warm tint and night gain
+        // as the opaque material route.
+        { type : sampler2d, name : emissiveMap },
+        { type : bool,      name : hasEmissive },
+        { type : float3,    name : emissionTint },
+        { type : float,     name : emissionScale },
+        { type : float4,    name : surfaceEmissionTuning },
+        // Tint applied to the glass (and to the transmitted color via the
+        // base color). Defaults to a near-neutral pane.
+        { type : float3,    name : glassTint },
+        // Refraction set. `transmission` is the fraction of light that
+        // passes through (1 = fully clear). `absorption` is the per-unit
+        // attenuation of the transmitted color inside the solid volume,
+        // `ior` the index of refraction (≈1.5 for window glass), and
+        // `thickness` the solid distance light travels through the pane,
+        // scaling the absorption tint and the screen-space bend.
+        { type : float,     name : transmission },
+        { type : float3,    name : absorption },
+        { type : float,     name : ior },
+        { type : float,     name : thickness },
+        // Surface microgloss. Low roughness keeps glass mirror-sharp;
+        // raise it for frosted/dirty panes.
+        { type : float,     name : roughness }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        // Per-material UV transform — uv*scale + offset, identity {1,1,0,0}
+        // for most panes (matches heaven_lit's baseTransform convention).
+        float2 uv = getUV0() * materialParams.baseTransform.xy
+                  + materialParams.baseTransform.zw;
+
+        // Normal map MUST be set before prepareMaterial() — Filament consumes
+        // material.normal inside it; assigning afterwards is silently ignored.
+        if (materialParams.hasNormal) {
+            float3 n = texture(materialParams_normalMap, uv).xyz;
+            if (n.b < 0.01) {
+                n.xy = n.xy * 2.0 - 1.0;
+                n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
+            } else {
+                n = n * 2.0 - 1.0;
+            }
+            material.normal = normalize(float3(
+                    n.xy * materialParams.normalStrength, max(n.z, 1e-4)));
+        }
+
+        prepareMaterial(material);
+
+        // Base color tints both the surface and the transmitted scene
+        // behind the glass. Default to the authored tint when no map.
+        if (materialParams.hasBaseColor) {
+            material.baseColor = texture(materialParams_baseColorMap, uv);
+            material.baseColor.rgb *= materialParams.glassTint;
+        } else {
+            material.baseColor = float4(materialParams.glassTint, 1.0);
+        }
+
+        // Glass is a smooth dielectric: no metallic, low roughness, the
+        // standard ~0.5 dielectric reflectance (F0 ≈ 0.04 at the default
+        // ior). The refraction set drives the see-through look.
+        material.metallic     = 0.0;
+        material.roughness     = materialParams.roughness;
+        material.reflectance   = 0.5;
+
+        // Screen-space solid refraction. transmission lets the scene
+        // behind show through; absorption tints it with depth; ior bends
+        // the refracted ray; thickness sets the solid path length.
+        material.transmission = materialParams.transmission;
+        material.absorption   = materialParams.absorption;
+        material.ior          = materialParams.ior;
+        material.thickness    = materialParams.thickness;
+
+        // Add the bulb's radiance after the ordinary glass inputs. This does
+        // not replace reflection or transmission, and carries no camera-axis
+        // factor: only the separate flare sprite has that angular policy.
+        if (materialParams.hasEmissive) {
+            float3 esample = texture(materialParams_emissiveMap, uv).rgb;
+            float scale = max(0.0,
+                materialParams.emissionScale - materialParams.surfaceEmissionTuning.x)
+                * materialParams.surfaceEmissionTuning.y;
+            float luminance = max(esample.r, max(esample.g, esample.b));
+            float mask = smoothstep(materialParams.surfaceEmissionTuning.z,
+                                    materialParams.surfaceEmissionTuning.w,
+                                    luminance);
+            material.emissive = float4(
+                esample * materialParams.emissionTint * mask * scale, 0.0);
+        }
+    }
+}

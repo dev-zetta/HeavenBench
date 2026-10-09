@@ -1,0 +1,377 @@
+// Heaven Benchmark — Subsurface / translucency material
+
+// This is heaven_lit.mat re-authored under Filament's `subsurface` shading
+// model. Unlike clear-coat / anisotropy (which are parameter extensions of the
+// standard lit model), subsurface scattering is a distinct compile-time
+// shadingModel, so this is a separate base material selected per-surface by the
+// Material_Model_Selector (the C++ MaterialInstanceCache) when the subsurface
+// feature is enabled.
+
+// The subsurface model (see surface_shading_model_subsurface.fs) computes the
+// SAME standard Cook-Torrance BRDF as the lit model (identical baseColor,
+// roughness, metallic, reflectance, normal handling) and ADDS a transmitted
+// (back-lit) term:
+
+//     color = subsurfaceColor * (subsurface * Fd_Lambert()); transmitted
+//     ...
+//     color += (Fd + Fr) * (NoL * occlusion); standard BRDF
+
+// The transmitted term is scaled entirely by `material.subsurfaceColor`, so a
+// neutral subsurfaceColor of {0,0,0} makes the transmission vanish and the
+// surface reads as the Shipping_Look opaque standard-lit appearance (the
+// `subsurfacePower` / `thickness` knobs only scale the now-zero transmitted
+// term, so their values are irrelevant at the neutral default). Filament `.mat`
+// parameters carry no inline defaults: the C++ MaterialInstanceCache
+// supplies these per-surface from Material_Data when the subsurface feature is
+// on, and any parameter it leaves unset is zero-initialised by Filament — which
+// for subsurfaceColor is exactly the parity-neutral {0,0,0}. The C++ drives
+// subsurfaceColor (and thickness / subsurfacePower) to produce visible back-lit
+// transmission.
+
+// Everything from the UV transform through the wetness block is kept
+// byte-identical to heaven_lit.mat so the base diffuse / normal / specular /
+// emission handling is unchanged. Displacement is handled by CPU tessellation
+// at load time (not POM).
+
+// ── Foliage two-sidedness / alpha cutout (default-on fix) ──
+// With the subsurface model now default ON, foliage surfaces (leaf/leaves/
+// branch/fir/grass) route here via the Material_Model_Selector. Foliage is
+// auto-detected two-sided + alpha-masked (GpuMaterial.two_sided=true,
+// alpha_ref=0.5), so this material MUST be `doubleSided: true` +
+// `blending: masked` + `maskThreshold: 0.5` (matching heaven_lit_twosided's
+// foliage pattern) or backlit leaves lose two-sidedness AND their alpha cutout
+// and render as solid backface-culled cards. blending / doubleSided are
+// orthogonal to the subsurface shadingModel, so the subsurface scatter still
+// applies. The transmitted term still vanishes at the neutral subsurfaceColor
+// {0,0,0}, so the ALL-DISABLED parity path is preserved.
+
+material {
+    name : heaven_subsurface,
+    requires : [ uv0, uv1, custom0, custom1, custom2, custom3, custom4, custom5, custom6, custom7 ],
+    shadingModel : subsurface,
+    blending : masked,
+    maskThreshold : 0.5,
+    alphaToCoverage : true,
+    doubleSided : true,
+    flipUV : false,
+    specularAmbientOcclusion : bentNormals,
+    multiBounceAmbientOcclusion : true,
+    specularAntiAliasing : true,
+    parameters : [
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasBaseColor },
+        { type : sampler2d, name : normalMap },
+        { type : bool,      name : hasNormal },
+        { type : float,     name : normalStrength },
+        { type : sampler2d, name : specularMap },
+        { type : bool,      name : hasSpecular },
+        { type : sampler2d, name : emissiveMap },
+        { type : bool,      name : hasEmissive },
+        { type : float3,    name : emissionTint },
+        { type : float,     name : emissionScale },
+        { type : sampler2d, name : detailMap },
+        { type : sampler2d, name : detailNormalMap },
+        { type : sampler2d, name : detailSpecularMap },
+        { type : bool,      name : hasDetail },
+        { type : int,       name : detailMode },
+        { type : float3,    name : detailStrength },
+        { type : bool,      name : detailUsesBaseAlpha },
+        { type : float4,    name : detailTransform },
+        { type : float4,    name : baseTransform },
+        { type : sampler2d, name : heightMap },
+        // Vertex geometry uses a separate isotropic trilinear sampler.
+        { type : sampler2d, name : geometryHeightMap, stages : [ vertex ] },
+        { type : bool,      name : geometryDisplacement },
+        { type : float4,    name : displacementParams },
+        { type : bool,      name : hasHeight },
+        { type : float,     name : displacementScale },
+        // Authoritative metallic flag, derived in the C++ code from
+        // the material's parent chain (true ⇔ ancestor is
+        // mesh_paint_reflection_cube_base or its tessellation
+        // sibling). Drives whether the spec map contributes to
+        // metallic + low roughness, or just to a subtle dielectric
+        // gloss.
+        { type : bool,      name : isMetallic },
+        // ── Subsurface extension  ──
+        // subsurfaceColor in [0,1]^3 scales (and tints) the transmitted
+        // back-lit term; thickness in [0,1] is the perceptual layer thickness
+        // (lower = more transmission); subsurfacePower controls the forward-
+        // scatter falloff. Filament `.mat` parameters have no inline default, so
+        // the C++ MaterialInstanceCache supplies the neutral/data-driven values;
+        // an unset subsurfaceColor is zero-initialised to {0,0,0}, which zeroes
+        // the transmitted term so the surface reads like the Shipping_Look
+        // opaque appearance (parity when neutral).
+        { type : float3,    name : subsurfaceColor },
+        { type : float,     name : thickness },
+        { type : float,     name : subsurfacePower },
+        { type : float4,    name : surfaceSamplingTuning },
+        { type : float4,    name : surfaceMetallicTuning },
+        { type : float4,    name : surfaceDielectricTuning },
+        { type : float4,    name : surfaceReflectanceTuning },
+        { type : float4,    name : surfaceEmissionTuning },
+        { type : float4,    name : surfaceMaskedEmissionTuning },
+        { type : float4,    name : surfaceWetnessTuning },
+        { type : float2,    name : surfaceWetnessShape }
+    ],
+}
+
+vertex {
+    #include "includes/bounded_displacement.glsl"
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.geometryDisplacement && getCustom7().w > 0.0) {
+            applyParentChord(material);
+        } else if (materialParams.geometryDisplacement) {
+            float3 userWorldPosition =
+                    (getUserWorldFromWorldMatrix() * material.worldPosition).xyz;
+            float distance = length(userWorldPosition - getMaterialGlobal1().xyz);
+            float normalizedDistance = clamp(
+                    (distance - materialParams.displacementParams.z)
+                    * materialParams.displacementParams.w, 0.0, 8.0);
+            float fade = pow(saturate(1.0 - normalizedDistance),
+                             materialParams.displacementParams.y);
+            float2 uv = material.uv0.xy * materialParams.baseTransform.xy
+                      + materialParams.baseTransform.zw;
+            // A vertex is one sample of the height field. Filter frequencies
+            // finer than its incident UV edges before moving the geometry;
+            // otherwise sparse triangles alias into false shadow-casting folds.
+            // CUSTOM0.yz is the UV footprint, populated by MeshStore. Keep the
+            // authored distance fade independent of this sampling LOD.
+            float2 footprint = getCustom0().yz * abs(materialParams.baseTransform.xy)
+                             * float2(textureSize(materialParams_geometryHeightMap, 0));
+            float meshLod = log2(max(max(footprint.x, footprint.y), 1.0));
+            float heightLod = max(normalizedDistance, meshLod);
+            float height = textureLod(materialParams_geometryHeightMap, uv, heightLod).r;
+            float offset = (height - 127.0 / 255.0)
+                         * materialParams.displacementParams.x * fade
+                         * getCustom0().x;
+            material.worldPosition.xyz += normalize(material.worldNormal) * offset;
+        }
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        // Apply Heaven's per-material UV transform — uv*scale + offset.
+        // Most materials use the identity {1,1,0,0}; ruins/airship
+        // materials use scaled/offset values to wrap the texture at
+        // a different rate (e.g. ruins_merlon: vec4(2,1,-1,0)).
+        float2 uv = getUV0() * materialParams.baseTransform.xy
+                  + materialParams.baseTransform.zw;
+        float4 baseSample = materialParams.hasBaseColor
+                ? texture(materialParams_baseColorMap, uv)
+                : float4(materialParams.surfaceSamplingTuning.xxx, 1.0);
+        float4 detailSample =
+            float4(materialParams.surfaceSamplingTuning.yyy, 1.0);
+        float3 detailBlend = float3(0.0);
+        float2 detailUV = uv;
+        if (materialParams.hasDetail) {
+            float2 detailBaseUV =
+                    (materialParams.detailMode == 2 || materialParams.detailMode == 4)
+                    ? getUV1() : uv;
+            detailUV = detailBaseUV * materialParams.detailTransform.xy
+                     + materialParams.detailTransform.zw;
+            detailSample = texture(materialParams_detailMap, detailUV);
+            float blendAlpha = detailSample.a;
+            if (materialParams.detailUsesBaseAlpha) blendAlpha *= baseSample.a;
+            detailBlend = materialParams.detailStrength * blendAlpha;
+        }
+
+        // ── Normal map + height bump — MUST precede prepareMaterial() ──
+        // Filament consumes material.normal INSIDE prepareMaterial() (it bakes
+        // shading_normal then); assigning material.normal afterwards is silently
+        // ignored. This block was previously after prepareMaterial(), so normal
+        // mapping and the height-derived bump were dead on every lit surface.
+        float3 tangentNormal = float3(0.0, 0.0, 1.0);
+        if (materialParams.hasNormal) {
+            float3 n = texture(materialParams_normalMap, uv).xyz;
+            if (n.b < materialParams.surfaceSamplingTuning.z) {
+                n.xy = n.xy * 2.0 - 1.0;
+                n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
+            } else {
+                n = n * 2.0 - 1.0;
+            }
+            n = normalize(float3(
+                    n.xy * materialParams.normalStrength, max(n.z, 1e-4)));
+            tangentNormal = n;
+        }
+        if (materialParams.hasDetail && detailBlend.y > 0.0) {
+            float2 detailNormal = texture(materialParams_detailNormalMap, detailUV).xy
+                                * 2.0 - 1.0;
+            tangentNormal.xy += detailNormal * detailBlend.y
+                              * materialParams.normalStrength;
+        }
+        // Height map normal perturbation (displacement is baked into geometry).
+        if (materialParams.hasHeight) {
+            float texel = materialParams.surfaceSamplingTuning.w;
+            float hc = texture(materialParams_heightMap, uv).r;
+            float hx = texture(materialParams_heightMap, uv + float2(texel, 0.0)).r;
+            float hy = texture(materialParams_heightMap, uv + float2(0.0, texel)).r;
+            float3 bump = float3(hc - hx, hc - hy, 0.0) * 2.0;
+            tangentNormal = normalize(tangentNormal + bump);
+        }
+        if (materialParams.hasNormal || materialParams.hasDetail ||
+            materialParams.hasHeight) {
+            material.normal = normalize(tangentNormal);
+        }
+
+        prepareMaterial(material);
+
+        material.baseColor = baseSample;
+
+        if (materialParams.hasDetail) {
+            if (materialParams.detailMode <= 2) {
+                material.baseColor.rgb = clamp(
+                        material.baseColor.rgb
+                        + (detailSample.rgb * 2.0 - 1.0) * detailBlend.x,
+                        0.0, 1.0);
+            } else {
+                material.baseColor.rgb *= clamp(
+                        detailSample.rgb + 1.0 - detailBlend.x, 0.0, 1.0);
+            }
+        }
+
+        if (materialParams.hasSpecular) {
+            // Heaven's specular maps encode different things
+            // depending on whether the material is authored against
+            // the metallic or dielectric pipeline. The classifier
+            // is the `isMetallic` flag, derived in the C++ from the
+            // material's parent chain (mesh_paint_reflection_cube_base
+            // → metal; mesh_base / mesh_tessellation_base → dielectric).
+
+            //   - METAL: spec.r ≈ glossy fresnel intensity. We map
+            //     it to roughness (low spec → rough copper, high
+            //     spec → polished brass) and let `metallic = 1`
+            //     pull F0 from baseColor.
+            //   - DIELECTRIC: spec.r is just an authored gloss
+            //     mask for crisp ambient highlights. We never
+            //     drive `metallic` from it — even bright stucco
+            //     spec values must stay matte. Roughness comes
+            //     from the spec map but stays in a high range so
+            //     plaster doesn't get plastic highlights.
+            float spec = texture(materialParams_specularMap, uv).r;
+            if (materialParams.hasDetail && detailBlend.z > 0.0) {
+                float detailSpec = texture(materialParams_detailSpecularMap, detailUV).r;
+                if (materialParams.detailMode <= 2) {
+                    spec = clamp(spec + (detailSpec * 2.0 - 1.0) * detailBlend.z,
+                                 0.0, 1.0);
+                } else {
+                    spec *= clamp(detailSpec + 1.0 - detailBlend.z, 0.0, 1.0);
+                }
+            }
+            if (materialParams.isMetallic) {
+                material.metallic    = 1.0;
+                material.roughness = clamp(
+                    1.0 - spec * materialParams.surfaceMetallicTuning.y,
+                    materialParams.surfaceMetallicTuning.z,
+                    materialParams.surfaceMetallicTuning.w);
+                material.reflectance = 0.5;
+            } else {
+                material.metallic    = 0.0;
+                material.roughness = clamp(
+                    1.0 - spec * materialParams.surfaceDielectricTuning.x,
+                    materialParams.surfaceDielectricTuning.y,
+                    materialParams.surfaceDielectricTuning.z);
+                // Slightly raise dielectric F0 only for surfaces
+                // with a meaningful spec map, so e.g. waxed wood
+                // or polished tile reads a touch brighter than
+                // chalky plaster — capped low so nothing approaches
+                // a metallic highlight.
+                material.reflectance =
+                    mix(materialParams.surfaceDielectricTuning.w,
+                        materialParams.surfaceReflectanceTuning.x, spec);
+            }
+        } else {
+            // No spec map → matte dielectric.
+            material.roughness = materialParams.surfaceReflectanceTuning.y;
+            material.metallic    = 0.0;
+            material.reflectance = materialParams.surfaceReflectanceTuning.z;
+        }
+
+        if (materialParams.hasEmissive) {
+            float4 esample = texture(materialParams_emissiveMap, uv);
+            // The.mat `emission_scale` lives on a roughly linear LDR
+            // range where 0.9 is a "subtle tint" (balloon fabric),
+            // 4..6 is a "lit window/door", and the backend forces it
+            // up to ~3.5 for any lamp/lantern/torch/glass surface
+            // (because Heaven only enables those at night via a
+            // material variant we don't track).
+
+            // For low scales (< 1.0) we want near-zero output: the
+            // balloon fabric should show emission *tint* on the
+            // diffuse, not glow. For high scales (> ~3) we want the
+            // texture to emit at HDR values that punch through bloom.
+
+            // The smoothstep mask is here so DXT-compressed dark
+            // pixels don't trigger emission, but it's gated to a
+            // narrow band (0.05.. 0.20). Pixels brighter than that
+            // pass through at full strength.
+
+            // Final curve:
+            //   scl_in <= 1.0 → near-black emission (preserves balloon
+            //                   tint behaviour)
+            //   scl_in > 1.0  → linear ramp, with a 4× boost so a
+            //                   bulb texel at ~0.5 lum bursts to ~6.0
+            //                   in HDR — well over Filament's bloom
+            //                   threshold of 1.0, producing the warm
+            //                   halo Heaven's `_on` materials gave.
+            float scl_in   = materialParams.emissionScale;
+            float scl_out =
+                max(0.0, scl_in - materialParams.surfaceEmissionTuning.x) *
+                materialParams.surfaceEmissionTuning.y;
+            float lum      = max(esample.r, max(esample.g, esample.b));
+            float mask = smoothstep(materialParams.surfaceEmissionTuning.z,
+                                    materialParams.surfaceEmissionTuning.w, lum);
+            float3 tint    = materialParams.emissionTint;
+            material.emissive = float4(esample.rgb * tint * mask * scl_out, 0.0);
+        }
+
+        // Wetness (Weather_System). g = getMaterialGlobal0():
+        //   g.x = specular boost, g.y = diffuse darken, g.z = wet amount in [0,1].
+        // Default {0,0,0,1} ⇒ zero change ⇒ exact Shipping_Look parity.
+        vec4 g = getMaterialGlobal0();
+        float wetAmt = g.z;
+
+        #define WET_DEBUG 0
+
+        #if WET_DEBUG == 1
+            material.baseColor.rgb = vec3(g.z);
+        #elif WET_DEBUG == 2
+            material.baseColor.rgb = vec3(clamp(getWorldNormalVector().z, 0.0, 1.0));
+        #elif WET_DEBUG == 3
+            material.baseColor.rgb = vec3(g.z * clamp(getWorldNormalVector().z, 0.0, 1.0));
+        #else
+        if (wetAmt > 0.0) {
+            // Upward-facing surfaces pool water; downward-facing stay drier.
+            float up = clamp(getWorldNormalVector().z, 0.0, 1.0); // Heaven world is Z-up
+            float wet = wetAmt * up;
+            float pool = up * up;                                       // deepest on flat ground
+
+            float darken = g.y * wet                                    // endpoint-scaled darken
+                         + wet * materialParams.surfaceWetnessTuning.x
+                         + wetAmt * pool * materialParams.surfaceWetnessTuning.y;
+            material.baseColor.rgb *=
+                clamp(1.0 - darken, materialParams.surfaceWetnessShape.x, 1.0);
+
+            float wetGloss =
+                clamp(wet * materialParams.surfaceWetnessShape.y, 0.0, 1.0);
+            material.roughness = clamp(
+                mix(material.roughness, materialParams.surfaceWetnessTuning.z,
+                    wetGloss),
+                materialParams.surfaceWetnessTuning.w, 1.0);
+            material.reflectance  = clamp(material.reflectance + g.x * wet, 0.0, 1.0); // spec up
+        }
+        #endif
+
+        // ── Subsurface transmission  ──
+        // Apply the per-instance subsurface parameters LAST so the base-layer
+        // (standard BRDF) shading above is untouched. At subsurfaceColor ==
+        // {0,0,0} (the neutral default and the disabled-feature state) the
+        // transmitted term `subsurfaceColor * (subsurface * Fd_Lambert())`
+        // evaluates to zero, so this material renders the standard-lit
+        // appearance — preserving Shipping_Look parity. When driven non-zero
+        // from Material_Data, light transmits through the surface when back-lit.
+        material.subsurfaceColor = materialParams.subsurfaceColor;
+        material.thickness       = materialParams.thickness;
+        material.subsurfacePower = materialParams.subsurfacePower;
+    }
+}

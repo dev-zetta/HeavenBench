@@ -1,0 +1,524 @@
+[
+  {
+    "name": "wall-front-moderate",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.75,
+      "tessellation.factor": 0.75,
+      "tessellation.distance": 0.75
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "wall-front-normal",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "wall-front-extreme",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.5,
+      "tessellation.factor": 1.5,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "wall-front-zero",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "wall-front-off",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": false,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "roof-under-moderate",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.75,
+      "tessellation.factor": 0.75,
+      "tessellation.distance": 0.75
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "roof-under-normal",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "roof-under-extreme",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.5,
+      "tessellation.factor": 1.5,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "roof-under-zero",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "roof-under-off",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": false,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "wall-front-custom-4k",
+    "pose": [
+      5.80028,
+      0.29998,
+      2.0944,
+      157.06,
+      0
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "4k",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.8,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The stucco wall and displaced corner meet without a vertical background slit; zero scale retains the subdivision control."
+  },
+  {
+    "name": "roof-under-custom-4k",
+    "pose": [
+      0.15178,
+      5.19998,
+      6.44978,
+      -90,
+      35.05
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "4k",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.8,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "Joined roof-cap texture charts remain closed without bright background slits along the V and underside; true Off and zero scale isolate positional displacement."
+  },
+  {
+    "name": "wall-grazing-moderate",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.75,
+      "tessellation.factor": 0.75,
+      "tessellation.distance": 0.75
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  },
+  {
+    "name": "wall-grazing-normal",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  },
+  {
+    "name": "wall-grazing-extreme",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.5,
+      "tessellation.factor": 1.5,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  },
+  {
+    "name": "wall-grazing-zero",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 0.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  },
+  {
+    "name": "wall-grazing-off",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "tessellation.enabled": false,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.0,
+      "tessellation.distance": 1.0
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  },
+  {
+    "name": "wall-grazing-custom-4k",
+    "pose": [
+      3.65028,
+      -0.65002,
+      2.49978,
+      107.04,
+      -7.64
+    ],
+    "args": [
+      "--camera-fov",
+      "50"
+    ],
+    "frames": 45,
+    "settings": {
+      "render_test_scene": "asset-contact-shadow",
+      "texture_quality": "4k",
+      "time_of_day": 12,
+      "tessellation.enabled": true,
+      "tessellation.scale": 1.0,
+      "tessellation.factor": 1.8,
+      "tessellation.distance": 1.5
+    },
+    "asset_source_nodes": [
+      "heaven/nodes/house2.node",
+      "heaven/nodes/stone1.node"
+    ],
+    "expected_visible_behavior": "The wall join stays closed and the thin shutters retain an intact silhouette without new triangular notches or spikes."
+  }
+]

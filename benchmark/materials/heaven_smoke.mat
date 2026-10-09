@@ -1,0 +1,262 @@
+// Heaven Benchmark — GPU-driven smoke particles
+
+// Each emitter renderable has N quads pre-allocated at scene-load time.
+// Per-particle state (position, size, alpha) is computed entirely in the
+// vertex shader from a per-slot seed and a `time` uniform — zero CPU
+// work per frame after the buffer is built once.
+
+// Vertex attributes (one quad = 4 vertices):
+//   POSITION.xyz = emitter origin in world space (same for all 4 verts)
+//   UV0.xy       = corner ID in [0,1] (BL, BR, TR, TL)
+//   CUSTOM0.xyzw = (slot index, base_radius, growth, velocity)
+//   CUSTOM1.x    = lifetime (seconds)
+
+// Material parameters (set per emitter MaterialInstance):
+//   time: float — global animation time (seconds)
+//   tint: float3 — RGB tint baked from the emitter material
+//   alphaScale: float — peak alpha during plateau
+//   spawnInterval: float — seconds between staggered slot spawns
+
+// Compiled with: matc -a all -p desktop -o heaven_smoke.filamat heaven_smoke.mat
+
+material {
+    name : heaven_smoke,
+    requires : [ uv0, custom0, custom1 ],
+    shadingModel : lit,
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    transparency : twoPassesTwoSides,
+    parameters : [
+        { type : float,  name : time },
+        { type : float3, name : tint },
+        { type : float,  name : alphaScale },
+        { type : float,  name : spawnInterval },
+        { type : float4, name : particleMotionTuning },
+        { type : float4, name : particleShapeTuning }
+    ],
+    variables : [
+        ageNorm,        // .x = age/life,.y = slot seed,.z = rise (m above emitter)
+        worldPos        // world-space position for noise sampling
+    ]
+}
+
+vertex {
+    // Cheap deterministic hashes from a single float seed.
+    float hash11(float x) {
+        x = fract(x * 0.1031);
+        x *= x + 33.33;
+        x *= x + x;
+        return fract(x);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Decode per-particle attributes.
+        float3 emitter_origin = material.worldPosition.xyz;  // POSITION
+        float2 corner         = material.uv0.xy * 2.0 - 1.0; // [0,1] → [-1,1]
+        float4 c0             = getCustom0();
+        float4 c1             = getCustom1();
+        float  slot           = c0.x;
+        float  base_radius    = c0.y;
+        float  growth         = c0.z;
+        float  velocity       = c0.w;
+        float  lifetime       = c1.x;
+
+        // Per-slot phase: spawn events are uniformly staggered across
+        // (lifetime + spawnInterval) so the emitter always has flowing
+        // smoke. Slot N spawns at t = N * spawnInterval (modulo cycle).
+        float total_cycle = lifetime + materialParams.spawnInterval;
+        float slot_phase  = slot * materialParams.spawnInterval;
+        float age = mod(materialParams.time - slot_phase, total_cycle);
+
+        // Slot-deterministic randoms for variety inside the column.
+        float r1 = hash11(slot * 1.7);
+        float r2 = hash11(slot * 3.1 + 4.0);
+        float r3 = hash11(slot * 5.3 + 9.0);
+
+        // Particle inside its lifetime? Once age >= lifetime we collapse
+        // the quad to a point (zero radius) so it contributes nothing.
+        float alive = step(age, lifetime);
+
+        // Vertical rise from the chimney mouth, with mild lateral wander
+        // that gets stronger with age (smoke disperses as it cools).
+        float rise   = velocity * age + 0.15 * age * age;     // m
+        float t01    = age / lifetime;
+        float wander = 0.10 * sin(materialParams.time * 0.4 + slot * 2.0)
+                     + 0.05 * (r1 - 0.5);
+        float3 pos_local = float3(
+            (r1 - 0.5) * 0.06 + wander * t01,
+            (r2 - 0.5) * 0.06 + wander * 0.6 * t01,
+            rise);
+
+        // Radius: starts SMALL at the chimney mouth (the original
+        // benchmark shows a very thin warm exhaust column) and grows
+        // gently with age. The previous formula (0.6× radius at
+        // spawn ramping to 1.4×) made the puff already much wider
+        // than the chimney itself before it rose at all. Now we
+        // start at 25% of the authored radius and ramp linearly to
+        // ~110% over the full lifetime; the explicit `growth` term
+        // adds the dispersion as the smoke cools.
+        float size_ramp = materialParams.particleMotionTuning.x +
+                          materialParams.particleMotionTuning.y * t01;
+        float radius =
+            (base_radius * size_ramp +
+             growth * age * materialParams.particleMotionTuning.z) * alive;
+
+        // Camera-aligned billboard. Filament's worldFromViewMatrix
+        // gives the camera basis vectors; columns 0 and 1 are right/up.
+        float3 cam_right = float3(frameUniforms.worldFromViewMatrix[0].xyz);
+        float3 cam_up    = float3(frameUniforms.worldFromViewMatrix[1].xyz);
+        float  roll  = r3 * 6.28318530718;
+        float  cs    = cos(roll), sn = sin(roll);
+        float3 right = (cam_right *  cs + cam_up *  sn) * radius;
+        float3 up    = (cam_right * -sn + cam_up *  cs) * radius;
+
+        // Final world position of this corner.
+        float3 world = emitter_origin + pos_local
+                     + corner.x * right + corner.y * up;
+        material.worldPosition = float4(world, 1.0);
+        // Light the camera-facing puff with the scene's ambient and direct
+        // light. The static mesh tangent frame cannot follow this billboard.
+        material.worldNormal = normalize(cross(cam_right, cam_up));
+
+        // Pass age fraction, slot seed, and rise (height above the
+        // emitter origin) to the fragment shader.
+        material.ageNorm  = float4(t01, slot, rise, 0.0);
+        material.worldPos = float4(world, 1.0);
+    }
+}
+
+fragment {
+    // Hash + value-noise + FBM kit. Standard real-time smoke pipeline:
+    // we shape each particle's alpha by a 3-octave fbm of the UV plus
+    // a domain-warp by a second fbm. This breaks the smooth gaussian
+    // disc into a wispy organic puff that varies per particle (via
+    // the slot seed) and drifts upward over its lifetime.
+    float hash21(float2 p) {
+        p = fract(p * float2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float vnoise(float2 p) {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);              // smoothstep weights
+        float a = hash21(i);
+        float b = hash21(i + float2(1.0, 0.0));
+        float c = hash21(i + float2(0.0, 1.0));
+        float d = hash21(i + float2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    float fbm(float2 p) {
+        float s = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; ++i) {
+            s += a * vnoise(p);
+            p *= 2.07;
+            a *= 0.5;
+        }
+        return s;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float t      = variable_ageNorm.x;     // 0..1 age fraction
+        float slot   = variable_ageNorm.y;     // per-particle seed
+        float2 ouv   = (getUV0() - 0.5) * 2.0; // [-1, 1]
+
+        // Slot-deterministic UV offset so each particle has a unique
+        // noise pattern (otherwise every quad shows the same puff).
+        float2 seed_off = float2(hash21(float2(slot, 0.0)),
+                                  hash21(float2(0.0, slot))) * 13.0;
+
+        // Domain-warp the UV by a low-frequency fbm that drifts upward
+        // over the particle's life — this is what makes the smoke look
+        // turbulent rather than a solid disc.
+        float2 warp_uv = ouv * 1.5 + seed_off + float2(0.0, -t * 0.6);
+        float2 warp = float2(fbm(warp_uv),
+                              fbm(warp_uv + float2(5.2, 1.3))) - 0.5;
+
+        // Sample the higher-frequency density fbm at the warped UV.
+        float2 nuv = ouv * 2.2 + seed_off + warp * 0.8;
+        float  density = fbm(nuv);
+
+        // Soft circular mask. The exponential falloff approaches zero
+        // smoothly so there's no visible disc edge.
+        float r2   = dot(ouv, ouv);
+        float disc = exp(-materialParams.particleShapeTuning.w * r2);
+
+        // ── Smooth shape combination ──────────────────────────
+
+        // The noise threshold is RAISED toward the quad edge so that
+        // pixels near the quad boundary need an unattainable density
+        // to remain opaque. This shifts the visible edge from the
+        // hard quad rectangle into a soft fbm boundary inside the
+        // disc, giving wispy edges instead of straight cuts.
+
+        // threshold = 0.05 at centre, ~1.0 at quad edge.
+        float threshold = mix(0.05, 1.05, smoothstep(0.0, 1.4, r2));
+        float density_alpha =
+            smoothstep(threshold,
+                       threshold + materialParams.particleMotionTuning.w,
+                       density);
+
+        // Final shape uses the disc as a multiplicative envelope on
+        // top — even if the noise barely passes threshold near the
+        // edge, disc near zero makes it invisible.
+        float shape = disc * density_alpha;
+
+        // Life-curve alpha (slow fade-in, long fade-out).
+        float fade_in  = clamp(t / 0.20, 0.0, 1.0);
+        float fade_out = clamp(1.0 - (t - 0.30) / 0.70, 0.0, 1.0);
+        float alpha = clamp(materialParams.alphaScale * fade_in * fade_out * shape, 0.0, 1.0);
+        // The former self-bright unlit palette concealed very thin coverage.
+        // Double optical depth: two identical densities have transmission
+        // (1 - alpha)^2. Keep soft edges/life fades, partial transmission and
+        // scene-lit color instead of adding emission or clipping the plume.
+        alpha *= 2.0 - alpha;
+
+        // ── Colour gradient ────────────────────────────────────
+
+        // Drive colour by HEIGHT above the chimney mouth, not by
+        // per-particle age. Particles overlap in screen-space so any
+        // single pixel of the column shows particles at many ages —
+        // an age-driven gradient gets smeared into uniform grey.
+        // Height is monotonic along the column though, so the bottom
+        // really is "young dense smoke" and the top really is
+        // "dispersed old smoke", which the eye reads as a vertical
+        // gradient.
+
+        // We also vary chroma horizontally with the noise so each
+        // puff has visible warm/cool internal structure.
+
+        float rise   = variable_ageNorm.z;            // m above emitter
+        float h_t    = clamp(rise / 8.0, 0.0, 1.0);   // 0..1 over 8m
+
+        // These are diffuse albedos, not emitted light. Keep the plume's
+        // density variation while allowing its color to follow illumination.
+        float3 col_dark = materialParams.tint * 0.65;
+        float3 col_mid  = materialParams.tint * 1.00;
+        float3 col_top  = materialParams.tint * 1.20;
+
+        float3 height_col = (h_t < 0.30)
+            ? mix(col_dark, col_mid, smoothstep(0.0, 0.30, h_t))
+            : mix(col_mid,  col_top, smoothstep(0.30, 1.0, h_t));
+
+        // Interior light/dark variation from the noise — this is what
+        // gives each puff the visible bumpy structure.
+        float core   = smoothstep(0.40, 0.90, density);
+        float3 rgb   = clamp(mix(height_col * 1.20, height_col * 0.55, core),
+                             float3(0.0), float3(1.0));
+
+        // Premultiplied output for `transparent` blending.
+        material.baseColor = float4(rgb * alpha, alpha);
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+        material.reflectance = 0.0;
+    }
+}

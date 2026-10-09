@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HeavenBench</string>
+    <string name="launcher_instructions">Import an assets.zip created with HeavenBench\'s desktop asset packer. The original Heaven scene is supplied separately. Importing keeps a copy on this device.\n\nBenchmark follows the camera path automatically. Explore supports an external keyboard and mouse.</string>
+    <string name="import_assets">Import asset ZIP</string>
+    <string name="explore">Explore</string>
+    <string name="run_benchmark">Run benchmark</string>
+    <string name="assets_ready">Assets ready.</string>
+    <string name="assets_missing">No assets imported.</string>
+    <string name="storage_status">\n%1$s\nConfiguration, cache, and results: %2$s\n</string>
+    <string name="importing_assets">Importing asset ZIP…</string>
+    <string name="preparing_renderer">Preparing renderer…</string>
+</resources>

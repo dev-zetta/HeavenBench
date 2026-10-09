@@ -1,0 +1,74 @@
+# Exercise the real build helper's CMake arguments without downloads or MSVC.
+param([string]$BuildScript = '')
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$repoRoot = Split-Path $PSScriptRoot -Parent
+if (-not $BuildScript) { $BuildScript = Join-Path $repoRoot 'scripts/build_windows.ps1' }
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ('heaven windows flags ' + [Guid]::NewGuid().ToString('N'))
+$savedEnvironment = @{}
+foreach ($name in @('VCPKG_DISABLE_METRICS', 'VCPKG_ROOT')) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+try {
+    New-Item -ItemType Directory "$temporary/scripts", "$temporary/packaging/windows", "$temporary/vcpkg/.git", "$temporary/benchmark/assets/sky" | Out-Null
+    $resourceSource = Join-Path $temporary 'benchmark/assets/sky/moon_disk.png'
+    Set-Content -LiteralPath $resourceSource -Value 'fixture moon resource' -Encoding utf8
+    Copy-Item -LiteralPath $BuildScript -Destination "$temporary/scripts/build_windows.ps1"
+    Copy-Item -LiteralPath "$repoRoot/scripts/windows_common.ps1" -Destination "$temporary/scripts"
+    $global:HeavenBuildFlagRevision = 'fixture-vcpkg-revision'
+    @{ 'builtin-baseline' = $global:HeavenBuildFlagRevision } | ConvertTo-Json |
+        Set-Content -LiteralPath "$temporary/packaging/windows/vcpkg.json"
+    $global:HeavenBuildFlagCalls = [Collections.Generic.List[object]]::new()
+    # Only discovery and command execution are replaced. The checked-in helper
+    # constructs both renderer and extraction-tool configure commands unchanged.
+    Add-Content -LiteralPath "$temporary/scripts/windows_common.ps1" -Value @'
+function Import-HeavenMsvcEnvironment {}
+function Get-HeavenGitBash { return 'fixture-bash.exe' }
+function Initialize-HeavenSdlSource { param([string]$BuildDir) return (Join-Path $BuildDir 'fixture SDL') }
+function Invoke-Checked {
+    param([string]$Command, [string[]]$Arguments = @(), [int]$ExpectedExitCode = 0)
+    $global:HeavenBuildFlagCalls.Add(@{ command = $Command; arguments = $Arguments })
+}
+'@
+    function global:git.exe { $global:LASTEXITCODE = 0; return $global:HeavenBuildFlagRevision }
+    function global:python.exe {}
+    & "$temporary/scripts/build_windows.ps1" -BuildDir "$temporary/build with spaces" -VcpkgRoot "$temporary/vcpkg" -Jobs 3
+    $resourceTarget = Join-Path $temporary 'build with spaces/resources/sky/moon_disk.png'
+    if (-not (Test-Path -LiteralPath $resourceTarget -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $resourceSource).Hash -ne (Get-FileHash -LiteralPath $resourceTarget).Hash) {
+        throw 'Native build did not stage executable-adjacent resource bytes.'
+    }
+    $configures = @($global:HeavenBuildFlagCalls | Where-Object {
+        [IO.Path]::GetFileName($_.command) -eq 'cmake.exe' -and $_.arguments -contains '-S'
+    })
+    if ($configures.Count -ne 2) { throw 'Renderer and extraction-tools configure commands must both be checked.' }
+    foreach ($configure in $configures) {
+        $arguments = $configure.arguments
+        if (@($arguments | Where-Object { $_ -match '^-DCMAKE_C(X{2})?_FLAGS=' }).Count) {
+            throw 'Build helper replaces CMake platform defaults with generic compiler flags.'
+        }
+        foreach ($required in @(
+            '-UCMAKE_CXX_FLAGS', '-UCMAKE_C_FLAGS',
+            '-DCMAKE_CXX_FLAGS_INIT=/utf-8 /Zc:__cplusplus /Zc:preprocessor /bigobj',
+            '-DCMAKE_C_FLAGS_INIT=/utf-8',
+            '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>'
+        )) {
+            if ($arguments -notcontains $required) { throw "Missing compiler initialization contract: $required" }
+        }
+    }
+    Set-Content -LiteralPath $resourceSource -Value 'updated fixture moon resource' -Encoding utf8
+    & "$temporary/scripts/build_windows.ps1" -BuildDir "$temporary/build with spaces" -VcpkgRoot "$temporary/vcpkg" -Jobs 3
+    if ((Get-FileHash -LiteralPath $resourceSource).Hash -ne (Get-FileHash -LiteralPath $resourceTarget).Hash -or
+        (Test-Path -LiteralPath (Join-Path $temporary 'build with spaces/resources/assets'))) {
+        throw 'Incremental native build did not refresh the existing resource layout.'
+    }
+    Write-Host 'Windows build flag fixtures passed: CMake platform defaults and stale-cache reset preserved in both configure commands.'
+} finally {
+    foreach ($entry in $savedEnvironment.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+    }
+    Remove-Item Function:git.exe, Function:python.exe -ErrorAction SilentlyContinue
+    Remove-Variable HeavenBuildFlagCalls, HeavenBuildFlagRevision -Scope Global -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+}

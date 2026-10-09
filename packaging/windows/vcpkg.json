@@ -1,0 +1,11 @@
+{
+  "name": "heavenbench-windows-dependencies",
+  "version-string": "1.0.0",
+  "builtin-baseline": "ef7dbf94b9198bc58f45951adcf1f041fcbc5ea0",
+  "dependencies": [
+    "glm",
+    "zlib",
+    "vulkan-headers",
+    "vulkan-loader"
+  ]
+}
