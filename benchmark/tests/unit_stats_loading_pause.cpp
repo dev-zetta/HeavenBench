@@ -24,7 +24,7 @@ bool modal_loading_does_not_enter_presented_intervals() {
     if (!require(stats.record_presented_frame(now) == 0, "first frame must establish baseline")) return false;
     for (int frame = 0; frame < 2; ++frame) {
         now += std::chrono::milliseconds(16);
-        (void)stats.begin_frame(now);
+        static_cast<void>(stats.begin_frame(now));
         if (!require(std::abs(stats.record_presented_frame(now) - 0.016f) < 1e-7f,
                      "accepted interval before loading changed")) return false;
     }

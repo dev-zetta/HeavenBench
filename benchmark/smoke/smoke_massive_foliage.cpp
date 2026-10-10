@@ -378,7 +378,7 @@ bool verify_shared_foliage_geometry(RenderContext& context) {
     // every placement retains all 420480 vertices despite the new draw split.
     constexpr size_t uploaded_vertices = 420480;
     constexpr size_t range_patches = 14;
-    const auto allocations_match = [&](size_t visible_patches = range_patches) {
+    const auto allocations_match = [&](size_t visible_patches) {
         const auto stats = feature.geometry_stats();
         return stats.geometry_buffers == 6 && stats.geometry_ranges == 7 &&
                stats.largest_range_vertices == size_t{8192} * GRASS_VERTS_PER_BLADE &&
@@ -390,14 +390,14 @@ bool verify_shared_foliage_geometry(RenderContext& context) {
                engine.getIndexBufferCount() == index_buffers_before + 6 &&
                rctx.scene->getEntityCount() == entities_before + visible_patches;
     };
-    bool ok = allocations_match();
+    bool ok = allocations_match(range_patches);
     if (!ok) std::printf("%s FAIL: foliage source/category buffers were duplicated or geometry changed\n", kTag);
 
     // Adding all depth proxies must reuse the existing buffers. No geometry
     // allocation is allowed when the depth pass appears on a later frame.
     frame.depth_proxy_scene = depth_scene;
     feature.update(rctx, frame);
-    if (!allocations_match() || depth_scene->getRenderableCount() != range_patches) {
+    if (!allocations_match(range_patches) || depth_scene->getRenderableCount() != range_patches) {
         std::printf("%s FAIL: depth proxies did not reuse all visible foliage buffers\n", kTag);
         ok = false;
     }
@@ -431,7 +431,7 @@ bool verify_shared_foliage_geometry(RenderContext& context) {
         frame.time = static_cast<float>(tick) * 0.016f;
         feature.update(rctx, frame);
     }
-    if (!allocations_match() || !transforms_match(*rctx.scene) ||
+    if (!allocations_match(range_patches) || !transforms_match(*rctx.scene) ||
         !transforms_match(*depth_scene)) {
         std::printf("%s FAIL: foliage sharing lost placement transforms or rebuilt geometry\n", kTag);
         ok = false;

@@ -667,7 +667,7 @@ private:
         while (SDL_PollEvent(&event)) {
             // Keep releases and keyboard state in the main overlay current
             // while its widgets are hidden by the modal loading screen.
-            (void)backend_->overlay_handle_event(&event);
+            static_cast<void>(backend_->overlay_handle_event(&event));
             if (event.type == SDL_QUIT ||
                 (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE)) {
                 loading_cancelled_ = true;

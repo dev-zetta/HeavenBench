@@ -489,7 +489,7 @@ bool check_native_lighting(const CaseContext& ctx) {
         {
             GlassLightingFixture warmup(*engine);
             warmup.init();
-            (void)warmup.capture(12, 0);
+            static_cast<void>(warmup.capture(12, 0));
         }
         engine->flushAndWait();
         const auto baseline = owners();

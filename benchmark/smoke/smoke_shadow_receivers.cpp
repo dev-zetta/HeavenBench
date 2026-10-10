@@ -614,7 +614,7 @@ CaseResult run_shadow_receivers_case(const CaseContext& ctx) {
             warmup.init();
             for (const auto type : {filament::ShadowType::VSM, filament::ShadowType::PCSS}) {
                 warmup.configure(type, false, false);
-                (void)warmup.capture(true, true, true);
+                static_cast<void>(warmup.capture(true, true, true));
             }
         }
         engine->flushAndWait();

@@ -205,10 +205,10 @@ bool cancellation_at_begin_and_final_boundary_is_transactional() {
         UploadBackend backend;
         bool caught = false;
         try {
-            (void)upload_staged_scene(scene, backend, AppConfig{},
+            static_cast<void>(upload_staged_scene(scene, backend, AppConfig{},
                 [&](std::string_view /*stage*/, float fraction) {
                     if (fraction == cancelled_fraction) throw std::runtime_error("cancelled at boundary");
-                });
+                }));
         } catch (const std::runtime_error&) { caught = true; }
         if (!require(caught && backend.live == std::set<std::uint64_t>{77} &&
                      !backend.synthetic_released,
@@ -311,10 +311,10 @@ bool cpu_stage_uses_real_loader_and_strict_material_validation() {
     materials.build(*paths, nullptr, std::cref(*assets));
     bool cancelled = false;
     try {
-        (void)stage_scene_load(config, materials, "", nullptr, std::cref(*assets),
+        static_cast<void>(stage_scene_load(config, materials, "", nullptr, std::cref(*assets),
             [](std::string_view /*stage*/, float /*fraction*/) {
                 throw std::runtime_error("cancelled CPU load");
-            });
+            }));
     } catch (const std::runtime_error&) { cancelled = true; }
     if (!require(cancelled, "CPU stage callback cancellation must propagate")) return false;
     // A successful retry also proves cancellation released the loader mutex.

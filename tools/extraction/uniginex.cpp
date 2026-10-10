@@ -912,14 +912,14 @@ private:
 } // namespace
 
 int main(int argc, char* argv[]) {
-    const std::span raw_args(argv, static_cast<std::size_t>(argc));
-    std::vector<std::string_view> args;
-    args.reserve(raw_args.size());
-    std::ranges::transform(raw_args, std::back_inserter(args),
-                           [](const char* argument) {
-                               return std::string_view(argument);
-                           });
     try {
+        const std::span raw_args(argv, static_cast<std::size_t>(argc));
+        std::vector<std::string_view> args;
+        args.reserve(raw_args.size());
+        std::ranges::transform(raw_args, std::back_inserter(args),
+                               [](const char* argument) {
+                                   return std::string_view(argument);
+                               });
         Extractor extractor;
         return extractor.run(args);
     } catch (const std::system_error& error) {

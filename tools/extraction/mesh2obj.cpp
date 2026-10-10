@@ -11,7 +11,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -438,7 +440,7 @@ default_output_path(const std::filesystem::path& input) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) try {
     const std::span raw_args(argv, static_cast<std::size_t>(argc));
     std::vector<std::string_view> args;
     args.reserve(raw_args.size());
@@ -510,4 +512,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << '\n' << converted << " mesh(es) converted.\n";
     return exit_code;
+} catch (const std::exception& error) {
+    std::fprintf(stderr, "Error: %s\n", error.what());
+    return 1;
 }
