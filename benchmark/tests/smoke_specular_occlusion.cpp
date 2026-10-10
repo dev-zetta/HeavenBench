@@ -390,7 +390,8 @@ private:
             }
             const auto packed = packing->tangent_frames.front();
             for (const auto& other : packing->tangent_frames) {
-                if (std::memcmp(&packed, &other, sizeof(packed)) != 0) {
+                if (packed.x != other.x || packed.y != other.y ||
+                        packed.z != other.z || packed.w != other.w) {
                     throw std::runtime_error("Specular receiver tangent frame varies across plane");
                 }
             }

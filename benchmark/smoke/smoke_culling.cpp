@@ -250,7 +250,7 @@ public:
         auto* platform = engine_.getPlatform();
         if (!platform) throw std::runtime_error("native platform unavailable");
         platform->setDebugUpdateStatFunc([counter = counter_](const char* key,
-                std::uint64_t value, utils::CString) {
+                std::uint64_t value, const utils::CString&) {
             if (std::string_view(key) == "filament.renderer.render_pass.command_count") {
                 counter->commands.fetch_add(value, std::memory_order_relaxed);
             }
