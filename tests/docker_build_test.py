@@ -169,6 +169,81 @@ class DockerBuildTest(unittest.TestCase):
         self.assertEqual(self.invocations(), [])
 
 
+@unittest.skipUnless(os.name == "posix" and BASH, "Linux pipeline fixtures require Bash")
+class LinuxPipelineTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="heaven linux pipeline ")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        scripts = self.directory / "scripts"
+        scripts.mkdir()
+        for name in ("ci_linux.sh", "build_paths.sh"):
+            shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+        self.calls = self.directory / "calls.jsonl"
+        executables = self.directory / "executables"
+        executables.mkdir()
+        command = (f"#!{sys.executable}\n"
+                   "import json, os, pathlib, re, sys\n"
+                   "name = pathlib.Path(sys.argv[0]).name\n"
+                   "args = sys.argv[1:]\n"
+                   "with open(os.environ['FIXTURE_LINUX_CALLS'], 'a') as output:\n"
+                   "    output.write(json.dumps({'name': name, 'arguments': args}) + '\\n')\n"
+                   "if name == 'ctest' and '--tests-regex' in args:\n"
+                   "    pattern = args[args.index('--tests-regex') + 1]\n"
+                   "    failing = os.environ.get('FIXTURE_CTEST_FAILURE')\n"
+                   "    if failing and re.fullmatch(pattern, failing):\n"
+                   "        sys.exit(37)\n"
+                   "if name == 'package_appimage.sh':\n"
+                   "    directory = pathlib.Path(args[args.index('--output-dir') + 1])\n"
+                   "    architecture = args[args.index('--cpu-arch') + 1]\n"
+                   "    (directory / f'fixture-{architecture}.AppImage').write_bytes(b'fixture')\n")
+        for directory, names in ((executables, ("cmake", "ctest")),
+                                 (scripts, ("fetch_dependencies.sh", "build_asset_tools.sh", "build.sh",
+                                            "check_modern_cpp.sh", "package_appimage.sh", "verify_appimage.py"))):
+            for name in names:
+                path = directory / name
+                path.write_text(command)
+                path.chmod(0o755)
+        self.environment = {**os.environ,
+                            "PATH": str(executables) + os.pathsep + os.environ.get("PATH", ""),
+                            "HEAVEN_BUILD_ROOT": str(self.directory / "build"),
+                            "FIXTURE_LINUX_CALLS": str(self.calls)}
+
+    def run_pipeline(self, architecture="portable", **settings):
+        result = subprocess.run([BASH, str(self.directory / "scripts/ci_linux.sh"),
+                                 "--cpu-arch", architecture, "--output-dir", str(self.directory / "artifacts")],
+                                env={**self.environment, **settings}, text=True,
+                                capture_output=True, check=False, timeout=15)
+        return result, [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def test_portable_builds_and_selects_every_host_suite(self):
+        result, calls = self.run_pipeline()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [build] = [call["arguments"] for call in calls if call["name"] == "build.sh"]
+        self.assertIn("heaven_profiler_trace_tests", build)
+        [pattern] = [call["arguments"][call["arguments"].index("--tests-regex") + 1]
+                     for call in calls if call["name"] == "ctest" and
+                     "profiler_trace_tests" in " ".join(call["arguments"])]
+        for name in ("benchmark_tests", "profiler_trace_tests", "microprofile_analysis", "runtime_paths_cli",
+                     "asset_packer_cli", "gtao_bent_normal_contract", "specular_occluded_moment_contract"):
+            self.assertIsNotNone(re.fullmatch(pattern, "heaven_" + name), name)
+        self.assertIsNone(re.fullmatch(pattern, "heaven_benchmark_smoke"))
+        self.assertTrue(any(call["name"] == "verify_appimage.py" for call in calls))
+
+    def test_architecture_package_keeps_host_tests_on_portable_only(self):
+        result, calls = self.run_pipeline("zen1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(call["name"] == "ctest" for call in calls))
+        [build] = [call["arguments"] for call in calls if call["name"] == "build.sh"]
+        self.assertNotIn("heaven_profiler_trace_tests", build)
+        self.assertTrue(any(call["name"] == "package_appimage.sh" for call in calls))
+
+    def test_new_host_failure_blocks_packaging(self):
+        result, calls = self.run_pipeline(FIXTURE_CTEST_FAILURE="heaven_profiler_trace_tests")
+        self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assertFalse(any(call["name"] == "package_appimage.sh" for call in calls))
+
+
 @unittest.skipUnless(os.name == "posix" and BASH, "Toolchain fixtures require Bash")
 class ToolchainDownloadTest(unittest.TestCase):
     def setUp(self):

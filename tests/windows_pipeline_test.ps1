@@ -142,6 +142,14 @@ Remove-Item -LiteralPath $stage -Recurse -Force
         $tests = @($events | Where-Object { $_.name -eq 'ctest.exe' })
         Assert-That ($tests.Count -eq 3) 'Host, extraction and smoke gate tests must all run.'
         Assert-That ($tests[0].arguments[1] -eq $build -and $tests[1].arguments[1] -eq (Join-Path $build 'tools')) 'Tests used another build directory.'
+        $hostPattern = $tests[0].arguments[[Array]::IndexOf($tests[0].arguments, '-R') + 1]
+        foreach ($hostTest in @('heaven_benchmark_tests', 'heaven_profiler_trace_tests',
+                               'heaven_microprofile_analysis', 'heaven_runtime_paths_cli',
+                               'heaven_asset_packer_cli', 'heaven_gtao_bent_normal_contract',
+                               'heaven_specular_occluded_moment_contract')) {
+            Assert-That ($hostTest -match $hostPattern) "Host test gate omits $hostTest."
+        }
+        Assert-That ('heaven_benchmark_smoke' -notmatch $hostPattern) 'Host test gate absorbs the separately controlled graphical smoke gate.'
         Assert-That ($tests[2].smoke -eq '0') 'Smoke gate inherited GPU opt-in.'
         foreach ($event in $tests) {
             Assert-That ($event.arguments -contains '--no-tests=error') 'Missing test discovery would silently pass.'

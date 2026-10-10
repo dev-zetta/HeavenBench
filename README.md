@@ -8,6 +8,12 @@
 
 The current version is **1.0.0**. The first joint Linux, Windows and Android release is still being qualified; [release readiness](docs/RELEASE_READINESS.md) records the remaining checks. See the [changelog](CHANGELOG.md) for the development history.
 
+## Watch the showcase
+
+[![Watch the HeavenBench 1.0.0 feature showcase on YouTube](docs/images/heavenbench-showcase.png)](https://youtu.be/v-s5fNxlnVw)
+
+[Watch the 9-minute-30-second showcase in 4K on YouTube](https://youtu.be/v-s5fNxlnVw): rendering features, comparisons, benchmark reports, the microprofiler and Android controls. Cinematic sequences are offline rendered; their playback frame rate is not measured benchmark performance.
+
 ## Features
 
 - **CPU and GPU benchmarking:** a repeatable CPU workload and a 26-scene camera tour, with Overall, CPU and GPU scores, FPS and frame-time statistics.

@@ -57,6 +57,14 @@ function Invoke-Checked {
             if ($arguments -notcontains $required) { throw "Missing compiler initialization contract: $required" }
         }
     }
+    $rendererBuilds = @($global:HeavenBuildFlagCalls | Where-Object {
+        [IO.Path]::GetFileName($_.command) -eq 'cmake.exe' -and $_.arguments -contains '--target'
+    })
+    if ($rendererBuilds.Count -ne 1) { throw 'Expected one explicit renderer target build.' }
+    foreach ($target in @('heaven_benchmark', 'heaven_asset_packer', 'heaven_benchmark_tests',
+                          'heaven_profiler_trace_tests', 'heaven_benchmark_smoke')) {
+        if ($rendererBuilds[0].arguments -notcontains $target) { throw "Missing required CI target: $target" }
+    }
     Set-Content -LiteralPath $resourceSource -Value 'updated fixture moon resource' -Encoding utf8
     & "$temporary/scripts/build_windows.ps1" -BuildDir "$temporary/build with spaces" -VcpkgRoot "$temporary/vcpkg" -Jobs 3
     if ((Get-FileHash -LiteralPath $resourceSource).Hash -ne (Get-FileHash -LiteralPath $resourceTarget).Hash -or

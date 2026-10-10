@@ -73,7 +73,8 @@ Invoke-Checked cmake.exe (@('-S', "$repoRoot/benchmark", '-B', $BuildDir) + $com
     '-DFILAMENT_WINDOWS_CI_BUILD=ON'
 ))
 Invoke-Checked cmake.exe @('--build', $BuildDir, '--parallel', "$Jobs", '--target',
-    'heaven_benchmark', 'heaven_asset_packer', 'heaven_benchmark_tests', 'heaven_benchmark_smoke')
+    'heaven_benchmark', 'heaven_asset_packer', 'heaven_benchmark_tests',
+    'heaven_profiler_trace_tests', 'heaven_benchmark_smoke')
 $toolsDir = Join-Path $BuildDir 'tools'
 Invoke-Checked cmake.exe (@('-S', $repoRoot, '-B', $toolsDir) + $common)
 Invoke-Checked cmake.exe @('--build', $toolsDir, '--parallel', "$Jobs")

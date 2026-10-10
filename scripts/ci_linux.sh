@@ -35,7 +35,7 @@ if [[ "$CPU_ARCH" == portable ]]; then
     ctest --test-dir "$HEAVEN_BUILD_ROOT/tools" --output-on-failure
     "$SCRIPT_DIR/build_asset_tools.sh" --jobs "$JOBS"
     ctest --test-dir "$HEAVEN_BUILD_ROOT/asset-tools" --output-on-failure --timeout 60
-    targets+=(--target heaven_benchmark_tests --target heaven_benchmark_smoke)
+    targets+=(--target heaven_benchmark_tests --target heaven_profiler_trace_tests --target heaven_benchmark_smoke)
 fi
 "$SCRIPT_DIR/build.sh" --release --jobs "$JOBS" --cpu-arch "$CPU_ARCH" "${targets[@]}"
 if [[ "$CPU_ARCH" == portable ]]; then
@@ -47,7 +47,7 @@ if [[ "$CPU_ARCH" == portable ]]; then
     fi
     RC_PARAMS='seed=20260930' ctest --test-dir "$HEAVEN_BUILD_ROOT/renderer" \
         --output-on-failure --timeout 300 \
-        --tests-regex '^heaven_(benchmark_tests|runtime_paths_cli|asset_packer_cli)$'
+        --tests-regex '^heaven_(benchmark_tests|profiler_trace_tests|microprofile_analysis|runtime_paths_cli|asset_packer_cli|gtao_bent_normal_contract|specular_occluded_moment_contract)$'
     ctest --test-dir "$HEAVEN_BUILD_ROOT/renderer" --output-on-failure --timeout 30 \
         --tests-regex '^heaven_benchmark_smoke$'
 fi
