@@ -10,6 +10,7 @@ import platform
 import plistlib
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -48,6 +49,104 @@ def resolve_icd_library(icd_path, frameworks):
     if not molten.is_relative_to(frameworks.resolve(strict=True)):
         raise ValueError("ICD library escapes bundled Frameworks")
     return molten
+
+
+SDL_PROBE = r'''
+import ctypes
+import json
+import sys
+
+sdl = ctypes.CDLL(sys.argv[1])
+class Version(ctypes.Structure):
+    _fields_ = [("major", ctypes.c_uint8), ("minor", ctypes.c_uint8), ("patch", ctypes.c_uint8)]
+sdl.SDL_GetVersion.argtypes = [ctypes.POINTER(Version)]
+sdl.SDL_GetVersion.restype = None
+version = Version()
+sdl.SDL_GetVersion(ctypes.byref(version))
+if version.major != 2:
+    raise RuntimeError("Expected SDL2 API, not SDL3 API")
+sdl.SDL_Init.argtypes = [ctypes.c_uint32]
+sdl.SDL_Init.restype = ctypes.c_int
+sdl.SDL_GetError.argtypes = []
+sdl.SDL_GetError.restype = ctypes.c_char_p
+sdl.SDL_GetCurrentVideoDriver.argtypes = []
+sdl.SDL_GetCurrentVideoDriver.restype = ctypes.c_char_p
+sdl.SDL_CreateWindow.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_int, ctypes.c_uint32]
+sdl.SDL_CreateWindow.restype = ctypes.c_void_p
+sdl.SDL_DestroyWindow.argtypes = [ctypes.c_void_p]
+sdl.SDL_DestroyWindow.restype = None
+sdl.SDL_Quit.argtypes = []
+sdl.SDL_Quit.restype = None
+if sdl.SDL_Init(0x20) != 0:  # SDL_INIT_VIDEO, via the SDL2 interface.
+    raise RuntimeError("SDL dummy initialization failed: " + sdl.SDL_GetError().decode())
+window = None
+try:
+    driver = sdl.SDL_GetCurrentVideoDriver()
+    if driver != b"dummy":
+        raise RuntimeError("Expected dummy video driver")
+    window = sdl.SDL_CreateWindow(b"HeavenBench package probe", 0, 0, 32, 32, 0x8)
+    if not window:  # SDL_WINDOW_HIDDEN; no graphics API, GPU or display involved.
+        raise RuntimeError("SDL dummy window failed: " + sdl.SDL_GetError().decode())
+    dyld = ctypes.CDLL(None)
+    dyld._dyld_image_count.argtypes = []
+    dyld._dyld_image_count.restype = ctypes.c_uint32
+    dyld._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+    dyld._dyld_get_image_name.restype = ctypes.c_char_p
+    images = [dyld._dyld_get_image_name(i).decode() for i in range(dyld._dyld_image_count())]
+    print(json.dumps({"api_version": [version.major, version.minor, version.patch],
+                      "driver": driver.decode(), "hidden_dummy_window": True, "images": images}))
+finally:
+    if window:
+        sdl.SDL_DestroyWindow(window)
+    sdl.SDL_Quit()
+'''
+
+
+def validate_sdl_images(images, sdl2, sdl3=None):
+    expected = {"libsdl2": sdl2.resolve(strict=True)}
+    if sdl3 is not None:
+        expected["libsdl3"] = sdl3.resolve(strict=True)
+    selected = {}
+    for prefix in ("libsdl2", "libsdl3"):
+        paths = [Path(image).resolve(strict=True) for image in images
+                 if Path(image).name.lower().startswith(prefix)]
+        if prefix in expected:
+            if paths != [expected[prefix]]:
+                raise ValueError(f"SDL probe loaded {prefix} outside its exact bundled runtime: {paths}")
+            selected[prefix] = paths[0].name
+        elif paths:
+            raise ValueError(f"SDL probe unexpectedly loaded {prefix}: {paths}")
+    return selected
+
+
+def verify_sdl_runtime(app, inventory, root, env):
+    sdl2_records = [entry for entry in inventory["libraries"]
+                    if entry.get("formula") in ("sdl2", "sdl2-compat")
+                    and Path(entry["path"]).name.lower().startswith("libsdl2")]
+    if len(sdl2_records) != 1:
+        raise ValueError(f"Expected one bundled SDL2 API runtime: {sdl2_records}")
+    sdl2 = app / sdl2_records[0]["path"]
+    compat = sdl2_records[0]["formula"] == "sdl2-compat"
+    dynamic = inventory.get("dynamic_dependencies", [])
+    sdl3_records = [entry for entry in dynamic if entry.get("owner") == "SDL2-compat"]
+    if len(sdl3_records) != int(compat):
+        raise ValueError("SDL2-compat runtime SDL3 inventory is incomplete")
+    sdl3 = app / sdl3_records[0]["path"] if compat else None
+    if sdl3 is not None and (sdl3.name != "libSDL3.dylib" or
+                            sdl3_records[0].get("lookup") != "@loader_path/libSDL3.dylib"):
+        raise ValueError("SDL2-compat runtime does not retain its exact SDL3 lookup name")
+    # Caller hints can redirect SDL2-compat before SDL_Init, including from its
+    # library constructor. Probe only the sealed runtime with known drivers.
+    probe_env = {key: value for key, value in env.items()
+                 if not key.startswith(("DYLD_", "SDL_", "SDL2_", "SDL2COMPAT_", "SDL3_"))}
+    probe_env.update(SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
+    # SDL2-compat's constructor can terminate the process on load failure.
+    # Keep it isolated and reject successful fallback to a Homebrew SDL3.
+    output = checked([sys.executable, "-c", SDL_PROBE, sdl2], root, probe_env)
+    probe = json.loads(output)
+    probe["loaded_runtime_files"] = validate_sdl_images(probe.pop("images"), sdl2, sdl3)
+    return probe
 
 
 def verify(artifact):
@@ -130,9 +229,10 @@ def verify(artifact):
             getattr(handle, "vkGetInstanceProcAddr")
         env = dict(os.environ)
         for name in list(env):
-            if name.startswith(("DYLD_", "VK_")) or name in ("HEAVEN_DATA", "HEAVEN_RESOURCE_DIR", "HEAVEN_DEFAULT_DATA", "SDL_VULKAN_LIBRARY"):
+            if name.startswith(("DYLD_", "VK_", "SDL_", "SDL2_", "SDL2COMPAT_", "SDL3_")) or name in ("HEAVEN_DATA", "HEAVEN_RESOURCE_DIR", "HEAVEN_DEFAULT_DATA"):
                 env.pop(name)
         env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", HEAVEN_USER_DIR=str(root / "writable user data"))
+        sdl_probe = verify_sdl_runtime(app, inventory, root, env)
         launcher = macos / "HeavenBench"
         help_text = checked([launcher, "--help"], root, env)
         if "--data" not in help_text:
@@ -174,6 +274,7 @@ def verify(artifact):
                 "artifact": artifact.name, "sha256": sha256(artifact), "zip_members": len(members),
                 "payload_hashes": len(files), "notice_hashes": len(notice_manifest["files"]),
                 "minimum_macos": actual_minimum, "binary_minimum_macos": minimums,
+                "sdl_dummy_probe": sdl_probe,
                 "host": {"macos": platform.mac_ver()[0], "architecture": platform.machine()},
                 "physical_gpu_display_acceptance": False, "developer_id_signed": False, "notarized": False}
 

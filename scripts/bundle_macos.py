@@ -163,6 +163,20 @@ def resolve_import(name, owner, executable_dir, search_dirs, owner_rpaths):
     raise ValueError(f"Unresolved Mach-O import {name!r} in {owner}")
 
 
+def sdl_runtime_seeds(sdl2_prefix):
+    # Homebrew's sdl2 alias now selects SDL2-compat. SDL3 is a :no_linkage
+    # dependency, loaded through @loader_path/libSDL3.dylib rather than an
+    # LC_LOAD_DYLIB entry. Preserve that exact name beside the compatibility
+    # library; ordinary SDL2 installations need no additional SDL runtime.
+    if sdl2_prefix.resolve(strict=True).parent.name != "sdl2-compat":
+        return []
+    prefix = Path(run(["brew", "--prefix", "sdl3"]).strip()).resolve(strict=True)
+    library = prefix / "lib/libSDL3.dylib"
+    if not library.is_file():
+        raise ValueError(f"SDL2-compat requires its SDL3 runtime: {library}")
+    return [(library, "libSDL3.dylib")]
+
+
 class Bundler:
     def __init__(self, app, brew_cellar, search_dirs, runtime_overrides):
         self.app = app
@@ -268,8 +282,9 @@ class Bundler:
 
 LAUNCH_SCRIPT = r'''#!/bin/sh
 set -eu
-macos=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-contents=$(CDPATH= cd -- "$macos/.." && pwd)
+resources=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+contents=$(CDPATH= cd -- "$resources/.." && pwd -P)
+macos="$contents/MacOS"
 export DYLD_LIBRARY_PATH="$contents/Frameworks"
 export SDL_VULKAN_LIBRARY="$contents/Frameworks/libvulkan.1.dylib"
 export VK_DRIVER_FILES="$contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
@@ -297,7 +312,7 @@ if [ "$has_data" = false ] && [ -n "${HEAVEN_DATA:-}" ]; then
 elif [ -z "${HEAVEN_DEFAULT_DATA:-}" ]; then
     # Asset defaults stay below a saved selection and explicit --data.
     HEAVEN_DEFAULT_DATA="$HEAVEN_USER_DIR/assets.zip"
-    app_parent=$(CDPATH= cd -- "$contents/../.." && pwd)
+    app_parent=$(CDPATH= cd -- "$contents/../.." && pwd -P)
     for candidate in "$app_parent/assets" "$app_parent/assets.zip" "$HEAVEN_USER_DIR/assets"; do
         if has_assets "$candidate"; then
             HEAVEN_DEFAULT_DATA=$candidate
@@ -321,12 +336,19 @@ LAUNCH_SOURCE = r'''
 int main(int argc, char **argv) {
     uint32_t size = 0;
     _NSGetExecutablePath(NULL, &size);
-    char *path = malloc((size_t)size + 64);
+    char *executable = malloc((size_t)size);
     char **args = calloc((size_t)argc + 2, sizeof(char *));
-    if (!path || !args || _NSGetExecutablePath(path, &size)) return 1;
+    if (!executable || !args || _NSGetExecutablePath(executable, &size)) return 1;
+    char *resolved = realpath(executable, NULL);
+    free(executable);
+    if (!resolved) return 1;
+    char *path = malloc(strlen(resolved) + 64);
+    if (!path) return 1;
+    strcpy(path, resolved);
+    free(resolved);
     char *slash = strrchr(path, '/');
     if (!slash) return 1;
-    strcpy(slash + 1, "launch-heavenbench.sh");
+    strcpy(slash + 1, "../Resources/launch-heavenbench.sh");
     args[0] = "/bin/sh"; args[1] = path;
     for (int i = 1; i < argc; ++i) args[i + 1] = argv[i];
     execv(args[0], args);
@@ -366,8 +388,7 @@ def package(build_dir, output_dir):
              "-mmacosx-version-min=" + cache["CMAKE_OSX_DEPLOYMENT_TARGET"],
              "-Wl,-headerpad_max_install_names", "-O2", launcher_source, "-o", launcher])
         roots.append((launcher, launcher))
-        (macos / "launch-heavenbench.sh").write_text(LAUNCH_SCRIPT)
-        (macos / "launch-heavenbench.sh").chmod(0o755)
+        (resources / "launch-heavenbench.sh").write_text(LAUNCH_SCRIPT)
         shutil.copytree(ROOT / "benchmark/assets", resources / "resources")
         shutil.copy2(ROOT / "tools/extraction/assemble_scene.py", resources)
         (resources / "docs").mkdir()
@@ -417,9 +438,11 @@ def package(build_dir, output_dir):
             overrides["/usr/lib/libc++abi.1.dylib"] = abi.resolve()
         search = [llvm / "lib/c++", llvm / "lib/unwind"]
         search += [prefix / "lib" for prefix in prefixes.values()]
+        sdl_seeds = sdl_runtime_seeds(prefixes["sdl2"])
+        search += [library.parent for library, _ in sdl_seeds]
         bundler = Bundler(app, cellar, search, overrides)
         binaries = bundler.close(roots, [(loader, "libvulkan.1.dylib"), (molten, molten.name),
-                                        (cxx, cxx.name), (unwind, unwind.name)])
+                                        (cxx, cxx.name), (unwind, unwind.name), *sdl_seeds])
         actual_minimum = max([cache["CMAKE_OSX_DEPLOYMENT_TARGET"], *bundler.minimum_versions.values()],
                              key=version_tuple)
         plist["LSMinimumSystemVersion"] = actual_minimum
@@ -445,6 +468,10 @@ def package(build_dir, output_dir):
                      "system_imports_external": ["/System/Library/", "/usr/lib/"],
                      "libraries": sorted(bundler.records, key=lambda record: record["path"]),
                      "imports": bundler.edges, "static_dependencies": ["GLM"],
+                     "dynamic_dependencies": [{"owner": "SDL2-compat", "formula": "sdl3",
+                                               "path": bundler.by_source[library.resolve()].relative_to(app).as_posix(),
+                                               "lookup": "@loader_path/libSDL3.dylib"}
+                                              for library, _ in sdl_seeds],
                      "minimum_macos": actual_minimum, "binary_minimum_macos": bundler.minimum_versions,
                      "signing": "ad-hoc; no Developer ID or notarization"}
         (resources / "licenses/macos-runtime.json").write_text(json.dumps(inventory, indent=2) + "\n")

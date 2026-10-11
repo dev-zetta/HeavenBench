@@ -37,6 +37,6 @@ The bundle is ad hoc signed for local integrity checks. It is not Developer ID s
 
 ## Validation scope
 
-CI checks ARM64 architecture, host behavior, dependent-library relocation, bundled licenses, code signatures, checksums and CLI execution after moving the app to a path containing spaces. Its report records the checks and build environment. A successful host build does not establish full-scene rendering, performance, Retina resizing or interactive acceptance on a physical Mac. Those checks are required before treating this candidate as a qualified macOS release.
+CI checks ARM64 architecture, host behavior, dependent-library relocation, bundled licenses, code signatures, checksums, headless SDL initialization and CLI execution after moving the app to a path containing spaces. Runtime-loaded SDL3 is included when Homebrew supplies the SDL2 compatibility layer; the probe rejects loading an SDL library from outside the bundle. Its report records the checks and build environment. A successful host build does not establish full-scene rendering, performance, Retina resizing or interactive acceptance on a physical Mac. Those checks are required before treating this candidate as a qualified macOS release.
 
 The runner label follows [GitHub's hosted runner documentation](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The workflow explicitly verifies `uname -m` so an unexpected runner change fails before compilation.
