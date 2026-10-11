@@ -30,6 +30,10 @@ def checked(command, root, env, expected=0):
 def safe_members(archive):
     names = set()
     for member in archive.infolist():
+        # ZipInfo normalizes Windows separators and truncates NULs. Validate
+        # the original central-directory name before trusting that view.
+        if member.orig_filename != member.filename:
+            raise ValueError(f"Unsafe ZIP path normalization: {member.orig_filename!r}")
         path = PurePosixPath(member.filename)
         if (path.is_absolute() or ".." in path.parts or "\\" in member.filename or
                 not path.parts or path.parts[0] != "HeavenBench.app" or member.filename in names):

@@ -22,7 +22,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 #include <array>
@@ -230,7 +230,7 @@ CpuRaw LinuxHostInfoSource::query_cpu() {
     return raw;
 }
 
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 
 namespace {
 

@@ -412,7 +412,11 @@ Load command 2
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w") as archive:
             for name in names:
-                archive.writestr(name, b"fixture")
+                # Preserve hostile metadata verbatim; ZipInfo(name) would
+                # normalize a backslash on Windows before writing the ZIP.
+                entry = zipfile.ZipInfo("fixture")
+                entry.filename = entry.orig_filename = name
+                archive.writestr(entry, b"fixture")
         data.seek(0)
         with zipfile.ZipFile(data) as archive:
             return verify.safe_members(archive)
@@ -421,9 +425,17 @@ Load command 2
         self.assertEqual(self.check_zip(["HeavenBench.app/Contents/Info.plist"]),
                          {"HeavenBench.app/Contents/Info.plist"})
         for name in ("HeavenBench.app/../outside", "/HeavenBench.app/file", "other.app/file",
-                     "HeavenBench.app/Contents\\escape"):
+                     "HeavenBench.app/Contents\\escape", "HeavenBench.app/file\0hidden"):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Unsafe"):
                 self.check_zip([name])
+
+    def test_zip_rejects_raw_names_after_windows_reader_normalization(self):
+        with mock.patch.object(os, "sep", "\\"):
+            self.assertEqual(self.check_zip(["HeavenBench.app/Contents/Info.plist"]),
+                             {"HeavenBench.app/Contents/Info.plist"})
+            for name in ("HeavenBench.app/Contents\\escape", "HeavenBench.app/file\0hidden"):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Unsafe"):
+                    self.check_zip([name])
 
     def test_zip_rejects_links_and_empty_archives(self):
         data = io.BytesIO()
