@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise Mach-O deployment/import parsing and hostile package inputs off-device."""
 
+import copy
 import io
 import json
 import os
@@ -20,6 +21,119 @@ import verify_macos as verify
 
 
 class MacOsPackagingTest(unittest.TestCase):
+    def test_relocation_preserves_present_rpath_and_adds_absent_rpath(self):
+        for desired_present in (True, False):
+            with self.subTest(desired_present=desired_present), \
+                    tempfile.TemporaryDirectory(prefix="heaven actual closure ") as temporary:
+                root = Path(temporary).resolve()
+                app = root / "relocated app/HeavenBench.app"
+                frameworks = app / "Contents/Frameworks"
+                macos = app / "Contents/MacOS"
+                for directory in (frameworks, macos):
+                    directory.mkdir(parents=True)
+                source = root / "source/heaven_benchmark"
+                source.parent.mkdir()
+                source.write_bytes(b"executable fixture")
+                executable = macos / source.name
+                executable.write_bytes(source.read_bytes())
+                cellar = root / "Cellar"
+                keg = cellar / "runtime/1.2.3"
+                (keg / "lib").mkdir(parents=True)
+                (keg / "INSTALL_RECEIPT.json").write_text("{}")
+                library = keg / "lib/libDependency.dylib"
+                leaf = keg / "lib/libLeaf.dylib"
+                for path in (library, leaf):
+                    path.write_bytes(path.name.encode())
+                system = "/usr/lib/libSystem.B.dylib"
+                original = {}
+                for owner, imports in ((source, [str(library), system]),
+                                       (library, [str(library), "@rpath/" + leaf.name, system]),
+                                       (leaf, [str(leaf), system])):
+                    desired = "@executable_path/../Frameworks" if owner == source else "@loader_path"
+                    original[owner] = {"id": None if owner == source else str(owner),
+                                       "imports": imports,
+                                       "rpaths": ([desired] if desired_present else []) + [str(keg / "lib")]}
+                bundler = bundle.Bundler(app, cellar, [], {})
+                rewritten = {}
+                invocations = []
+                signed = set()
+
+                def state(path):
+                    if path in original:
+                        return original[path]
+                    if path not in rewritten:
+                        source_path = source if path == executable else next(
+                            source_path for source_path, target in bundler.by_source.items() if target == path)
+                        rewritten[path] = copy.deepcopy(original[source_path])
+                    return rewritten[path]
+
+                def apple_tool(command, **options):
+                    command = [str(part) for part in command]
+                    tool, path = command[0], Path(command[-1])
+                    if tool == "lipo":
+                        return "arm64\n"
+                    if tool == "otool":
+                        binary = state(path)
+                        if "-l" in command:
+                            return ("cmd LC_BUILD_VERSION\n minos 14.0\n" + "".join(
+                                f"cmd LC_RPATH\n path {entry} (offset 12)\n" for entry in binary["rpaths"]))
+                        if "-D" in command:
+                            return str(path) + ":\n" + (binary["id"] + "\n" if binary["id"] else "")
+                        if "-L" in command:
+                            return str(path) + ":\n" + "".join(
+                                f"\t{entry} (compatibility version 1.0.0, current version 1.0.0)\n"
+                                for entry in binary["imports"])
+                    if tool == "install_name_tool":
+                        deleted = {command[index + 1] for index, item in enumerate(command) if item == "-delete_rpath"}
+                        added = {command[index + 1] for index, item in enumerate(command) if item == "-add_rpath"}
+                        if deleted & added:
+                            raise RuntimeError("Apple rejects deleting and adding the same rpath")
+                        invocations.append(command)
+                        binary = state(path)
+                        index = 1
+                        while index < len(command) - 1:
+                            option, value = command[index:index + 2]
+                            if option == "-change":
+                                replacement = command[index + 2]
+                                self.assertIn(value, binary["imports"])
+                                binary["imports"] = [replacement if entry == value else entry for entry in binary["imports"]]
+                                index += 3
+                                continue
+                            if option == "-delete_rpath":
+                                binary["rpaths"].remove(value)
+                            elif option == "-add_rpath":
+                                self.assertNotIn(value, binary["rpaths"])
+                                binary["rpaths"].append(value)
+                            elif option == "-id":
+                                binary["imports"] = [value if entry == binary["id"] else entry for entry in binary["imports"]]
+                                binary["id"] = value
+                            else:
+                                self.fail("Unexpected relocation operation: " + option)
+                            index += 2
+                        return ""
+                    if tool == "codesign":
+                        signed.add(path)
+                        return ""
+                    self.fail("Unexpected Apple tool command: " + repr(command))
+
+                with mock.patch.object(bundle, "run", side_effect=apple_tool):
+                    visited = bundler.close([(source, executable)], [])
+                self.assertEqual(visited, {executable, frameworks / library.name, frameworks / leaf.name})
+                self.assertEqual(signed, visited)
+                self.assertEqual(len(bundler.edges), 2)
+                self.assertEqual({entry["to"] for entry in bundler.edges},
+                                 {"Contents/Frameworks/" + library.name, "Contents/Frameworks/" + leaf.name})
+                for path in visited:
+                    desired = "@loader_path" if path.parent == frameworks else "@executable_path/../Frameworks"
+                    self.assertEqual(rewritten[path]["rpaths"], [desired])
+                    self.assertIn(system, rewritten[path]["imports"])
+                    self.assertTrue(all(bundle.is_system(entry) or entry.startswith("@rpath/")
+                                        for entry in rewritten[path]["imports"]))
+                for command in invocations:
+                    self.assertEqual(command.count("-add_rpath"), int(not desired_present))
+                    self.assertIn("-delete_rpath", command)
+                    self.assertEqual(command.count("-change"), 1 if Path(command[-1]).name != leaf.name else 0)
+
     @unittest.skipUnless(os.name == "posix", "Homebrew symlink fixture requires POSIX")
     def test_sdl_compat_alias_seeds_exact_runtime_and_retains_notices(self):
         with tempfile.TemporaryDirectory(prefix="heaven SDL keg ") as temporary:

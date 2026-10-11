@@ -261,10 +261,13 @@ class Bundler:
                                    "import": imported, "to": bundled.relative_to(self.app).as_posix()})
                 pending.append((target, bundled, executable_dir))
             # Remove all build/Cellar rpaths, including transitive search paths.
+            desired_rpath = ("@loader_path" if destination.parent == self.frameworks
+                             else "@executable_path/../Frameworks")
             for path in dict.fromkeys(original_rpaths):
-                changes += ["-delete_rpath", path]
-            changes += ["-add_rpath", "@loader_path" if destination.parent == self.frameworks
-                        else "@executable_path/../Frameworks"]
+                if path != desired_rpath:
+                    changes += ["-delete_rpath", path]
+            if desired_rpath not in original_rpaths:
+                changes += ["-add_rpath", desired_rpath]
             if destination.parent == self.frameworks:
                 changes += ["-id", "@rpath/" + destination.name]
             run(["install_name_tool", *changes, destination])
