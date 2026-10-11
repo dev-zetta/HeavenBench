@@ -70,10 +70,14 @@ if(HEAVEN_PLATFORM_MACOS)
     # Apple SDK libc++ can lag the C++23 API used by owned sources. Check a
     # linked program, not only the language flag, before configuring vendors.
     include(CheckCXXSourceCompiles)
-    set(HEAVEN_SAVED_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
-    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -std=c++23")
-    unset(HEAVEN_MACOS_CXX23_SUPPORTED CACHE)
-    check_cxx_source_compiles("
+    function(heaven_check_macos_cxx23)
+        # try_compile appends the selected language standard after required
+        # flags. Set its standard in this scope so C++17 cannot override the
+        # probe, without leaking C++23 into Filament's directory.
+        set(CMAKE_CXX_STANDARD 23)
+        set(CMAKE_CXX_STANDARD_REQUIRED ON)
+        unset(HEAVEN_MACOS_CXX23_SUPPORTED CACHE)
+        check_cxx_source_compiles("
         #include <expected>
         #include <format>
         #if !defined(_LIBCPP_VERSION) || _LIBCPP_VERSION < 210000
@@ -83,7 +87,8 @@ if(HEAVEN_PLATFORM_MACOS)
             std::expected<int, int> value = 42;
             return std::format(\"{}\", *value) != \"42\";
         }" HEAVEN_MACOS_CXX23_SUPPORTED)
-    set(CMAKE_REQUIRED_FLAGS "${HEAVEN_SAVED_REQUIRED_FLAGS}")
+    endfunction()
+    heaven_check_macos_cxx23()
     if(NOT HEAVEN_MACOS_CXX23_SUPPORTED)
         message(FATAL_ERROR "macOS C++23 libc++ compile/link check failed; use scripts/build.sh with Homebrew llvm@21")
     endif()

@@ -63,5 +63,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HeavenBench-macos-arm64-logs
-          path: build/release/macos/logs/
+          path: |
+            build/release/macos/logs/
+            build/release/macos/build-environment.txt
+            build/release/macos/macos-package-verification.json
+            build/renderer-macos-arm64/CMakeFiles/CMakeConfigureLog.yaml
+            build/renderer-macos-arm64/CMakeCache.txt
           if-no-files-found: ignore

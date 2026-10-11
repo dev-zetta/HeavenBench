@@ -364,7 +364,15 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]] &&
 fi
 
 echo "==> Configuring $PLATFORM ($BUILD_TYPE, Ninja)"
-cmake "${CMAKE_CONFIGURE_ARGS[@]}"
+if cmake "${CMAKE_CONFIGURE_ARGS[@]}"; then
+    :
+else
+    configure_status=$?
+    if [[ -f "$BUILD_DIR/CMakeFiles/CMakeConfigureLog.yaml" ]]; then
+        tail -n 120 "$BUILD_DIR/CMakeFiles/CMakeConfigureLog.yaml" >&2
+    fi
+    exit "$configure_status"
+fi
 
 # Optional: recompile Filament materials before building.
 if [[ "$COMPILE_MATERIALS" -eq 1 ]]; then
