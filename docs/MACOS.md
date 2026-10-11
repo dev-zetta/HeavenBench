@@ -18,10 +18,12 @@ For incremental renderer development or packaging an existing build:
 
 ```bash
 ./scripts/build.sh --platform macos --jobs 2
-./scripts/package_macos.sh --skip-build --output-dir build/release/macos
+./scripts/package_macos.sh --jobs 2 --output-dir build/release/macos
 ```
 
-The default build tree is `build/renderer-macos-arm64/`. `--build-dir` selects another tree; use the same value when packaging. `HEAVEN_LLVM_ROOT` can select an LLVM installation compatible with the required C++23 library features. The helper uses LLVM 21 and its libc++ headers and runtime together because the system Apple Clang/library combination may lack required features.
+The package helper also builds the standalone asset packer and extraction executables that a renderer-only build omits. Use `--skip-build` only after the complete `ci_macos.sh` pipeline has populated the selected build tree.
+
+The default build tree is `build/renderer-macos-arm64/`. `--build-dir` selects another tree; use the same value when packaging. For development, `HEAVEN_LLVM_ROOT` can select an LLVM installation compatible with the required C++23 library features. App packaging requires LLVM from a Homebrew keg with its installation receipt and redistributable notices. The helper uses LLVM 21 and its libc++ headers and runtime together because the system Apple Clang/library combination may lack required features.
 
 ## Run the app
 
