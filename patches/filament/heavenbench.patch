@@ -1196,10 +1196,10 @@ index a44c62e75d0cefff11bb288444252286f529842e..267a496c7aa8069eba49cdce75427c35
      bool mSuboptimal;
 diff --git a/filament/backend/test/test_ProfilerTrace.cpp b/filament/backend/test/test_ProfilerTrace.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..8edbd0d9609ed6ee8750e8f5c98e032c58b09ebf
+index 0000000000000000000000000000000000000000..ed6fc416814e623c9c7fac9e54585d417e053adb
 --- /dev/null
 +++ b/filament/backend/test/test_ProfilerTrace.cpp
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,238 @@
 +/* Copyright (C) 2026 The Android Open Source Project
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
@@ -1212,12 +1212,33 @@ index 0000000000000000000000000000000000000000..8edbd0d9609ed6ee8750e8f5c98e032c
 +#include <atomic>
 +#include <cstdio>
 +#include <cstring>
++#include <functional>
 +#include <memory>
 +#include <stdexcept>
 +
 +namespace p = utils::profiling;
 +using filament::backend::GpuProfiler;
 +namespace {
++// Preserve upstream's native Job ABI, including Windows' larger std::function storage.
++struct alignas(utils::CACHELINE_SIZE) UnprofiledJobLayout {
++    static constexpr size_t STORAGE_BYTES =
++            sizeof(std::function<void()>) > 48 ? sizeof(std::function<void()>) : 48;
++    static constexpr size_t STORAGE_WORDS =
++            (STORAGE_BYTES + sizeof(void*) - 1) / sizeof(void*);
++    void* storage[STORAGE_WORDS];
++    utils::JobSystem::JobFunc function;
++    uint16_t parent;
++    utils::JobSystem::ThreadId id;
++    std::atomic<uint8_t> refCount;
++    std::atomic<uint32_t> runningJobCount;
++};
++static_assert(utils::JobSystem::Job::JOB_STORAGE_SIZE_BYTES == UnprofiledJobLayout::STORAGE_BYTES &&
++        utils::JobSystem::Job::JOB_STORAGE_SIZE_WORDS == UnprofiledJobLayout::STORAGE_WORDS,
++        "Profiler sidecar must preserve upstream Job storage policy");
++static_assert(sizeof(utils::JobSystem::Job) == sizeof(UnprofiledJobLayout),
++        "Profiler sidecar must preserve native Job size");
++static_assert(alignof(utils::JobSystem::Job) == alignof(UnprofiledJobLayout),
++        "Profiler sidecar must preserve native Job alignment");
 +void require(bool condition, const char* message) {
 +    if (!condition) throw std::runtime_error(message);
 +}
@@ -1309,7 +1330,6 @@ index 0000000000000000000000000000000000000000..8edbd0d9609ed6ee8750e8f5c98e032c
 +    p::begin("test", "after-overflow"); p::end();
 +    require(r.cpu[0].parent_id == 0, "CPU overflow preserves later stack balance");
 +
-+    static_assert(sizeof(utils::JobSystem::Job) == 64, "Profiler sidecar must preserve Job ABI");
 +    utils::JobSystem jobs(1, 1); jobs.adopt();
 +    std::atomic<bool> parentCorrect{false}, childCorrect{false};
 +    p::setContext(context(21));
@@ -1405,6 +1425,9 @@ index 0000000000000000000000000000000000000000..8edbd0d9609ed6ee8750e8f5c98e032c
 +} // namespace
 +int main() {
 +    try {
++        std::printf("ProfilerTrace Job ABI: size=%zu alignment=%zu std::function=%zu\n",
++                sizeof(utils::JobSystem::Job), alignof(utils::JobSystem::Job),
++                sizeof(std::function<void()>));
 +        auto records = std::make_unique<Records>();
 +        p::setObserver(&records->observer);
 +        cpuTests(*records); gpuTests(*records);
