@@ -6,7 +6,7 @@
 
 *Captured in HeavenBench on Linux with Vulkan, Visual Ultra and the enhanced 4K texture pack enabled, at 1920×1080.*
 
-The current version is **1.0.0**. The first joint Linux, Windows and Android release is still being qualified; [release readiness](docs/RELEASE_READINESS.md) records the remaining checks. See the [changelog](CHANGELOG.md) for the development history.
+**HeavenBench 1.0.0 is available:** [download for Linux, Windows or Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0). The Android APK is development-signed; [release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
 ## Watch the showcase
 

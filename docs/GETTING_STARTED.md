@@ -1,6 +1,6 @@
 # Getting started
 
-HeavenBench runs a CPU workload and an authored camera tour through the original Heaven scene. It also provides interactive exploration, configurable rendering and saved result reports. The current source version is 1.0.0; packages built by the workflows remain release candidates until the [release checks](RELEASE_READINESS.md) are complete.
+HeavenBench runs a CPU workload and an authored camera tour through the original Heaven scene. It also provides interactive exploration, configurable rendering and saved result reports. [Download HeavenBench 1.0.0 for Linux, Windows or Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0); the Android APK is development-signed. [Release readiness](RELEASE_READINESS.md) records verified package checks and remaining rendering/device limitations.
 
 ## Prepare the scene assets
 
@@ -22,7 +22,7 @@ The normal asset location is an `assets/` directory containing compatible ZIP pa
 
 ## Start the application
 
-The commands below assume you already have a locally built package. [Building HeavenBench](BUILDING.md) describes package creation and source builds.
+[Download the package for your platform](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0), then follow the steps below with your prepared scene pack. Choose the portable AppImage for general Linux x86-64 use. [Building HeavenBench](BUILDING.md) describes source builds and package creation.
 
 | Platform | Start HeavenBench |
 | --- | --- |
