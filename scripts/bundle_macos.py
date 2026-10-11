@@ -395,7 +395,7 @@ def package(build_dir, output_dir):
                  "CFBundleShortVersionString": version, "LSMinimumSystemVersion": cache["CMAKE_OSX_DEPLOYMENT_TARGET"],
                  "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication"}
         (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist))
-        cellar = Path(run(["brew", "--cellar"]).strip())
+        cellar = Path(run(["brew", "--cellar"]).strip()).resolve(strict=True)
         prefixes = {name: Path(run(["brew", "--prefix", name]).strip()).resolve(strict=True)
                     for name in ("sdl2", "glm", "vulkan-loader", "molten-vk")}
         llvm = Path(cache["CMAKE_CXX_COMPILER"]).resolve(strict=True).parent.parent

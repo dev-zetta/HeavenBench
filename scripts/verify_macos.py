@@ -42,6 +42,14 @@ def safe_members(archive):
     return names
 
 
+def resolve_icd_library(icd_path, frameworks):
+    icd = json.loads(icd_path.read_text())
+    molten = (icd_path.parent / icd["ICD"]["library_path"]).resolve(strict=True)
+    if not molten.is_relative_to(frameworks.resolve(strict=True)):
+        raise ValueError("ICD library escapes bundled Frameworks")
+    return molten
+
+
 def verify(artifact):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("Relocated verification requires native Apple Silicon macOS")
@@ -51,7 +59,7 @@ def verify(artifact):
     with zipfile.ZipFile(artifact) as archive:
         members = safe_members(archive)
     with tempfile.TemporaryDirectory(prefix="heavenbench relocated macos ") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         unpacked = root / "unpacked app with spaces"
         run(["ditto", "-x", "-k", artifact, unpacked])
         app = unpacked / "HeavenBench.app"
@@ -114,10 +122,7 @@ def verify(artifact):
             if sha256(app / entry["path"]) != entry["sha256"]:
                 raise ValueError(f"Runtime inventory mismatch: {entry['path']}")
         icd_path = resources / "vulkan/icd.d/MoltenVK_icd.json"
-        icd = json.loads(icd_path.read_text())
-        molten = (icd_path.parent / icd["ICD"]["library_path"]).resolve(strict=True)
-        if not molten.is_relative_to(frameworks):
-            raise ValueError("ICD library escapes bundled Frameworks")
+        molten = resolve_icd_library(icd_path, frameworks)
         # A dlopen/symbol check establishes library closure without enumerating
         # GPUs or creating a graphics instance/device/window.
         for library in (frameworks / "libvulkan.1.dylib", molten):

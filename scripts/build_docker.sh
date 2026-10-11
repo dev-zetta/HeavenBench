@@ -69,10 +69,11 @@ if [[ "$CLEAN" == 1 ]]; then
     extra_args+=(--no-cache)
 fi
 mkdir -p "$OUTPUT_DIR/logs"
+# Bash 3.2 treats an empty array as unset under nounset; preserve zero arguments.
 docker buildx build --platform linux/amd64 --file "$REPO_ROOT/docker/Dockerfile" \
     --target "$PLATFORM-artifacts" --progress plain \
     --build-arg "JOBS=$JOBS" --build-arg "CPU_ARCH=$CPU_ARCH" \
     --build-arg "ANDROID_ABI=$ABI" --build-arg "CACHE_SCOPE=$CACHE_SCOPE" \
     --build-arg "RUN_ANALYSIS=$RUN_ANALYSIS" \
-    --output "type=local,dest=$OUTPUT_DIR" "${extra_args[@]}" "$REPO_ROOT" \
+    --output "type=local,dest=$OUTPUT_DIR" ${extra_args[@]+"${extra_args[@]}"} "$REPO_ROOT" \
     2>&1 | tee "$OUTPUT_DIR/logs/docker-build.log"

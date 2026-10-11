@@ -25,7 +25,7 @@ class DockerBuildTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="heaven docker contract ")
         self.addCleanup(temporary.cleanup)
-        self.directory = Path(temporary.name)
+        self.directory = Path(temporary.name).resolve()
         self.source = self.directory / "source with spaces"
         (self.source / "scripts").mkdir(parents=True)
         (self.source / "docker").mkdir()

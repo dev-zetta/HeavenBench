@@ -2,6 +2,7 @@
 """Exercise Mach-O deployment/import parsing and hostile package inputs off-device."""
 
 import io
+import json
 from pathlib import Path
 import stat
 import sys
@@ -15,6 +16,30 @@ import verify_macos as verify
 
 
 class MacOsPackagingTest(unittest.TestCase):
+    def test_icd_containment_accepts_symlinked_temp_root_and_rejects_escape(self):
+        with tempfile.TemporaryDirectory(prefix="heaven symlink temp ") as temporary:
+            root = Path(temporary).resolve()
+            actual = root / "actual"
+            actual.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            contents = alias / "HeavenBench.app/Contents"
+            frameworks = contents / "Frameworks"
+            frameworks.mkdir(parents=True)
+            molten = frameworks / "libMoltenVK.dylib"
+            molten.write_bytes(b"fixture")
+            icd_path = contents / "Resources/vulkan/icd.d/MoltenVK_icd.json"
+            icd_path.parent.mkdir(parents=True)
+            icd_path.write_text(json.dumps({"ICD": {"library_path": "../../../Frameworks/libMoltenVK.dylib"}}))
+            self.assertEqual(verify.resolve_icd_library(icd_path, frameworks), molten.resolve())
+
+            outside = root / "outside.dylib"
+            outside.write_bytes(b"must remain outside bundle")
+            molten.unlink()
+            molten.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "escapes bundled Frameworks"):
+                verify.resolve_icd_library(icd_path, frameworks)
+
     def test_minimum_uses_deployment_not_sdk_or_dylib_version(self):
         commands = """Load command 0
           cmd LC_BUILD_VERSION

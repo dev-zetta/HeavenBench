@@ -377,7 +377,7 @@ class AssetBuilderCliTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="heaven builder cli ")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.installer = self.root / "cached installer with spaces.run"
         data, self.spec = installer_bytes()
         self.installer.write_bytes(data)
