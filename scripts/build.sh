@@ -270,6 +270,8 @@ elif [[ "$PLATFORM" == "macos" ]]; then
         exit 1
     fi
     MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+    MACOS_AR="$(xcrun --find ar)"
+    MACOS_RANLIB="$(xcrun --find ranlib)"
     LLVM_ROOT="${HEAVEN_LLVM_ROOT:-}"
     if [[ -z "$LLVM_ROOT" ]]; then
         if [[ -n "$CXX_COMPILER" ]]; then
@@ -305,6 +307,8 @@ elif [[ "$PLATFORM" == "macos" ]]; then
         -DCMAKE_CXX_COMPILER="$CXX_COMPILER"
         -DCMAKE_OBJC_COMPILER="$C_COMPILER"
         -DCMAKE_OBJCXX_COMPILER="$CXX_COMPILER"
+        -DCMAKE_AR="$MACOS_AR"
+        -DCMAKE_RANLIB="$MACOS_RANLIB"
         -DCMAKE_OSX_ARCHITECTURES=arm64
         -DCMAKE_OSX_SYSROOT="$MACOS_SDK"
         -DCMAKE_OSX_DEPLOYMENT_TARGET="${HEAVEN_MACOS_DEPLOYMENT_TARGET:-14.0}"

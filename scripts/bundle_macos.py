@@ -86,7 +86,7 @@ def build_tools(build_dir, jobs):
     require_release(cache)
     # Reuse the exact configured compiler/stdlib/SDK rather than mixing the
     # system Apple C++ headers with the renderer's LLVM 21 runtime.
-    names = ("CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS",
+    names = ("CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_AR", "CMAKE_RANLIB", "CMAKE_CXX_FLAGS",
              "CMAKE_EXE_LINKER_FLAGS", "CMAKE_SHARED_LINKER_FLAGS",
              "CMAKE_OSX_SYSROOT", "CMAKE_OSX_DEPLOYMENT_TARGET",
              "CMAKE_OSX_ARCHITECTURES", "CMAKE_PREFIX_PATH")
