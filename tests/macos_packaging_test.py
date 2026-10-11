@@ -21,6 +21,30 @@ import verify_macos as verify
 
 
 class MacOsPackagingTest(unittest.TestCase):
+    def test_payload_manifest_survives_reseal_and_detects_resource_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="heaven seal fixture ") as temporary:
+            app = Path(temporary).resolve() / "HeavenBench.app"
+            payload = ["Contents/MacOS/heaven_benchmark", "Contents/Frameworks/libDependency.dylib",
+                       "Contents/Info.plist", "Contents/Resources/launch-heavenbench.sh",
+                       "Contents/Resources/licenses/macos-runtime.json"]
+            signing = ["Contents/MacOS/HeavenBench", "Contents/_CodeSignature/CodeResources",
+                       "Contents/_CodeSignature/nested/seal", "Contents/Resources/package-manifest.json"]
+            for relative in payload + signing:
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(("initial " + relative).encode())
+            before = bundle.payload_manifest_files(app)
+            self.assertEqual({entry["path"] for entry in before}, set(payload))
+            for relative in signing:
+                (app / relative).write_bytes(("rewritten " + relative).encode())
+            self.assertEqual(bundle.payload_manifest_files(app), before)
+            resource = "Contents/Resources/launch-heavenbench.sh"
+            (app / resource).write_bytes(b"changed actual resource")
+            before_hashes = {entry["path"]: entry["sha256"] for entry in before}
+            after_hashes = {entry["path"]: entry["sha256"] for entry in bundle.payload_manifest_files(app)}
+            self.assertEqual([relative for relative in before_hashes if before_hashes[relative] != after_hashes[relative]],
+                             [resource])
+
     def test_relocation_preserves_present_rpath_and_adds_absent_rpath(self):
         for desired_present in (True, False):
             with self.subTest(desired_present=desired_present), \

@@ -42,6 +42,16 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def payload_manifest_files(app):
+    # Signing may have already created a resource seal, then rewrites that seal
+    # and the main executable when sealing the completed payload manifest.
+    excluded = {"Contents/Resources/package-manifest.json", "Contents/MacOS/HeavenBench"}
+    signature = app / "Contents/_CodeSignature"
+    return [{"path": path.relative_to(app).as_posix(), "sha256": sha256(path)}
+            for path in sorted(app.rglob("*")) if path.is_file()
+            and not path.is_relative_to(signature) and path.relative_to(app).as_posix() not in excluded]
+
+
 def project_version():
     match = re.search(r"^project\(HeavenBench VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES",
                       (ROOT / "benchmark/CMakeLists.txt").read_text(), re.M)
@@ -481,8 +491,7 @@ def package(build_dir, output_dir):
         # Outer signing changes the native CFBundleExecutable's signature to
         # seal the final resource manifest. Its bytes are covered by codesign
         # and the ZIP SHA, avoiding a self-referential hash manifest.
-        files = [{"path": path.relative_to(app).as_posix(), "sha256": sha256(path)}
-                 for path in sorted(app.rglob("*")) if path.is_file() and path != launcher]
+        files = payload_manifest_files(app)
         (resources / "package-manifest.json").write_text(json.dumps(
             {"version": version, "platform": "macos-arm64", "cpu": "arm64",
              "minimum_macos": actual_minimum, "files": files,
