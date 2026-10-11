@@ -25,8 +25,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install native build dependencies
@@ -48,7 +48,7 @@ jobs:
       - name: Build, test, package and verify Apple Silicon app
         run: ./scripts/ci_macos.sh --jobs 2 --output-dir build/release/macos
       - name: Upload ARM64 app bundle and checksum
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-macos-arm64
           path: |
@@ -60,7 +60,7 @@ jobs:
           compression-level: 0
       - name: Upload build and verification logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-macos-arm64-logs
           path: |

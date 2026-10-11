@@ -21,8 +21,8 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Build, test, package and verify Windows release
@@ -32,7 +32,7 @@ jobs:
           try { ./scripts/ci_windows.ps1 -Jobs 2 }
           finally { Stop-Transcript }
       - name: Upload Windows ZIP
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-windows-x64
           path: |
@@ -41,7 +41,7 @@ jobs:
           if-no-files-found: error
       - name: Upload build and verification logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-windows-x64-logs
           path: build/release/windows/logs/

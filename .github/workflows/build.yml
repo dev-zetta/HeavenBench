@@ -22,14 +22,14 @@ jobs:
       matrix:
         cpu-arch: [portable, zen1, zen5]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build, test and package in Docker
         run: |
           ./scripts/build_docker.sh linux --cpu-arch "${{ matrix.cpu-arch }}" \
             --jobs 2 --output-dir build/release/linux
       - name: Upload AppImage, matching sources and provenance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-linux-x86_64-${{ matrix.cpu-arch }}
           path: |
@@ -42,7 +42,7 @@ jobs:
           compression-level: 0
       - name: Upload build and verification logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-linux-${{ matrix.cpu-arch }}-logs
           path: build/release/linux/logs/

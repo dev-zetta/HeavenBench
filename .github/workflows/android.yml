@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build and validate ARM64 APK in Docker
         run: |
@@ -27,7 +27,7 @@ jobs:
             --output-dir build/release/android
 
       - name: Upload APK, matching source, checksums and provenance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-android-arm64-v8a-debug
           path: |
@@ -42,7 +42,7 @@ jobs:
 
       - name: Upload build log and lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-android-build-log
           path: |
