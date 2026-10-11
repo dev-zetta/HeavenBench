@@ -33,6 +33,9 @@
 #include "rhi/profile_bridge.h"
 #include "engine/render_presets.h"
 #include "engine/startup_timer.h"
+#ifdef __APPLE__
+#include "rhi/macos_surface.h"
+#endif
 
 #include <filament/Engine.h>
 #include <filament/FrameHistoryStream.h>
@@ -326,6 +329,12 @@ struct UgxLinuxNativeWindow {
 #endif
 
 void* FilamentBackend::get_native_window(SDL_Window* sdl_window) {
+#ifdef __APPLE__
+    if (!macos_surface_) {
+        macos_surface_ = std::make_unique<MacOsSurface>(sdl_window);
+    }
+    return macos_surface_->native_layer();
+#else
     SDL_SysWMinfo wmi;
     SDL_VERSION(&wmi.version);
     if (!SDL_GetWindowWMInfo(sdl_window, &wmi)) {
@@ -385,11 +394,9 @@ void* FilamentBackend::get_native_window(SDL_Window* sdl_window) {
     return nullptr;
 #elifdef _WIN32
     return reinterpret_cast<void*>(wmi.info.win.window);
-#elifdef __APPLE__
-    // macOS: need NSView from NSWindow
-    return reinterpret_cast<void*>(wmi.info.cocoa.window);
 #else
     return nullptr;
+#endif
 #endif
 }
 
@@ -426,7 +433,13 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
     engine_config.perRenderPassArenaSizeMB = 16;
     engine_config.perFrameCommandsSizeMB   = 12;
 
-    const bool vulkan_window = (SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN) != 0;
+    uint32_t vulkan_window_flags = SDL_WINDOW_VULKAN;
+#ifdef __APPLE__
+    // SDL_Metal_CreateView converts the window flag after the first engine is
+    // created. Reinitializing a backend for that same layer still uses Vulkan.
+    vulkan_window_flags |= SDL_WINDOW_METAL;
+#endif
+    const bool vulkan_window = (SDL_GetWindowFlags(window) & vulkan_window_flags) != 0;
     if (vulkan_window) {
         engine_ = filament::Engine::Builder()
             .backend(filament::Engine::Backend::VULKAN)
@@ -434,6 +447,7 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
             .build();
     }
 
+#ifndef __APPLE__
     if (!engine_ && !hdr_) {
         // Fall back to OpenGL if Vulkan isn't available
         std::printf("FilamentBackend: Vulkan not available, falling back to OpenGL\n");
@@ -442,6 +456,7 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
             .config(&engine_config)
             .build();
     }
+#endif
 
     if (!engine_) {
         std::fprintf(stderr, "FilamentBackend: Failed to create Filament engine\n");
@@ -458,6 +473,8 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
     // Create swap chain from native window
     void* native_win = get_native_window(window);
     if (!native_win) {
+        initialization_error_ = std::format(
+            "Cannot create the native rendering surface: {}", SDL_GetError());
         std::fprintf(stderr, "FilamentBackend: Failed to get native window handle\n");
         return;
     }
@@ -688,6 +705,11 @@ FilamentBackend::~FilamentBackend() {
 
     filament::Engine::destroy(&engine_);
     profile_bridge_.reset();
+#ifdef __APPLE__
+    // The Vulkan surface borrows the layer. Drop SDL's owning view only after
+    // Filament's driver has drained and destroyed every native swap chain.
+    macos_surface_.reset();
+#endif
 }
 
 // ── Identification ──────────────────────────────────────────────
@@ -1011,6 +1033,7 @@ IRhiBackend::GpuInfoRaw FilamentBackend::gpu_info() const {
                 info.pci_function = static_cast<int>(pci_props.pciFunction);
             }
 
+#ifndef __APPLE__
             // VRAM ≈ the sum of every DEVICE_LOCAL memory heap, bytes → MB.
             VkPhysicalDeviceMemoryProperties mem_props{};
             vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_props);
@@ -1021,6 +1044,9 @@ IRhiBackend::GpuInfoRaw FilamentBackend::gpu_info() const {
                 }
             }
             info.vram_mb = static_cast<long>(device_local_bytes / (VkDeviceSize{1024} * 1024));
+#endif
+            // Apple Silicon's device-local heaps use unified memory. Keep the
+            // dedicated VRAM field unavailable instead of reporting system RAM.
         }
 
         return info;

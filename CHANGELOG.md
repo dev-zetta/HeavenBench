@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Add a native Apple Silicon (M1+) macOS build workflow, Vulkan/MoltenVK window support, LLVM 21 build helpers and app packaging with bundled runtime libraries, notices, checksums and relocation checks. macOS remains a CI candidate pending physical rendering and distribution-signing acceptance.
+
 ## 1.0.0 — 2026-10-10
 
 HeavenBench 1.0.0 establishes a fresh source baseline containing the benchmark, cross-platform build and packaging pipelines, asset preparation tools, rendering fixtures and microprofiler. This version does not by itself publish a release or qualify every platform; remaining runtime, visual and signing gates are recorded in [release readiness](docs/RELEASE_READINESS.md). Original Heaven assets remain external.

@@ -13,12 +13,10 @@
  *
  * This is an EXAMPLE test (not a RapidCheck property): it runs the real source
  * against the host and asserts the host-derived raw comes back populated. It is
- * GATED to Linux hosts with `#if defined(__linux__)`: on any other platform
- * (or a CI runner without a Linux host) the query bodies return empty sentinels
- * by design, so the test SKIPS (prints a notice and returns true) rather than
- * asserting against values the OS never provides.
+ * GATED to Linux and macOS hosts: other platforms currently return empty
+ * sentinels, so the test skips rather than asserting unavailable host data.
  *
- * On Linux it asserts:
+ * On supported hosts it asserts:
  *   - PlatformRaw comes back populated: non-empty os_name AND non-empty
  *     machine_arch (the two fields uname always supplies;).
  *   - CpuRaw reports at least one logical core ('s "no less
@@ -53,7 +51,7 @@ struct Register {
 namespace {
 
 bool unit_host_info_source() {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     heaven::LinuxHostInfoSource source;
 
     const heaven::PlatformRaw platform = source.query_platform();
@@ -62,7 +60,7 @@ bool unit_host_info_source() {
     bool ok = true;
 
     // uname(2) supplies the OS name and machine architecture
-    // on every Linux host, so both must come back populated.
+    // on every supported host, so both must come back populated.
     if (platform.os_name.empty()) {
         std::printf(
             "[unit_host_info_source] FAILED: PlatformRaw.os_name is empty\n");
@@ -94,7 +92,7 @@ bool unit_host_info_source() {
     return ok;
 #else
     std::printf(
-        "[unit_host_info_source] SKIPPED: not a Linux host "
+        "[unit_host_info_source] SKIPPED: not a Linux or macOS host "
         "(LinuxHostInfoSource has no host data to report here)\n");
     return true;
 #endif

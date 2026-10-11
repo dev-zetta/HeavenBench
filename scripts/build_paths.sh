@@ -25,6 +25,8 @@ heaven_renderer_build_dir() {
             fi ;;
         windows)
             directory+="-windows" ;;
+        macos)
+            directory+="-macos-arm64" ;;
         android)
             directory+="-android-$android_abi" ;;
         *)

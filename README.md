@@ -8,6 +8,8 @@
 
 **HeavenBench 1.0.0 is available:** [download for Linux, Windows or Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0). The Android APK is development-signed; [release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
+For Apple Silicon Macs (M1 and newer), see [macOS build candidates and setup](docs/MACOS.md).
+
 ## Watch the showcase
 
 [![Watch the HeavenBench 1.0.0 feature showcase on YouTube](docs/images/heavenbench-showcase.png)](https://youtu.be/v-s5fNxlnVw)

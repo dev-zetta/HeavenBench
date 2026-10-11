@@ -4,7 +4,7 @@ Run the commands in this guide from the repository root. Use the shared helper s
 
 ## Release package pipeline
 
-Linux and Android use the same Docker entry point locally and in GitHub Actions. Install Docker with Buildx and Bash; compilers, development libraries, Java, the Android SDK/NDK, and pinned project dependencies are installed inside the build. Windows uses a shared native MSVC pipeline.
+Linux and Android use the same Docker entry point locally and in GitHub Actions. Install Docker with Buildx and Bash; compilers, development libraries, Java, the Android SDK/NDK, and pinned project dependencies are installed inside the build. Windows uses a shared native MSVC pipeline; macOS uses a native Apple Silicon pipeline with Homebrew LLVM and MoltenVK.
 
 ```bash
 ./scripts/build_docker.sh linux --jobs 6
@@ -93,9 +93,12 @@ Use `./scripts/build.sh --materials-all` only after a deliberate Filament/materi
 | --- | --- | --- | --- |
 | Linux x86-64 | `./scripts/build_docker.sh linux --jobs 6` | [Linux AppImage](../.github/workflows/build.yml) | AppImage and SHA-256, portable/Zen 1/Zen 5 CI variants |
 | Windows x64 | `pwsh -File scripts/ci_windows.ps1 -Jobs 6` | [Windows](../.github/workflows/windows.yml) | ZIP with renderer, asset packer, extraction tools, resources, DLLs, and notices |
+| macOS Apple Silicon (M1+) | `./scripts/ci_macos.sh --jobs 2` | [macOS ARM64](../.github/workflows/macos.yml) | ZIP containing an ad hoc signed app bundle, bundled MoltenVK/runtime libraries, notices and SHA-256 |
 | Android ARM64 / x86-64 | `./scripts/build_docker.sh android --abi arm64-v8a --jobs 6` | [Android](../.github/workflows/android.yml) | Debug-signed APK with optimized native code and SHA-256 |
 
 Each workflow builds on pushes and pull requests and supports manual dispatch. The packages retain third-party notices and exclude original Heaven data. Workflow artifacts are release candidates; creating a public release or signing an Android production APK remains a separate step.
+
+For macOS prerequisites, local commands, app launch and validation limits, see [Apple Silicon builds](MACOS.md). The workflow uses the explicit `macos-15` ARM64 runner and checks its architecture before building. The renderer targets macOS 14 or newer; the package declares the highest minimum required by its bundled libraries. Intel Macs are outside this build target.
 
 Linux packaging requires `curl`, `file`, `patchelf`, `desktop-file-validate` (`desktop-file-utils` on Ubuntu), and Python 3 in addition to the renderer prerequisites. The helper downloads checksum-pinned AppImage tools and works without FUSE. Use `--skip-build --build-dir DIR` to package a previously built Release tree; pass its matching `--cpu-arch` for an optimized variant. CI builds on Ubuntu 24.04, setting a glibc 2.39 baseline; packaging on a newer distribution can require newer glibc. Vulkan/OpenGL loaders, graphics drivers, and the ALSA audio library (`libasound.so.2`, provided by `libasound2t64` on Ubuntu 24.04) come from the user's desktop system. ALSA stays external so its configuration and sound-device plugins match the host. Zen variants require the corresponding CPU instruction set.
 

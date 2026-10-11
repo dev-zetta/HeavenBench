@@ -69,17 +69,22 @@ bool unit_bundled_resource_paths() {
     fs::create_directories(root / "windows/resources");
     fs::create_directories(root / "linux/usr/bin");
     fs::create_directories(root / "linux/usr/share/heavenbench/resources");
+    fs::create_directories(root / "macos/HeavenBench.app/Contents/MacOS");
+    fs::create_directories(root / "macos/HeavenBench.app/Contents/Resources/resources");
     const heaven::RuntimePaths windows(root / "windows");
     const heaven::RuntimePaths linux_package(root / "linux/usr/bin");
+    const heaven::RuntimePaths macos_package(root / "macos/HeavenBench.app/Contents/MacOS");
     const heaven::RuntimePaths development(root / "checkout/build");
     const auto override = heaven::runtime_path_from_environment("HEAVEN_RESOURCE_DIR");
     if (override) {
         return windows.bundled_resources_directory("fallback") == *override &&
                linux_package.bundled_resources_directory("fallback") == *override &&
+               macos_package.bundled_resources_directory("fallback") == *override &&
                development.bundled_resources_directory("fallback") == *override;
     }
     return windows.bundled_resources_directory("fallback") == root / "windows/resources" &&
            linux_package.bundled_resources_directory("fallback") == root / "linux/usr/share/heavenbench/resources" &&
+           macos_package.bundled_resources_directory("fallback") == root / "macos/HeavenBench.app/Contents/Resources/resources" &&
            development.bundled_resources_directory("fallback") == "fallback";
 }
 

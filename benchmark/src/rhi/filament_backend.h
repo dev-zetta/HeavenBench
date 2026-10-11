@@ -73,6 +73,9 @@ class WindArrowsFeature;
 class RainFeature;
 class WetReflectionsFeature;
 class ProfileBridge;
+#ifdef __APPLE__
+class MacOsSurface;
+#endif
 
 class FilamentBackend final : public IRhiBackend, public IResourceProvider {
 public:
@@ -304,6 +307,9 @@ private:
     filament::View*         view_       = nullptr;
     filament::Camera*       fil_camera_ = nullptr;
     utils::Entity           camera_entity_;
+#ifdef __APPLE__
+    std::unique_ptr<MacOsSurface> macos_surface_;
+#endif
 
     // Non-owning bundle of the core objects above, handed to the
     // collaborator subsystems (mesh / texture / material stores, scene

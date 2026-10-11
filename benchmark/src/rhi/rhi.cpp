@@ -10,6 +10,9 @@
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
+#ifdef __APPLE__
+#include <SDL2/SDL_metal.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +23,10 @@ namespace heaven {
 void get_drawable_size(SDL_Window* window, int& width, int& height) {
     if (SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN) {
         SDL_Vulkan_GetDrawableSize(window, &width, &height);
+#ifdef __APPLE__
+    } else if (SDL_GetWindowFlags(window) & SDL_WINDOW_METAL) {
+        SDL_Metal_GetDrawableSize(window, &width, &height);
+#endif
     } else {
         SDL_GL_GetDrawableSize(window, &width, &height);
     }
@@ -143,6 +150,12 @@ void WindowHandle::set_drawable_size(
 
 Result<WindowHandle> create_window(
         const AppConfig& config, GraphicsApi /*api*/, std::string_view title) {
+#ifdef __APPLE__
+    if (config.hdr) {
+        return std::unexpected(Error(
+            "--hdr currently requires native Wayland HDR10 and is unavailable on macOS"));
+    }
+#else
     const char* explicit_driver = std::getenv("SDL_VIDEODRIVER");
     const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
     const char* session_type = std::getenv("XDG_SESSION_TYPE");
@@ -180,6 +193,7 @@ Result<WindowHandle> create_window(
             "Window: native Wayland selected for the Wayland desktop "
             "(use --x11 to override)\n");
     }
+#endif
 
 #ifdef SDL_MAIN_HANDLED
     // Our own main bypasses SDL_main, which normally marks startup ready.
@@ -218,6 +232,11 @@ Result<WindowHandle> create_window(
 
     if (!wh.window && !config.hdr) {
         const std::string vulkan_error = SDL_GetError();
+#ifdef __APPLE__
+        SDL_Quit();
+        return std::unexpected(Error(std::format(
+            "macOS requires Vulkan through MoltenVK: {}", vulkan_error)));
+#else
 #if defined(__linux__) && !defined(__ANDROID__)
         // Filament's Linux OpenGL platform uses GLX. A native Wayland window
         // cannot be handed to it. Switch only an automatically selected driver;
@@ -255,6 +274,7 @@ Result<WindowHandle> create_window(
             SDL_Quit();
             return std::unexpected(Error(error));
         }
+#endif
     }
 
     if (!wh.window) {

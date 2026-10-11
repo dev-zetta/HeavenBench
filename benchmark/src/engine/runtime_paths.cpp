@@ -6,6 +6,10 @@
 #include <cstdlib>
 #include <utility>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -57,10 +61,11 @@ std::filesystem::path RuntimePaths::bundled_resources_directory(
         return *configured;
     }
     if (!executable_directory_.empty()) {
-        // Windows ZIP and Linux AppDir layouts are relative to the executable,
+        // ZIP, AppDir and macOS app resources are relative to the executable,
         // so direct tool invocation works from an unrelated working directory.
         const std::array candidates{
             executable_directory_ / "resources",
+            executable_directory_ / "../Resources/resources",
             executable_directory_ / "../share/heavenbench/resources"};
         for (const auto& candidate : candidates) {
             std::error_code error;
@@ -108,6 +113,17 @@ std::filesystem::path bundled_resource_directory(const std::filesystem::path& fa
     std::error_code error;
     const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
     if (!error) executable_directory = executable.parent_path();
+#elifdef __APPLE__
+    // dyld reports the actual executable independently of the working directory.
+    // Resolve its possible symlinks before locating Contents/Resources.
+    uint32_t size = 1024;
+    std::string buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) buffer.resize(size);
+    if (_NSGetExecutablePath(buffer.data(), &size) == 0) {
+        std::error_code error;
+        auto executable = std::filesystem::weakly_canonical(buffer.c_str(), error);
+        if (!error) executable_directory = executable.parent_path();
+    }
 #endif
     return RuntimePaths(std::move(executable_directory)).bundled_resources_directory(fallback);
 }

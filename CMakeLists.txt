@@ -69,6 +69,11 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/dependency_bootstrap_test.py
     )
     add_test(
+        NAME macos_packaging_regressions
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/macos_packaging_test.py
+    )
+    add_test(
         NAME asset_builder_regressions
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/asset_builder_test.py

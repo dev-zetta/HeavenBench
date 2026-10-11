@@ -1,0 +1,67 @@
+name: macOS Apple Silicon build and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64:
+    name: macOS ARM64 / LLVM 21 / MoltenVK
+    # This standard runner uses Apple Silicon; Intel runners have an -intel suffix.
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native build dependencies
+        run: |
+          test "$(uname -m)" = arm64
+          brew install cmake ninja pkgconf llvm@21 sdl2 glm vulkan-headers vulkan-loader molten-vk
+      - name: Record build environment
+        run: |
+          mkdir -p build/release/macos/logs
+          {
+            git rev-parse HEAD
+            sw_vers
+            uname -a
+            xcodebuild -version
+            "$(brew --prefix llvm@21)/bin/clang++" --version
+            cmake --version
+            brew list --versions
+          } > build/release/macos/build-environment.txt
+      - name: Build, test, package and verify Apple Silicon app
+        run: ./scripts/ci_macos.sh --jobs 2 --output-dir build/release/macos
+      - name: Upload ARM64 app bundle and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-macos-arm64
+          path: |
+            build/release/macos/HeavenBench-*-macos-arm64.zip
+            build/release/macos/HeavenBench-*-macos-arm64.zip.sha256
+            build/release/macos/build-environment.txt
+            build/release/macos/macos-package-verification.json
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload build and verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeavenBench-macos-arm64-logs
+          path: build/release/macos/logs/
+          if-no-files-found: ignore

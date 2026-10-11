@@ -8,6 +8,7 @@
 #   ./scripts/build.sh --debug          # Debug build
 #   ./scripts/build.sh --jobs 8         # override parallel job count
 #   ./scripts/build.sh --cpu-arch zen3   # optimize the whole build for AMD Zen 3
+#   ./scripts/build.sh --platform macos # Apple Silicon, LLVM 21 + MoltenVK
 #   ./scripts/build.sh --platform android --android-abi arm64-v8a
 #   ./scripts/build.sh --materials      # also recompile Filament materials
 set -euo pipefail
@@ -19,11 +20,14 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." &>/dev/null && pwd)"
 source "$SCRIPT_DIR/build_paths.sh"
 
 BUILD_TYPE="Release"
-JOBS="$(nproc 2>/dev/null || echo 4)"
+JOBS="$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
 CLEAN=0
 COMPILE_MATERIALS=0
 COMPILE_MATERIALS_ALL=0
 PLATFORM="linux"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    PLATFORM="macos"
+fi
 ANDROID_ABI="arm64-v8a"
 ANDROID_API="26"
 CPU_ARCH="portable"
@@ -100,8 +104,9 @@ Options:
   --clean           Wipe build directory before configuring
   --debug           Build with Debug configuration
   --release         Build with Release configuration (default)
-  --jobs N, -j N    Parallel job count (default: nproc)
-  --platform NAME   Target platform: linux, windows, or android (default: linux)
+  --jobs N, -j N    Parallel job count (default: detected logical CPU count)
+  --platform NAME   Target platform: linux, windows, macos, or android
+                    (default: macos on Darwin, linux elsewhere)
   --android-abi ABI Android ABI when --platform android (default: arm64-v8a)
   --android-api API Android API level when --platform android (default: 26)
   --cpu-arch ARCH  CPU architecture optimization: portable, native, or zen1
@@ -127,7 +132,12 @@ HEAVEN_C_COMPILER and HEAVEN_CXX_COMPILER customize clang mode only. All builds
 use Ninja and generated files live under <repository>/build by default.
 HEAVEN_BUILD_ROOT changes that root; HEAVEN_BUILD_DIR selects one exact renderer
 tree. Android builds require ANDROID_NDK_HOME, ANDROID_NDK_ROOT, or
-ANDROID_HOME/ANDROID_SDK_ROOT with an installed NDK.
+ANDROID_HOME/ANDROID_SDK_ROOT with an installed NDK. macOS builds require a
+native Apple Silicon host, Xcode command-line tools and Homebrew LLVM 21,
+SDL2, GLM, pkgconf, Vulkan headers/loader and MoltenVK. HEAVEN_LLVM_ROOT selects
+the LLVM installation; otherwise brew --prefix llvm@21 is used. Its libc++ and
+libunwind are required at runtime. HEAVEN_MACOS_DEPLOYMENT_TARGET defaults to
+14.0; macOS builds always target arm64 and preserve committed materials.
 EOF
             exit 0 ;;
         *)
@@ -145,9 +155,9 @@ if [[ ${#BUILD_TARGETS[@]} -eq 0 ]]; then
 fi
 
 case "$PLATFORM" in
-    linux|windows|android) ;;
+    linux|windows|macos|android) ;;
     *)
-        echo "Error: unsupported platform '$PLATFORM' (expected linux, windows, or android)" >&2
+        echo "Error: unsupported platform '$PLATFORM' (expected linux, windows, macos, or android)" >&2
         exit 1 ;;
 esac
 
@@ -168,6 +178,10 @@ esac
 
 if [[ "$COMPILER" == "aocc" && "$PLATFORM" != "linux" ]]; then
     echo "Error: AOCC is supported only for Linux builds" >&2
+    exit 1
+fi
+if [[ "$PLATFORM" == "macos" && "$CPU_ARCH" != "portable" ]]; then
+    echo "Error: macOS Apple Silicon builds require --cpu-arch portable" >&2
     exit 1
 fi
 
@@ -246,6 +260,62 @@ if [[ "$PLATFORM" == "linux" ]]; then
         -DCMAKE_CXX_FLAGS=-stdlib=libc++
         "-DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ -lc++abi"
     )
+elif [[ "$PLATFORM" == "macos" ]]; then
+    if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+        echo "Error: --platform macos requires a native Apple Silicon macOS host" >&2
+        exit 1
+    fi
+    if ! command -v xcrun >/dev/null 2>&1; then
+        echo "Error: Xcode command-line tools are required (xcrun not found)" >&2
+        exit 1
+    fi
+    MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+    LLVM_ROOT="${HEAVEN_LLVM_ROOT:-}"
+    if [[ -z "$LLVM_ROOT" ]]; then
+        if [[ -n "$CXX_COMPILER" ]]; then
+            if ! command -v "$CXX_COMPILER" >/dev/null 2>&1; then
+                echo "Error: C++ compiler '$CXX_COMPILER' not found" >&2
+                exit 1
+            fi
+            LLVM_ROOT="$(cd -- "$(dirname -- "$(command -v "$CXX_COMPILER")")/.." && pwd)"
+        elif command -v brew >/dev/null 2>&1; then
+            LLVM_ROOT="$(brew --prefix llvm@21)"
+        else
+            echo "Error: set HEAVEN_LLVM_ROOT or install Homebrew llvm@21" >&2
+            exit 1
+        fi
+    fi
+    C_COMPILER="${C_COMPILER:-$LLVM_ROOT/bin/clang}"
+    CXX_COMPILER="${CXX_COMPILER:-$LLVM_ROOT/bin/clang++}"
+    if ! command -v "$C_COMPILER" >/dev/null 2>&1 ||
+       ! command -v "$CXX_COMPILER" >/dev/null 2>&1 ||
+       [[ ! -f "$LLVM_ROOT/include/c++/v1/expected" ||
+          ! -f "$LLVM_ROOT/lib/c++/libc++.1.dylib" ||
+          ! -f "$LLVM_ROOT/lib/unwind/libunwind.1.dylib" ]]; then
+        echo "Error: a complete LLVM 21+ installation with libc++ and libunwind is required" >&2
+        echo "Install brew llvm@21 or set HEAVEN_LLVM_ROOT to its installation." >&2
+        exit 1
+    fi
+    C_COMPILER="$(command -v "$C_COMPILER")"
+    CXX_COMPILER="$(command -v "$CXX_COMPILER")"
+    MACOS_CXX_FLAGS="-stdlib=libc++ -nostdinc++ -isystem \"$LLVM_ROOT/include/c++/v1\" -D_LIBCPP_DISABLE_AVAILABILITY"
+    MACOS_LINK_FLAGS="-stdlib=libc++ -L\"$LLVM_ROOT/lib/c++\" -L\"$LLVM_ROOT/lib/unwind\" -lunwind -Wl,-rpath,\"$LLVM_ROOT/lib/c++\" -Wl,-rpath,\"$LLVM_ROOT/lib/unwind\""
+    CMAKE_CONFIGURE_ARGS+=(
+        -DCMAKE_C_COMPILER="$C_COMPILER"
+        -DCMAKE_CXX_COMPILER="$CXX_COMPILER"
+        -DCMAKE_OBJC_COMPILER="$C_COMPILER"
+        -DCMAKE_OBJCXX_COMPILER="$CXX_COMPILER"
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_SYSROOT="$MACOS_SDK"
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="${HEAVEN_MACOS_DEPLOYMENT_TARGET:-14.0}"
+        -DCMAKE_CXX_FLAGS="$MACOS_CXX_FLAGS"
+        -DCMAKE_OBJCXX_FLAGS="$MACOS_CXX_FLAGS"
+        -DCMAKE_EXE_LINKER_FLAGS="$MACOS_LINK_FLAGS"
+        -DCMAKE_SHARED_LINKER_FLAGS="$MACOS_LINK_FLAGS"
+    )
+    if command -v brew >/dev/null 2>&1; then
+        CMAKE_CONFIGURE_ARGS+=("-DCMAKE_PREFIX_PATH=$(brew --prefix)")
+    fi
 elif [[ "$PLATFORM" == "android" ]]; then
     NDK_ROOT="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
     if [[ -z "$NDK_ROOT" ]]; then

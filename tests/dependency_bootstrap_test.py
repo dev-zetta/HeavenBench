@@ -145,6 +145,27 @@ class DependencyBootstrapTest(unittest.TestCase):
         self.require_success(self.run_bootstrap(project))
         self.assertEqual(self.git(directory, "rev-parse", "HEAD^{tree}"), self.tree)
 
+    @unittest.skipUnless(os.name == "posix" and shutil.which("shasum"),
+                         "macOS-compatible shasum and POSIX links are required")
+    def test_bootstrap_without_gnu_sha256sum(self):
+        project = self.project()
+        binary = project / "portable-bin"
+        binary.mkdir()
+        for name in ("bash", "dirname", "git", "mktemp", "rm", "shasum"):
+            executable = shutil.which(name)
+            self.assertIsNotNone(executable, name)
+            (binary / name).symlink_to(executable)
+        environment = {**self.environment, "PATH": str(binary)}
+        self.require_success(self.run_bootstrap(project, environment))
+        directory = project / "lib/filament"
+        self.assertEqual(self.git(directory, "rev-parse", "HEAD^{tree}"), self.tree)
+        patch = project / "patches/filament/heavenbench.patch"
+        patch.write_bytes(self.patch + b"\nchanged\n")
+        result = self.run_bootstrap(project, environment)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SHA-256", result.stderr)
+        self.assertEqual(self.git(directory, "rev-parse", "HEAD^{tree}"), self.tree)
+
     def test_checksum_mismatch_preserves_checkout(self):
         project = self.project()
         directory = self.base_checkout(project)

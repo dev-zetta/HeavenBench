@@ -11,8 +11,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenProjectOptions.cmake)
 
-set(HEAVEN_TARGET_PLATFORM "auto" CACHE STRING "Target platform: auto, linux, windows, or android")
-set_property(CACHE HEAVEN_TARGET_PLATFORM PROPERTY STRINGS auto linux windows android)
+set(HEAVEN_TARGET_PLATFORM "auto" CACHE STRING "Target platform: auto, linux, windows, macos, or android")
+set_property(CACHE HEAVEN_TARGET_PLATFORM PROPERTY STRINGS auto linux windows macos android)
 string(TOLOWER "${HEAVEN_TARGET_PLATFORM}" HEAVEN_TARGET_PLATFORM_LOWER)
 if(HEAVEN_TARGET_PLATFORM_LOWER STREQUAL "auto")
     if(ANDROID)
@@ -21,6 +21,9 @@ if(HEAVEN_TARGET_PLATFORM_LOWER STREQUAL "auto")
     elseif(WIN32)
         set(HEAVEN_PLATFORM_WINDOWS ON)
         set(HEAVEN_TARGET_PLATFORM_LOWER windows)
+    elseif(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set(HEAVEN_PLATFORM_MACOS ON)
+        set(HEAVEN_TARGET_PLATFORM_LOWER macos)
     elseif(UNIX AND NOT APPLE)
         set(HEAVEN_PLATFORM_LINUX ON)
         set(HEAVEN_TARGET_PLATFORM_LOWER linux)
@@ -42,10 +45,53 @@ elseif(HEAVEN_TARGET_PLATFORM_LOWER STREQUAL "linux")
     if(NOT (UNIX AND NOT APPLE AND NOT ANDROID))
         message(FATAL_ERROR "HEAVEN_TARGET_PLATFORM=linux requires a Linux toolchain")
     endif()
+elseif(HEAVEN_TARGET_PLATFORM_LOWER STREQUAL "macos")
+    set(HEAVEN_PLATFORM_MACOS ON)
+    if(NOT (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
+        message(FATAL_ERROR "HEAVEN_TARGET_PLATFORM=macos requires a macOS toolchain")
+    endif()
 else()
     message(FATAL_ERROR "Unsupported HEAVEN_TARGET_PLATFORM='${HEAVEN_TARGET_PLATFORM}'")
 endif()
 message(STATUS "Heaven target platform: ${HEAVEN_TARGET_PLATFORM_LOWER}")
+
+if(HEAVEN_PLATFORM_MACOS)
+    if(NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        message(FATAL_ERROR "macOS builds require CMAKE_OSX_ARCHITECTURES=arm64 (Apple Silicon)")
+    endif()
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR
+       CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+        message(FATAL_ERROR "macOS builds require a deployment target of 14.0 or newer")
+    endif()
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21)
+        message(FATAL_ERROR "macOS builds require upstream LLVM Clang 21+ and its bundled libc++; use scripts/build.sh")
+    endif()
+    # Apple SDK libc++ can lag the C++23 API used by owned sources. Check a
+    # linked program, not only the language flag, before configuring vendors.
+    include(CheckCXXSourceCompiles)
+    set(HEAVEN_SAVED_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -std=c++23")
+    unset(HEAVEN_MACOS_CXX23_SUPPORTED CACHE)
+    check_cxx_source_compiles("
+        #include <expected>
+        #include <format>
+        #if !defined(_LIBCPP_VERSION) || _LIBCPP_VERSION < 210000
+        #error LLVM libc++ 21 or newer is required
+        #endif
+        int main() {
+            std::expected<int, int> value = 42;
+            return std::format(\"{}\", *value) != \"42\";
+        }" HEAVEN_MACOS_CXX23_SUPPORTED)
+    set(CMAKE_REQUIRED_FLAGS "${HEAVEN_SAVED_REQUIRED_FLAGS}")
+    if(NOT HEAVEN_MACOS_CXX23_SUPPORTED)
+        message(FATAL_ERROR "macOS C++23 libc++ compile/link check failed; use scripts/build.sh with Homebrew llvm@21")
+    endif()
+    enable_language(OBJC OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 23)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+    set(CMAKE_OBJCXX_EXTENSIONS OFF)
+endif()
 
 # Architecture-specific variants deliberately default to portable. Like a
 # distribution's optimized package, Zen-targeted binaries may execute instructions
@@ -123,10 +169,21 @@ if(NOT HEAVEN_PLATFORM_ANDROID)
     find_package(Vulkan REQUIRED)
     set(HEAVEN_VULKAN_LINK Vulkan::Headers)
 endif()
-# SDL2 for window + input. Linux uses the distro pkg-config dependency. Windows
-# and Android use the full vendored SDL2 project because pkg-config is not a
-# reliable cross-platform contract there.
-if(HEAVEN_PLATFORM_LINUX)
+# SDL2 for window + input. Use the native macOS SDL2 package for current Cocoa
+# and Apple Silicon support; Linux retains its distro pkg-config dependency.
+# Windows and Android build the full matching vendored SDL2 project.
+if(HEAVEN_PLATFORM_MACOS)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    set(HEAVEN_SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
+    foreach(include_dir IN LISTS SDL2_INCLUDE_DIRS)
+        if(EXISTS "${include_dir}/SDL.h")
+            get_filename_component(include_parent "${include_dir}" DIRECTORY)
+            list(APPEND HEAVEN_SDL_INCLUDE_DIRS "${include_parent}")
+        endif()
+    endforeach()
+    set(HEAVEN_SDL_LINK_LIBS PkgConfig::SDL2)
+elseif(HEAVEN_PLATFORM_LINUX)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SDL2 REQUIRED sdl2)
     set(HEAVEN_SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
@@ -182,15 +239,19 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenCpuDependencies.cmake)
 
 # ── Filament Rendering Engine ────────────────────────────────────
-# Vendored as a subtree under lib/filament. We enable both Vulkan
-# and OpenGL drivers — Filament picks Vulkan at runtime when
-# available, falls back to OpenGL otherwise.
+# Vendored as a subtree under lib/filament. macOS uses Vulkan via MoltenVK so
+# the committed Vulkan material packets stay unchanged. Other platforms retain
+# Vulkan with their existing OpenGL fallback.
 set(FILAMENT_SKIP_SAMPLES ON CACHE BOOL "" FORCE)
 set(FILAMENT_SKIP_SDL2 ON CACHE BOOL "" FORCE)
 set(FILAMENT_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(FILAMENT_SUPPORTS_VULKAN ON CACHE BOOL "" FORCE)
 set(FILAMENT_SUPPORTS_METAL OFF CACHE BOOL "" FORCE)
-set(FILAMENT_SUPPORTS_OPENGL ON CACHE BOOL "" FORCE)
+if(HEAVEN_PLATFORM_MACOS)
+    set(FILAMENT_SUPPORTS_OPENGL OFF CACHE BOOL "" FORCE)
+else()
+    set(FILAMENT_SUPPORTS_OPENGL ON CACHE BOOL "" FORCE)
+endif()
 if(HEAVEN_PLATFORM_ANDROID)
     # Filament's Android EGL subclass requires its common EGL implementation.
     # The plain NDK toolchain does not set Filament's EGL platform switch.
@@ -326,6 +387,10 @@ set(RHI_SOURCES
     # Filament-free into the headless heaven_benchmark_tests host target below.
     src/rhi/overlay/config_controller.cpp
 )
+
+if(HEAVEN_PLATFORM_MACOS)
+    list(APPEND RHI_SOURCES src/rhi/macos_surface.mm)
+endif()
 
 # Benchmark = pure CPU logic (frame stats, scoring, scene markers, the
 # run state machine). GLOB so new logic files (stats_collector,
@@ -601,6 +666,10 @@ if(HEAVEN_PLATFORM_LINUX)
     # explicit on our executables without changing the vendored assembly.
     foreach(render_target IN ITEMS heaven_benchmark heaven_benchmark_smoke)
         target_link_options(${render_target} PRIVATE "LINKER:-z,noexecstack")
+    endforeach()
+elseif(HEAVEN_PLATFORM_MACOS)
+    foreach(render_target IN ITEMS heaven_benchmark heaven_benchmark_smoke)
+        target_link_libraries(${render_target} PRIVATE "-framework Cocoa" "-framework QuartzCore")
     endforeach()
 endif()
 

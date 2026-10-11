@@ -72,8 +72,14 @@ fetch_filament() (
     fi
     # The patch is part of this repository's source archive. Never fetch an
     # unpublished fork commit or accept a patch changed without its audited pin.
-    printf '%s  %s\n' "$FILAMENT_PATCH_SHA256" "$FILAMENT_PATCH" |
-        sha256sum --check --status || {
+    local actual_patch_sha256
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_patch_sha256="$(sha256sum "$FILAMENT_PATCH")"
+    else
+        # macOS supplies shasum instead of the GNU coreutils executable.
+        actual_patch_sha256="$(shasum -a 256 "$FILAMENT_PATCH")"
+    fi
+    [[ "${actual_patch_sha256%% *}" == "$FILAMENT_PATCH_SHA256" ]] || {
             echo "Error: Filament patch is missing or its SHA-256 does not match" >&2
             exit 1
         }

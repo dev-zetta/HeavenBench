@@ -12,9 +12,8 @@
 
 // The LinuxHostInfoSource query bodies below are the only impure code in this
 // translation unit: they read the host OS. They are guarded for the Linux build
-// target (uname(2), sysconf, proc/cpuinfo); on any other platform the queries
-// return the undetermined sentinels so the pure formatter substitutes the
-// placeholder. The pure formatters above never touch these headers.
+// target (uname(2), sysconf, proc/cpuinfo) or macOS (uname(2), sysctl). Other
+// platforms return the undetermined sentinels for the pure formatter.
 #ifdef __linux__
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -23,6 +22,11 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/utsname.h>
+#include <array>
+#include <cstdint>
 #endif
 
 namespace heaven {
@@ -226,9 +230,57 @@ CpuRaw LinuxHostInfoSource::query_cpu() {
     return raw;
 }
 
-#else  // !defined(__linux__)
+#elif defined(__APPLE__)
 
-// Non-Linux build: the host queries are unavailable, so report the undetermined
+namespace {
+
+std::string macos_host_string(const char* name) {
+    std::array<char, kMaxFieldChars + 1> text{};
+    size_t size = text.size();
+    if (::sysctlbyname(name, text.data(), &size, nullptr, 0) != 0) return {};
+    text.back() = '\0';
+    return text.data();
+}
+
+} // namespace
+
+PlatformRaw LinuxHostInfoSource::query_platform() {
+    PlatformRaw raw;
+    struct utsname info{};
+    if (::uname(&info) == 0) {
+        raw.os_name = "macOS";
+        raw.kernel_version = info.release;
+        raw.machine_arch = info.machine;
+    }
+    const auto product_version = macos_host_string("kern.osproductversion");
+    if (!product_version.empty()) {
+        raw.os_name = "macOS " + product_version + " (Darwin)";
+    }
+    return raw;
+}
+
+CpuRaw LinuxHostInfoSource::query_cpu() {
+    CpuRaw raw;
+    raw.model_name = macos_host_string("machdep.cpu.brand_string");
+    int cores = 0;
+    size_t size = sizeof(cores);
+    if (::sysctlbyname("hw.logicalcpu", &cores, &size, nullptr, 0) == 0 && cores > 0) {
+        raw.logical_cores = cores;
+    }
+
+    // Apple Silicon may omit the clock sysctl. Leave it unavailable instead of
+    // presenting a guessed or nominal frequency as a measured CPU clock.
+    std::uint64_t frequency = 0;
+    size = sizeof(frequency);
+    if (::sysctlbyname("hw.cpufrequency", &frequency, &size, nullptr, 0) == 0 && frequency > 0) {
+        raw.clock_mhz = static_cast<double>(frequency) / 1'000'000.0;
+    }
+    return raw;
+}
+
+#else
+
+// Other platforms have no host queries here, so report the undetermined
 // sentinels and let the pure formatter substitute the placeholder. This keeps
 // the symbol defined for the linker on every target.
 PlatformRaw LinuxHostInfoSource::query_platform() {
@@ -239,6 +291,6 @@ CpuRaw LinuxHostInfoSource::query_cpu() {
     return CpuRaw{};
 }
 
-#endif  // defined(__linux__)
+#endif
 
 } // namespace heaven
