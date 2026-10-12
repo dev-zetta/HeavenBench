@@ -15,7 +15,7 @@ Start with [Getting started](GETTING_STARTED.md) for asset preparation, platform
 ## Building and developing
 
 - [Building HeavenBench](BUILDING.md): release helpers, Linux development, CPU variants, AOCC, Windows, macOS, Android and material compilation.
-- [Apple Silicon builds](MACOS.md): native M1+ workflow, app bundles, launch and validation scope.
+- [HeavenBench on Apple Silicon](MACOS.md): macOS 15+ download, native M1+ workflow, app bundles, launch and validation scope.
 - [Shared release builds](DOCKER_BUILDS.md): Docker pipelines, caches, provenance and validation scope.
 - [Development and measurement](DEVELOPMENT.md): source layout, score/report internals, automated checks and supporting extraction tools.
 - [Asset tools](../tools/README.md): installer acquisition, extraction, packing and offline preparation.

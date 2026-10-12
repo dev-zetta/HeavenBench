@@ -1,5 +1,13 @@
 # First-release readiness
 
+## October 12 macOS release addition
+
+The existing [HeavenBench 1.0.0 release](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0) now includes a native Apple Silicon app requiring macOS 15.0 or newer. Its matching source is commit [`6e959ae59338258743b8226776d8a2b265fe20bc`](https://github.com/dev-zetta/HeavenBench/commit/6e959ae59338258743b8226776d8a2b265fe20bc), supplied separately as `HeavenBench-1.0.0-macos-source.tar.gz` with macOS provenance, a release manifest and `SHA256SUMS-macos`. The original version tag and earlier platform assets retain their October 11 identities.
+
+All four workflows pass on that exact source: Linux 38186021734 (portable, Zen 1 and Zen 5), Windows 38186021695, macOS 38186021583 and Android 38186021573. macOS passes seven renderer host suites and eleven extraction/tool suites; the separate graphical entry is explicitly skipped without GPU opt-in. Native packaging verifies code signatures, bundled SDL2/SDL3 initialization and relocated CLI startup. An independent downloaded-artifact audit verifies all twelve ARM64 Mach-O binaries, library closure, 159 payload hashes, 126 notice hashes and minimum-OS metadata. The app ZIP SHA-256 is `2c24df6b28ddbab24fc9836077d9078affee9bcf4a972602313c719c59f5e117`. Evidence is retained under `build/releases/20261012-macos/` and in the published macOS provenance bundle.
+
+The macOS app is ad hoc signed, without Developer ID signing or notarization. Physical Mac rendering, complete tours, Retina resizing and performance remain unverified; publication does not close those gates. [macOS setup](MACOS.md) records launch instructions and the exact acceptance scope. Benchmark version 1.0.0, result schema 2 and score version 3 remain unchanged.
+
 ## October 11 published 1.0.0
 
 [HeavenBench 1.0.0 is published](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0) from release code commit [`5fae1c5d2cc80b63e2a36f809b8cd1014d21bbff`](https://github.com/dev-zetta/HeavenBench/commit/5fae1c5d2cc80b63e2a36f809b8cd1014d21bbff). All five package jobs pass: Linux portable, Zen 1 and Zen 5 AppImages, Windows x64 ZIP and Android ARM64 APK. Independently downloaded artifacts pass checksum, package-content and matching-source/provenance audits. Release files include package checksums and build-source/provenance records. HeavenBench is **1.0.0**, extraction tools **0.3.1**, result schema **2** and score version **3**.

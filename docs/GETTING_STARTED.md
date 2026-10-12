@@ -1,6 +1,6 @@
 # Getting started
 
-HeavenBench runs a CPU workload and an authored camera tour through the original Heaven scene. It also provides interactive exploration, configurable rendering and saved result reports. [Download HeavenBench 1.0.0 for Linux, Windows or Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0); the Android APK is development-signed. [Release readiness](RELEASE_READINESS.md) records verified package checks and remaining rendering/device limitations.
+HeavenBench runs a CPU workload and an authored camera tour through the original Heaven scene. It also provides interactive exploration, configurable rendering and saved result reports. [Download HeavenBench 1.0.0 for Linux, Windows, macOS or Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0); the Android APK is development-signed. The macOS package requires Apple Silicon and macOS 15+, is ad hoc signed without notarization, and awaits physical rendering acceptance. [Release readiness](RELEASE_READINESS.md) records verified package checks and remaining rendering/device limitations.
 
 ## Prepare the scene assets
 
@@ -10,7 +10,7 @@ Original Heaven assets are external to the repository and application packages. 
 ./scripts/build_assets.sh --jobs 6
 ```
 
-The builder creates `assets/assets.zip`, building the extraction and CPU-only packing tools automatically. It reuses an existing official Heaven 4.0 installer when available; otherwise it downloads the installer, verifies its pinned SHA-256 and extracts the archives without running the installer. Automatic preparation requires Python 3.10+, CMake 3.25+, Ninja, a C++23-capable Clang compiler with libc++, GLM and zlib development headers, and Git. The [asset tools guide](../tools/README.md) covers prerequisites, offline operation and native Windows commands. The resulting pack works on Linux, Windows and Android.
+The builder creates `assets/assets.zip`, building the extraction and CPU-only packing tools automatically. It reuses an existing official Heaven 4.0 installer when available; otherwise it downloads the installer, verifies its pinned SHA-256 and extracts the archives without running the installer. Automatic preparation requires Python 3.10+, CMake 3.25+, Ninja, a C++23-capable Clang compiler with libc++, GLM and zlib development headers, and Git. The [asset tools guide](../tools/README.md) covers prerequisites, offline operation and native Windows commands. The resulting pack is shared across Linux, Windows, macOS and Android; prepare it on a supported asset-tool host and transfer it to the target device.
 
 Installer lookup checks the current directory, repository root and `data/`. Select a local copy explicitly to prevent downloading:
 
@@ -28,6 +28,7 @@ The normal asset location is an `assets/` directory containing compatible ZIP pa
 | --- | --- |
 | Linux | Place `assets/` or `assets.zip` beside the AppImage, then run it. An explicit `--data /path/to/assets` also works. |
 | Windows | Extract the ZIP, put `assets.zip` in the `assets/` directory beside `Launch-HeavenBench.cmd`, then use that launcher. |
+| macOS | On an Apple Silicon Mac with macOS 15+, extract the ZIP, place `assets.zip` beside `HeavenBench.app`, then open the app. See [macOS launch instructions](MACOS.md#run-the-app) for the signing prompt. |
 | Android | Install the APK, import `assets.zip` through the file picker, then choose **Run benchmark** or **Explore**. |
 
 On Linux systems without FUSE, launch the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1 ./HeavenBench-*.AppImage`. Linux packages use host graphics drivers and the ALSA audio library; see [platform package requirements](BUILDING.md#platform-packages) if startup fails.
@@ -74,6 +75,7 @@ Completed runs automatically save matched JSON and self-contained HTML reports u
 | --- | --- |
 | Linux AppImage | `${XDG_DATA_HOME:-$HOME/.local/share}/HeavenBench` |
 | Windows launcher | `%LOCALAPPDATA%\HeavenBench` |
+| macOS app | `~/Library/Application Support/HeavenBench` |
 | Android | The app-specific files directory shown by the launcher, usually `/sdcard/Android/data/app.zetta.heavenbench/files/`. |
 
 Desktop launchers accept `HEAVEN_USER_DIR` to override the user directory. An unpackaged development binary without that override saves reports beside its executable. Configuration is stored as `config.json`; packages accept `--config FILE` and ordinary renderer flags. `HEAVEN_DATA` selects assets in the desktop launchers, and saved configuration can retain its own data path.

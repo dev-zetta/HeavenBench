@@ -1,6 +1,10 @@
-# Apple Silicon builds
+# HeavenBench on Apple Silicon
 
-The [macOS workflow](../.github/workflows/macos.yml) builds a native ARM64 candidate for Apple Silicon Macs (M1 and newer). The renderer targets macOS 14 or newer; the package inspects all bundled libraries and declares their highest required macOS version in its README and app metadata. It runs on pushes, pull requests and manual dispatch. Download the `HeavenBench-macos-arm64` artifact from a successful run; it contains the app ZIP, SHA-256 checksum, build environment and package verification report. macOS packages are separate from the published Linux, Windows and Android 1.0.0 release assets.
+[Download HeavenBench 1.0.0 for macOS](https://github.com/dev-zetta/HeavenBench/releases/download/v1.0.0/HeavenBench-1.0.0-macos-arm64.zip). This native ARM64 app requires **Apple Silicon (M1 or newer) and macOS 15.0 or newer**. The release includes its ZIP checksum, matching macOS source archive, verification records and build provenance. Original Heaven assets are supplied separately.
+
+The macOS package was added to the existing 1.0.0 release from source commit [`6e959ae`](https://github.com/dev-zetta/HeavenBench/commit/6e959ae59338258743b8226776d8a2b265fe20bc). Use `HeavenBench-1.0.0-macos-source.tar.gz` for its matching source and `SHA256SUMS-macos` to verify the additional files. The original release tag and earlier platform assets retain their original source identity.
+
+The [macOS workflow](../.github/workflows/macos.yml) runs on pushes, pull requests and manual dispatch. Its `HeavenBench-macos-arm64` artifact contains the app ZIP, SHA-256 checksum, build environment and package verification report. The renderer's development deployment target is macOS 14; packaging inspects all bundled libraries and declares their highest minimum OS version, which is macOS 15.0 for this release.
 
 ## Build locally
 
@@ -39,6 +43,6 @@ The bundle is ad hoc signed for local integrity checks. It is not Developer ID s
 
 ## Validation scope
 
-CI checks ARM64 architecture, host behavior, dependent-library relocation, bundled licenses, code signatures, checksums, headless SDL initialization and CLI execution after moving the app to a path containing spaces. Runtime-loaded SDL3 is included when Homebrew supplies the SDL2 compatibility layer; the probe rejects loading an SDL library from outside the bundle. Its report records the checks and build environment. A successful host build does not establish full-scene rendering, performance, Retina resizing or interactive acceptance on a physical Mac. Those checks are required before treating this candidate as a qualified macOS release.
+CI checks ARM64 architecture, host behavior, dependent-library relocation, bundled licenses, code signatures, checksums, headless SDL initialization and CLI execution after moving the app to a path containing spaces. Runtime-loaded SDL3 is included when Homebrew supplies the SDL2 compatibility layer; the probe rejects loading an SDL library from outside the bundle. Its report records the checks and build environment. The downloaded release also passes an independent package inventory, checksum and Mach-O dependency audit. Full-scene rendering, performance, Retina resizing and interactive acceptance on a physical Mac remain unverified for this release.
 
 The runner label follows [GitHub's hosted runner documentation](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The workflow explicitly verifies `uname -m` so an unexpected runner change fails before compilation.

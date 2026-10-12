@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 macOS package — 2026-10-12
 
-Add a native Apple Silicon (M1+) macOS build workflow, Vulkan/MoltenVK window support, LLVM 21 build helpers and app packaging with bundled runtime libraries, notices, checksums and relocation checks. macOS remains a CI candidate pending physical rendering and distribution-signing acceptance.
+Publish a native Apple Silicon (M1+) macOS app on the existing 1.0.0 release, requiring macOS 15+. Add Vulkan/MoltenVK window support, LLVM 21 build helpers and app packaging with bundled runtime libraries, notices, checksums and relocation checks. The package is ad hoc signed without Developer ID signing or notarization; full rendering and interactive acceptance on a physical Mac remain unverified.
+
+All four platform workflows pass for macOS source commit `6e959ae59338258743b8226776d8a2b265fe20bc`. Upgrade workflow actions to Node.js 24 and correct portable Linux analysis and Windows packaging regressions exposed during the macOS port. The macOS source archive and provenance accompany the added package; the original 1.0.0 tag and earlier Linux, Windows and Android assets retain their original identities.
 
 ## 1.0.0 — 2026-10-10
 
