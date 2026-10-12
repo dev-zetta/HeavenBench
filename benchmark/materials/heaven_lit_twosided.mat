@@ -22,6 +22,7 @@ material {
     parameters : [
         { type : sampler2d, name : baseColorMap },
         { type : bool,      name : hasBaseColor },
+        { type : int,       name : legacyColorFlags },
         { type : sampler2d, name : normalMap },
         { type : bool,      name : hasNormal },
         { type : float,     name : normalStrength },
@@ -94,6 +95,7 @@ vertex {
 }
 
 fragment {
+    #include "includes/surface_color.glsl"
     void material(inout MaterialInputs material) {
         // Apply Heaven's per-material UV transform — see heaven_lit.mat.
         float2 uv = getUV0() * materialParams.baseTransform.xy
@@ -164,17 +166,10 @@ fragment {
 
         material.baseColor = baseSample;
 
-        if (materialParams.hasDetail) {
-            if (materialParams.detailMode <= 2) {
-                material.baseColor.rgb = clamp(
-                        material.baseColor.rgb
-                        + (detailSample.rgb * 2.0 - 1.0) * detailBlend.x,
-                        0.0, 1.0);
-            } else {
-                material.baseColor.rgb *= clamp(
-                        detailSample.rgb + 1.0 - detailBlend.x, 0.0, 1.0);
-            }
-        }
+        material.baseColor.rgb = composeSurfaceColor(
+                baseSample.rgb, detailSample.rgb, detailBlend.x,
+                materialParams.hasDetail, materialParams.detailMode,
+                materialParams.legacyColorFlags);
 
         // Foliage leaf-detail darkening derived from the normal map (computed
         // before prepareMaterial above; 1.0 = no change when there's no normal).

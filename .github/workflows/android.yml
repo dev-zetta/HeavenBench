@@ -2,6 +2,8 @@ name: Android APK
 
 on:
   push:
+    # Release tags reuse the exact commit already built on the branch.
+    tags-ignore: ['v*']
   pull_request:
   workflow_dispatch:
 

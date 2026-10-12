@@ -465,6 +465,7 @@ struct RendererFeatureStats {
     int sun_shadow_map_size = 0;
     int point_shadow_map_size = 0;
     uint64_t srgb_textures = 0;
+    uint64_t legacy_color_textures = 0;
     uint64_t scalar_textures = 0;
     uint64_t normal_textures = 0;
     uint64_t hdr_textures = 0;

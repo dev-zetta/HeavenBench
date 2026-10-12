@@ -1,0 +1,152 @@
+[
+  {
+    "frames": 120,
+    "count": 2,
+    "fps": 60,
+    "args": [
+      "--camera-fov",
+      "60",
+      "--no-dynamic-resolution"
+    ],
+    "settings": {
+      "quality_preset": "balanced",
+      "texture_quality": "original",
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    },
+    "expected_metadata": {
+      "time_of_day": 0,
+      "renderer_features.dynamic_resolution": false
+    },
+    "name": "street-midnight",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "expected_visible_behavior": "Warm lamp illumination reveals nearby masonry and paving with dark distant scenery and no broad background washout; local haze and closest-source highlights may brighten. Daytime lamps remain off."
+  },
+  {
+    "frames": 120,
+    "count": 2,
+    "fps": 60,
+    "args": [
+      "--camera-fov",
+      "60",
+      "--no-dynamic-resolution"
+    ],
+    "settings": {
+      "quality_preset": "balanced",
+      "texture_quality": "original",
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    },
+    "expected_metadata": {
+      "time_of_day": 0,
+      "renderer_features.dynamic_resolution": false
+    },
+    "name": "village-midnight",
+    "pose": [
+      -2.873719,
+      -42.924889,
+      39.4375,
+      83.867966,
+      -14.378684
+    ],
+    "expected_visible_behavior": "Warm lamp illumination reveals nearby masonry and paving with dark distant scenery and no broad background washout; local haze and closest-source highlights may brighten. Daytime lamps remain off."
+  },
+  {
+    "frames": 120,
+    "count": 2,
+    "fps": 60,
+    "args": [
+      "--camera-fov",
+      "60",
+      "--no-dynamic-resolution"
+    ],
+    "settings": {
+      "quality_preset": "balanced",
+      "texture_quality": "original",
+      "time_of_day": 12,
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    },
+    "expected_metadata": {
+      "time_of_day": 12,
+      "renderer_features.dynamic_resolution": false
+    },
+    "name": "street-day",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "expected_visible_behavior": "Warm lamp illumination reveals nearby masonry and paving with dark distant scenery and no broad background washout; local haze and closest-source highlights may brighten. Daytime lamps remain off."
+  },
+  {
+    "frames": 120,
+    "count": 2,
+    "fps": 60,
+    "args": [
+      "--camera-fov",
+      "60",
+      "--no-dynamic-resolution"
+    ],
+    "settings": {
+      "quality_preset": "visual-ultra",
+      "texture_quality": "4k",
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    },
+    "expected_metadata": {
+      "time_of_day": 0,
+      "renderer_features.dynamic_resolution": false
+    },
+    "name": "street-midnight-ultra4k",
+    "pose": [
+      10,
+      3,
+      29.5,
+      140.85601,
+      -11.22174
+    ],
+    "expected_visible_behavior": "Warm lamp illumination reveals nearby masonry and paving with dark distant scenery and no broad background washout; local haze and closest-source highlights may brighten. Daytime lamps remain off."
+  },
+  {
+    "frames": 120,
+    "count": 2,
+    "fps": 60,
+    "args": [
+      "--camera-fov",
+      "60",
+      "--no-dynamic-resolution"
+    ],
+    "settings": {
+      "quality_preset": "visual-ultra",
+      "texture_quality": "4k",
+      "time_of_day": 0,
+      "weather.rain_intensity": 0.0,
+      "features.depth_of_field": false
+    },
+    "expected_metadata": {
+      "time_of_day": 0,
+      "renderer_features.dynamic_resolution": false
+    },
+    "name": "village-midnight-ultra4k",
+    "pose": [
+      -2.873719,
+      -42.924889,
+      39.4375,
+      83.867966,
+      -14.378684
+    ],
+    "expected_visible_behavior": "Warm lamp illumination reveals nearby masonry and paving with dark distant scenery and no broad background washout; local haze and closest-source highlights may brighten. Daytime lamps remain off."
+  }
+]

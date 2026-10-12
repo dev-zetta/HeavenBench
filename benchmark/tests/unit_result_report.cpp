@@ -106,6 +106,7 @@ heaven::RunResult sample_result() {
         heaven::TextureQuality::High2K;
     r.renderer_features.hires_textures = 211;
     r.renderer_features.original_textures = 32;
+    r.renderer_features.legacy_color_textures = 17;
     r.renderer_features.texture_fallbacks = 3;
     r.renderer_features.texture_missing_variant_fallbacks = 1;
     r.renderer_features.texture_unsupported_format_fallbacks = 1;
@@ -221,6 +222,7 @@ bool unit_result_report() {
                    textures.at("quality_active") == "2k" &&
                    textures.at("hires") == 211 &&
                    textures.at("original") == 32 &&
+                   textures.at("legacy_color") == 17 &&
                    textures.at("fallbacks") == 3 &&
                    textures.at("missing_variant_fallbacks") == 1 &&
                    textures.at("unsupported_format_fallbacks") == 1 &&
@@ -228,6 +230,8 @@ bool unit_result_report() {
                    textures.at("selected_mip_bytes") == 987654321 &&
                    textures.at("effective_max_dimension") == 2048,
                "effective texture-tier counters are incomplete") && ok;
+    ok = check(document.html.find("legacy gamma-2 color 17") != std::string::npos,
+               "HTML omits the distinct legacy color count") && ok;
     ok = check(root.find("frame_intervals") == root.end(),
                "raw frame samples unexpectedly appear in the report") && ok;
     ok = check(document.html.find("GPU &lt;fast&gt; &amp; &quot;bright&quot;") !=

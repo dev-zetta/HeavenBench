@@ -14,6 +14,8 @@ Linux and Android use the same Docker entry point locally and in GitHub Actions.
 pwsh -File scripts/ci_windows.ps1 -Jobs 6
 ```
 
+Package names and application metadata derive from the benchmark version in `benchmark/CMakeLists.txt`, currently **1.0.1**. Android also uses versionCode **3** for upgrade ordering; the extraction tools retain their independent version.
+
 Docker packages appear under `build/release/linux-<arch>/` or `build/release/android-<abi>/`, together with checksums, logs, exact build sources and package-version provenance. Linux portable builds run extraction/asset tests, renderer host tests, static analysis and AppImage relocation checks in a separate minimal runtime image. Android builds validate native libraries, run lint and verify APK signing/alignment. See [Docker builds](DOCKER_BUILDS.md) for caches, clean builds, outputs and validation scope.
 
 ## Native Linux development
@@ -98,7 +100,7 @@ Use `./scripts/build.sh --materials-all` only after a deliberate Filament/materi
 
 Each workflow builds on pushes and pull requests and supports manual dispatch. The packages retain third-party notices and exclude original Heaven data. Workflow artifacts are release candidates; creating a public release or signing an Android production APK remains a separate step.
 
-For macOS prerequisites, local commands, app launch and validation limits, see [HeavenBench on Apple Silicon](MACOS.md). The workflow uses the explicit `macos-15` ARM64 runner and checks its architecture before building. The renderer targets macOS 14 or newer; the package declares the highest minimum required by its bundled libraries. The published 1.0.0 app requires macOS 15.0 or newer. Intel Macs are outside this build target.
+For macOS prerequisites, local commands, app launch and validation limits, see [HeavenBench on Apple Silicon](MACOS.md). The workflow uses the explicit `macos-15` ARM64 runner and checks its architecture before building. The renderer targets macOS 14 or newer; the package declares the highest minimum required by its bundled libraries. The published 1.0.0 app requires macOS 15.0 or newer; check each package's verification record for its declared minimum. Intel Macs are outside this build target.
 
 Linux packaging requires `curl`, `file`, `patchelf`, `desktop-file-validate` (`desktop-file-utils` on Ubuntu), and Python 3 in addition to the renderer prerequisites. The helper downloads checksum-pinned AppImage tools and works without FUSE. Use `--skip-build --build-dir DIR` to package a previously built Release tree; pass its matching `--cpu-arch` for an optimized variant. CI builds on Ubuntu 24.04, setting a glibc 2.39 baseline; packaging on a newer distribution can require newer glibc. Vulkan/OpenGL loaders, graphics drivers, and the ALSA audio library (`libasound.so.2`, provided by `libasound2t64` on Ubuntu 24.04) come from the user's desktop system. ALSA stays external so its configuration and sound-device plugins match the host. Zen variants require the corresponding CPU instruction set.
 

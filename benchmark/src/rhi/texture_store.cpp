@@ -91,6 +91,7 @@ void TextureStore::record_external_original_texture(
         bool complete_mip_chain) noexcept {
     switch (semantic) {
         case TextureSemantic::ColorSRGB: ++stats_.srgb; break;
+        case TextureSemantic::ColorLegacyGamma2: ++stats_.legacy_color; break;
         case TextureSemantic::ScalarLinear: ++stats_.scalar; break;
         case TextureSemantic::NormalLinear: ++stats_.normal; break;
         case TextureSemantic::HDRLinear: ++stats_.hdr; break;
@@ -110,6 +111,7 @@ void TextureStore::record_external_original_texture(
 
 uint64_t TextureStore::load(
     const std::string& path, TextureSemantic semantic) {
+    // Legacy color retains encoded values for composition and shader decoding.
     const bool srgb = semantic == TextureSemantic::ColorSRGB;
     std::string selected_path = path;
     uint32_t starting_mip = 0;
@@ -367,6 +369,7 @@ uint64_t TextureStore::load(
     texture_cache_[cache_key] = handle;
     switch (semantic) {
         case TextureSemantic::ColorSRGB: ++stats_.srgb; break;
+        case TextureSemantic::ColorLegacyGamma2: ++stats_.legacy_color; break;
         case TextureSemantic::ScalarLinear: ++stats_.scalar; break;
         case TextureSemantic::NormalLinear: ++stats_.normal; break;
         case TextureSemantic::HDRLinear: ++stats_.hdr; break;

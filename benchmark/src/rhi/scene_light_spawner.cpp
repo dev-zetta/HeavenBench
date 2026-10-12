@@ -7,6 +7,7 @@
  */
 #include "rhi/scene_light_spawner.h"
 #include "rhi/filament_util.h"   // EmissionLightTuning, classify_emission_light
+#include "render_tuning.h"
 
 #include <filament/Engine.h>
 #include <filament/Scene.h>
@@ -174,6 +175,12 @@ void SceneLightSpawner::spawn_emission(const BackendCore& core,
 
             // Colour / intensity / falloff from the surface name.
             EmissionLightTuning t = classify_emission_light(sn);
+            const bool night_only = is_night_luminaire(sn);
+            if (night_only) {
+                const auto color = render_tuning::lighting.enclosed_lamp_color;
+                t.color = {color.x, color.y, color.z};
+                t.intensity *= render_tuning::lighting.enclosed_lamp_power_scale;
+            }
 
             auto light = utils::EntityManager::get().create();
             filament::LightManager::Builder(
@@ -192,7 +199,6 @@ void SceneLightSpawner::spawn_emission(const BackendCore& core,
                 (contains("lamp") || contains("lantern"));
             const bool visible_bulb = is_luminaire &&
                 (contains("lamp") || contains("lantern") || anchored_flame);
-            const bool night_only = is_night_luminaire(sn);
             const auto light_instance = engine_->getLightManager().getInstance(light);
             const float nominal = engine_->getLightManager().getIntensity(light_instance);
             emission_lights_.push_back({light, local_pos, idx,
@@ -224,14 +230,23 @@ void SceneLightSpawner::spawn_authored(const BackendCore& core, bool scene_built
     authored_lights_.reserve(pending_scene_lights_.size());
 
     for (const auto& sl : pending_scene_lights_) {
-        // Brightness in lumens. Heaven authored multipliers in the
-        // 30–100 range; we use 4000 lumens as the base (~ a real sodium
-        // street lamp) and let the multiplier scale that. The
-        // emission_lights_ heuristic next door uses a similar scale so
-        // the two systems read as one consistent night illumination.
+        // Calibrated lumen baseline, not an original photometric unit: the
+        // actual street source authors multiplier 2, giving 8000 lumens before
+        // the enclosed-lamp gain. Unrelated accent/fire lights keep this base.
         float intensity = std::max(1000.0f, sl.multiplier * 4000.0f);
         const glm::vec3 position = floating_light_position(
             sl.world_pos, sl.floating_group, floating_offsets_);
+
+        // Only a unique actual lamp enclosure gives an authored source the
+        // shared power calibration and operating schedule.
+        const std::array origins{position};
+        std::size_t matches = 0;
+        for (const auto& region : night_luminaire_regions_) {
+            if (luminaire_emitter_anchor(region.bounds_min, region.bounds_max,
+                                         region.transform, origins)) ++matches;
+        }
+        const bool night_only = matches == 1;
+        if (night_only) intensity *= render_tuning::lighting.enclosed_lamp_power_scale;
 
         auto entity = utils::EntityManager::get().create();
 
@@ -269,18 +284,10 @@ void SceneLightSpawner::spawn_authored(const BackendCore& core, bool scene_built
                 .build(*engine_, entity);
         }
         scene_->addEntity(entity);
-        // Only a unique actual lamp enclosure gives an authored spot the
-        // lamp schedule. Unrelated accent/fire lights keep their own power.
-        const std::array origins{position};
-        std::size_t matches = 0;
-        for (const auto& region : night_luminaire_regions_) {
-            if (luminaire_emitter_anchor(region.bounds_min, region.bounds_max,
-                                         region.transform, origins)) ++matches;
-        }
         const auto light_instance = engine_->getLightManager().getInstance(entity);
         const float nominal = engine_->getLightManager().getIntensity(light_instance);
         authored_lights_.push_back({entity, sl.world_pos, sl.floating_group,
-                                    sl.shadow_eligible, matches == 1, nominal});
+                                    sl.shadow_eligible, night_only, nominal});
     }
     std::printf("  Authored lights: %zu created (%zu attached to floating groups)\n",
                 authored_lights_.size(),
@@ -410,6 +417,7 @@ void SceneLightSpawner::rebuild_scene_light_entities(const BackendCore& core) {
         info.instance_index = el.instance_index;
         info.authored       = false;
         info.flare_source   = el.flare_source;
+        info.local_volume_source = el.night_only && el.flare_source;
         info.shadow_eligible = el.shadow_eligible;
         info.nominal_intensity = el.nominal_intensity;
         info.entity         = el.entity;

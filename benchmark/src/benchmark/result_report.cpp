@@ -409,6 +409,7 @@ Json report_json(const RunResult& result, const BenchConfig& config,
                 {"quality_active", texture_quality_id(
                     result.renderer_features.texture_quality_active)},
                 {"srgb", result.renderer_features.srgb_textures},
+                {"legacy_color", result.renderer_features.legacy_color_textures},
                 {"scalar_linear", result.renderer_features.scalar_textures},
                 {"normal_linear", result.renderer_features.normal_textures},
                 {"hdr_linear", result.renderer_features.hdr_textures},
@@ -694,6 +695,8 @@ footer { margin:42px 10px 10px; text-align:center; }
         " px");
     append_detail_row(out, "Texture semantics",
         "sRGB " + std::to_string(textures.at("srgb").get<uint64_t>()) +
+        "; legacy gamma-2 color " +
+        std::to_string(textures.at("legacy_color").get<uint64_t>()) +
         "; scalar " +
         std::to_string(textures.at("scalar_linear").get<uint64_t>()) +
         "; normal " +

@@ -29,8 +29,17 @@ TextureSemantic texture_semantic_for_binding(
     if (suffix == "_n" || suffix == "_dn") {
         return TextureSemantic::NormalLinear;
     }
-    if (auto_discovered &&
-        (suffix == "_d" || suffix == "_dd" || suffix == "_e")) {
+    if (authored_format == "signed") {
+        return TextureSemantic::ScalarLinear;
+    }
+    // Authored base/detail colors are composed in their encoded domain before
+    // the original mesh shader's gamma-2 conversion. Hardware sRGB decoding
+    // before that composition would move the overlay's neutral 0.5 value.
+    if (suffix == "_d" || suffix == "_dd") {
+        return auto_discovered ? TextureSemantic::ColorSRGB
+                               : TextureSemantic::ColorLegacyGamma2;
+    }
+    if (auto_discovered && suffix == "_e") {
         return TextureSemantic::ColorSRGB;
     }
     return TextureSemantic::ScalarLinear;
@@ -651,8 +660,15 @@ bool RhiMaterialDatabase::try_load(GpuMaterial& mat, const MaterialDef& def,
                     ? std::string_view{"repeat"}
                     : std::string_view{wrap->second});
         }
-        if (suffix == "_d")  { mat.diffuse = h; diffuse_path = tex_path; }
-        if (suffix == "_dd") mat.detail_diffuse = h;
+        if (suffix == "_d") {
+            mat.diffuse = h;
+            mat.diffuse_semantic = semantic;
+            diffuse_path = tex_path;
+        }
+        if (suffix == "_dd") {
+            mat.detail_diffuse = h;
+            mat.detail_diffuse_semantic = semantic;
+        }
         if (suffix == "_dn") mat.detail_normal = h;
         if (suffix == "_ds") mat.detail_specular = h;
         if (suffix == "_n")  mat.normal = h;

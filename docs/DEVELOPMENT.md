@@ -36,13 +36,13 @@ Each run first measures a deterministic, fixed-step CPU workload over the real s
 Every successfully completed run is saved automatically under `results/` in writable user storage (beside the executable for unpackaged development without `HEAVEN_USER_DIR`) as a matched pair:
 
 ```text
-results/HeavenBench_1.0.0_YYYYMMDD_HHMMSS_mmm.json
-results/HeavenBench_1.0.0_YYYYMMDD_HHMMSS_mmm.html
+results/HeavenBench_1.0.1_YYYYMMDD_HHMMSS_mmm.json
+results/HeavenBench_1.0.1_YYYYMMDD_HHMMSS_mmm.html
 ```
 
-The self-contained HTML report follows the original Heaven benchmark's dark/orange result layout and includes the overall, CPU, and GPU breakdown, system information, settings, and the full effective configuration. The application title and report heading identify both the benchmark version and selected CPU build architecture, for example `HeavenBench 1.0.0 [zen4]`. The machine-readable JSON uses schema version 2 with top-level `application`, `run`, `scores`, `results`, `cpu`, `gpu`, `system`, `settings`, and `configuration` objects; `application.version` and `application.build_architecture` carry the same build identity. It stores aggregate measurements and timing distributions, not raw per-frame sample arrays. A cancelled or refused run does not create a report. If a report cannot be saved, the benchmark logs the error and keeps the completed result available in the application.
+The self-contained HTML report follows the original Heaven benchmark's dark/orange result layout and includes the overall, CPU, and GPU breakdown, system information, settings, and the full effective configuration. The application title and report heading identify both the benchmark version and selected CPU build architecture, for example `HeavenBench 1.0.1 [zen4]`. The machine-readable JSON uses schema version 2 with top-level `application`, `run`, `scores`, `results`, `cpu`, `gpu`, `system`, `settings`, and `configuration` objects; `application.version` and `application.build_architecture` carry the same build identity. It stores aggregate measurements and timing distributions, not raw per-frame sample arrays. A cancelled or refused run does not create a report. If a report cannot be saved, the benchmark logs the error and keeps the completed result available in the application.
 
-Reports identify result schema 2 and score version 3 independently of application version 1.0.0. Compare fixed workloads with matching effective settings and build identity. Diagnostic microprofiler tours retain frame statistics but do not receive scores. For report locations and user-facing behavior, see [Getting started](GETTING_STARTED.md#reports-and-saved-files).
+Reports identify result schema 2 and score version 3 independently of application version 1.0.1. Compare fixed workloads with matching application versions, effective settings and build identity. Lighting and material updates can change the actual GPU workload without changing the score formula or preset name. Diagnostic microprofiler tours retain frame statistics but do not receive scores. For report locations and user-facing behavior, see [Getting started](GETTING_STARTED.md#reports-and-saved-files).
 
 ## Tests and rendering validation
 

@@ -43,7 +43,7 @@ try {
     & "$PSScriptRoot/build_windows.ps1" -BuildDir $BuildDir -Configuration Release -Jobs $Jobs
     [Environment]::SetEnvironmentVariable('HEAVEN_RESOURCE_DIR', $null, 'Process')
     Invoke-Checked ctest.exe @('--test-dir', $BuildDir, '--output-on-failure', '--no-tests=error',
-        '--timeout', '300', '-R', '^heaven_(benchmark_tests|profiler_trace_tests|microprofile_analysis|runtime_paths_cli|asset_packer_cli|gtao_bent_normal_contract|specular_occluded_moment_contract)$')
+        '--timeout', '300', '-R', '^heaven_(benchmark_tests|profiler_trace_tests|microprofile_analysis|runtime_paths_cli|asset_packer_cli|gtao_bent_normal_contract|specular_occluded_moment_contract|surface_color_contract)$')
     Invoke-Checked ctest.exe @('--test-dir', (Join-Path $BuildDir 'tools'),
         '--output-on-failure', '--no-tests=error', '--timeout', '120')
     $env:HEAVEN_SMOKE = '0'

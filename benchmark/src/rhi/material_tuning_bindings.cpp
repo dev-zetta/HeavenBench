@@ -145,6 +145,8 @@ void bind_godrays(filament::MaterialInstance& instance) {
 }
 
 void bind_volumetric_fog(filament::MaterialInstance& instance) {
+    instance.setParameter("lampVolumeTuning",
+                          to_filament(render_tuning::volumetric_fog.lamp_volume));
     instance.setParameter("fogShaderTuning",
                           to_filament(render_tuning::volumetric_fog.shader));
     instance.setParameter("activeSteps",

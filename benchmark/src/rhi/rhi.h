@@ -39,6 +39,9 @@ enum class TextureSemantic : uint8_t {
     ScalarLinear,
     NormalLinear,
     HDRLinear,
+    // Encoded color composed by the legacy material before gamma-2 decoding.
+    // Upload raw values; retain a distinct cache identity from linear data.
+    ColorLegacyGamma2,
 };
 
 // Forward declaration: upload_skinned takes a SkinnedMesh by const-ref. The
@@ -237,6 +240,8 @@ struct GpuMaterial {
     uint64_t cubemap        = 0;
     uint64_t height         = 0;
     uint64_t tessellation   = 0;
+    TextureSemantic diffuse_semantic = TextureSemantic::ScalarLinear;
+    TextureSemantic detail_diffuse_semantic = TextureSemantic::ScalarLinear;
     float    alpha_ref      = 0.0f;
     bool     has_detail     = false;
     int      detail_mode    = 0;

@@ -110,6 +110,11 @@ SkyAtmosphereParams make_sky_atmosphere_params(
     p.sun_disk_radiance =
         render_tuning::sky.sun_disk_radiance * normalized_daylight;
 
+    const auto day_elevation = render_tuning::sky.day_scattering_elevation;
+    const float day_weight = smoothstep(day_elevation.x, day_elevation.y, sun_z);
+    p.sun_radiance *= std::lerp(
+        1.0f, render_tuning::sky.day_scattering_scale, day_weight);
+
     const glm::vec3 total_ext = p.depth_r + p.depth_m + p.ozone;
     const glm::vec3 iso_scatter = p.depth_r * (3.0f / 16.0f)
                                 + p.depth_m * (1.0f / (4.0f * kPi));

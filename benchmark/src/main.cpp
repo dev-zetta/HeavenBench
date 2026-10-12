@@ -1050,6 +1050,11 @@ private:
             {"gpu_instancing", features.gpu_instancing}, {"gpu_skinning", features.gpu_skinning},
             {"ibl_prefiltered", features.ibl_prefiltered},
             {"hires_textures", features.hires_textures}, {"original_textures", features.original_textures},
+            {"srgb_textures", features.srgb_textures},
+            {"legacy_color_textures", features.legacy_color_textures},
+            {"scalar_textures", features.scalar_textures},
+            {"normal_textures", features.normal_textures},
+            {"hdr_textures", features.hdr_textures},
             {"texture_fallbacks", features.texture_fallbacks},
             {"experimental_workflow_surfaces", features.experimental_workflow_surfaces},
             {"color_grading", config_.features.color_grading},
@@ -2866,6 +2871,7 @@ private:
                 backend_->renderer_feature_stats();
             info.selected_texture_bytes = features.selected_texture_bytes;
             info.texture_count = features.srgb_textures +
+                features.legacy_color_textures +
                 features.scalar_textures + features.normal_textures +
                 features.hdr_textures;
             info.enabled_render_features = features.enabled_render_features;

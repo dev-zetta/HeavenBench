@@ -31,6 +31,7 @@ class TextureStore {
 public:
     struct Stats {
         uint64_t srgb = 0;
+        uint64_t legacy_color = 0;
         uint64_t scalar = 0;
         uint64_t normal = 0;
         uint64_t hdr = 0;

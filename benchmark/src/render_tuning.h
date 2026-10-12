@@ -116,8 +116,17 @@ struct LightingTuning {
 
     float environment_floor_lux = 800.0f;
     float reference_sun_lux = 110000.0f;
-    float environment_day_span_lux = 29200.0f;
+    // Keep the broad sky probe from washing out shaded surfaces in daylight.
+    // The independent night floor preserves Moon and local-light balance.
+    float environment_day_span_lux = 19200.0f;
     Float3 fallback_irradiance{0.20f, 0.23f, 0.30f};
+
+    // Restore readable warm lamp pools on the decoded legacy masonry without
+    // lifting the night environment or expanding punctual-light bounds.
+    float enclosed_lamp_power_scale = 48.0f;
+    // Golden hue referenced to the authored street source, normalized to red.
+    // Keep open flames on their separate orange calibration.
+    Float3 enclosed_lamp_color{1.0f, 0.71665f, 0.15f};
 
     float moon_daylight_cutoff_lux = 30000.0f;
     float moon_min_weight = 0.01f;
@@ -146,6 +155,11 @@ struct SkyTuning {
     int sphere_longitudes = 48;
     float sphere_radius = 1000.0f;
     float radiance_scale = 2.0e-4f;
+    // Reduce high-Sun atmospheric radiance before it reaches the tone mapper's
+    // white shoulder. Dawn, sunset, the solar disk and night sources retain
+    // their existing calibration; the visible sky and IBL share this gain.
+    float day_scattering_scale = 0.50f;
+    Float2 day_scattering_elevation{0.10f, 0.50f};
     float high_altitude_extinction = 0.65f;
     float rayleigh = 1.0f;
     float turbidity = 1.6f;
@@ -266,14 +280,23 @@ struct VolumetricFogTuning {
     int noise_size = 64;
     int noise_filter_passes = 4;
     Float4 medium{0.005f, 250.0f, 1.50f, 1.0f};
+    // Clear daylight keeps depth cues without veiling nearby architecture.
+    // The existing night medium retains the local-light scattering balance.
+    float day_density = 0.0015f;
     Float2 phase{0.35f, 0.50f};
     Float3 color{0.55f, 0.62f, 0.72f};
     float light_reach_multiplier = 1.50f;
     float minimum_light_distance = 0.50f;
     float light_flux_reference = 200000.0f;
+    float ambient_reference_lux = 30000.0f;
     float sun_min_lux = 5000.0f;
     float sun_flux_reference = 110000.0f;
     Float4 shader{1500.0f, 0.30f, 8.0f, 0.50f};
+    // Original light_volume_big: finite additive glow, separate from both
+    // optical-axis flares and the medium's ray-marched illumination.
+    float lamp_volume_radius = 3.0f;
+    Float4 lamp_volume{0.1f, 1.0f, 1.0f, 0.0f}; // density, power, strength, reserved
+    Float3 lamp_volume_color{0.119996f, 0.055651f, 0.0f};
 };
 
 struct SsgiTuning {

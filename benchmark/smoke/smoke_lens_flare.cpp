@@ -8,6 +8,7 @@
 #include "rhi/filament_util.h"
 #include "rhi/material_instance_cache.h"
 #include "rhi/texture_store.h"
+#include "render_tuning.h"
 
 #include <filament/Camera.h>
 #include <filament/Engine.h>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -305,10 +307,44 @@ bool check_lamp_operating_state(filament::Engine& engine) {
     std::array<SceneLight, 2> authored;
     authored[0].kind = SceneLightKind::Spot;
     authored[0].world_pos = {0, 0, .1f}; // actual bounded bulb association
+    authored[0].color = {.901435f, .646016f, .135216f};
+    authored[1].kind = SceneLightKind::Spot;
     authored[1].world_pos = {20, 0, 0}; // unrelated lighting-only accent
+    authored[1].color = {.2f, .4f, .6f};
     spawner.set_pending_authored(authored);
     spawner.spawn_authored(core, true);
     bool ok = spawner.light_infos().size() == 4;
+    if (ok) {
+        // Equal source powers/types independently expose the selective gain:
+        // association changes lamp power, not its range or unrelated sources.
+        const auto infos = spawner.light_infos();
+        const auto close = [](float actual, float expected) {
+            return std::abs(actual - expected) < 1.0e-5f * expected;
+        };
+        auto& manager = engine.getLightManager();
+        const float gain = render_tuning::lighting.enclosed_lamp_power_scale;
+        ok = close(infos[0].nominal_intensity, gain * infos[1].nominal_intensity) &&
+             close(infos[2].nominal_intensity, gain * infos[3].nominal_intensity) &&
+             manager.getFalloff(manager.getInstance(infos[0].entity)) ==
+                 manager.getFalloff(manager.getInstance(infos[1].entity)) &&
+             manager.getFalloff(manager.getInstance(infos[2].entity)) ==
+                 manager.getFalloff(manager.getInstance(infos[3].entity));
+        // Retuning a synthetic enclosure must preserve authored source colors
+        // and the distinct open-flame palette, including associated spots.
+        const auto color_matches = [&](std::size_t i, glm::vec3 expected) {
+            const auto actual = manager.getColor(manager.getInstance(infos[i].entity));
+            return actual.r == expected.x && actual.g == expected.y && actual.b == expected.z;
+        };
+        const auto lamp_color = render_tuning::lighting.enclosed_lamp_color;
+        ok = ok && color_matches(0, authored[0].color) &&
+             color_matches(1, authored[1].color) &&
+             color_matches(2, {lamp_color.x, lamp_color.y, lamp_color.z}) &&
+             color_matches(3, {1.0f, .55f, .20f});
+        // The enclosure owns one atmospheric volume; the paired authored
+        // spot and independent torch/accent must not duplicate it.
+        ok = ok && !infos[0].local_volume_source && !infos[1].local_volume_source &&
+             infos[2].local_volume_source && !infos[3].local_volume_source;
+    }
     LightingParams lighting;
     lighting.time_of_day = 12;
     spawner.update_operating_state(core, lighting);
@@ -316,6 +352,23 @@ bool check_lamp_operating_state(filament::Engine& engine) {
         const auto infos = spawner.light_infos();
         ok = infos[0].intensity == 0 && infos[1].intensity > 0 &&
             infos[2].intensity == 0 && infos[3].intensity > 0;
+    }
+    lighting.time_of_day = 21;
+    spawner.update_operating_state(core, lighting);
+    for (const auto& info : spawner.light_infos()) {
+        ok = ok && info.intensity == info.nominal_intensity && info.intensity > 0;
+    }
+    // Midpoint of the evening ramp: repeated updates must retain half power,
+    // rather than repeatedly multiplying the already reduced live candela.
+    lighting.time_of_day = 19.875f;
+    for (int repeat = 0; repeat < 4; ++repeat) {
+        spawner.update_operating_state(core, lighting);
+        const auto infos = spawner.light_infos();
+        for (std::size_t i = 0; i < infos.size(); ++i) {
+            const float expected = infos[i].nominal_intensity *
+                ((i == 0 || i == 2) ? 0.5f : 1.0f);
+            ok = ok && std::abs(infos[i].intensity - expected) < 1.0e-5f * expected;
+        }
     }
     lighting.time_of_day = 21;
     spawner.update_operating_state(core, lighting);

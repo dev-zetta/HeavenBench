@@ -29,6 +29,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -152,14 +153,10 @@ void VolfogFeature::init(RenderContext& ctx, const AppConfig& config) {
     // Default fog parameters. The shader uses **non-uniform step
     // spacing** (32 exponentially-distributed taps from 0 to
     // distLimit) so we can reach distant geometry without losing
-    // detail near the camera. With density = 0.005 and a 250m cap:
-    //   - geometry at 50m  → exp(-0.25) = 0.78 transmittance (~22% fog)
-    //   - geometry at 150m → exp(-0.75) = 0.47 transmittance (~53% fog)
-    //   - geometry at 250m → exp(-1.25) = 0.29 transmittance (~71% fog)
-    // That gives a smooth depth-cued atmospheric haze: close objects
-    // read clearly, distant silhouettes (airship, castle) fade
-    // naturally rather than slamming into a 50m wall. Lamp flux is
-    // soft-clipped per step so dense clusters don't saturate.
+    // detail near the camera. Clear noon density 0.0015 gives approximately
+    // 93%/80%/69% transmittance at 50m/150m/250m before noise modulation.
+    // update() blends back to the existing 0.005 night medium so local-light
+    // scattering retains its balance. Lamp flux is soft-clipped per step.
 
     //   fogColor      — noon ambient scattering colour; update()
     //                   scales it with the scene's environment light.
@@ -185,6 +182,7 @@ void VolfogFeature::init(RenderContext& ctx, const AppConfig& config) {
     mi_->setParameter(
         "fogColor", filament::math::float3{color.x, color.y, color.z});
     mi_->setParameter("numLights", 0);
+    mi_->setParameter("numLampVolumes", 0);
     // Initialise light arrays to all-zero. Filament requires arrays
     // to be set even if numLights=0, otherwise the underlying UBO
     // contains undefined data and SPIR-V validation rejects it.
@@ -192,6 +190,8 @@ void VolfogFeature::init(RenderContext& ctx, const AppConfig& config) {
         filament::math::float4 zeros[MAX_LIGHTS]{};
         mi_->setParameter("lightPosRadius", zeros, MAX_LIGHTS);
         mi_->setParameter("lightColorIntensity", zeros, MAX_LIGHTS);
+        mi_->setParameter("lampVolumePosRadius", zeros, MAX_LIGHTS);
+        mi_->setParameter("lampVolumeColorGain", zeros, MAX_LIGHTS);
     }
     mi_->setParameter("time", 0.0f);
     mi_->setParameter("temporalJitter", 0.5f);
@@ -326,6 +326,74 @@ void VolfogFeature::update(RenderContext& ctx, const FrameContext& frame) {
 
     auto& lm = engine_->getLightManager();
     glm::vec3 cam = camera.position;
+    const float aspect = safe_aspect(viewport_w, viewport_h);
+    const glm::mat4 view_mat = camera.view_matrix();
+
+    // Original lamp volumes are an analytic atmospheric glow, independent
+    // of the optical-axis flare and of the medium's light-selection budget.
+    // Keep the nearest visible spheres in fixed storage. A source's live
+    // native power and position handle night scheduling, external shutoff,
+    // retirement and floating-island motion without cached cosmetic state.
+    struct VolumeCandidate {
+        filament::math::float4 position_radius{};
+        float gain = 0.0f;
+        float distance = 0.0f;
+    };
+    std::array<VolumeCandidate, MAX_LIGHTS> volumes{};
+    int volume_count = 0;
+    const auto& fog_tuning = render_tuning::volumetric_fog;
+    const float radius = fog_tuning.lamp_volume_radius;
+    const glm::vec3 forward = -glm::vec3(view_mat[0][2], view_mat[1][2], view_mat[2][2]);
+    const glm::vec3 right{view_mat[0][0], view_mat[1][0], view_mat[2][0]};
+    const glm::vec3 up{view_mat[0][1], view_mat[1][1], view_mat[2][1]};
+    const float tangent_y = std::tan(glm::radians(camera.fov * 0.5f));
+    const float tangent_x = tangent_y * aspect;
+    const std::array<glm::vec3, 5> inside_normals{
+        forward, glm::normalize(forward * tangent_x + right),
+        glm::normalize(forward * tangent_x - right),
+        glm::normalize(forward * tangent_y + up),
+        glm::normalize(forward * tangent_y - up)};
+    for (const auto& light : frame.scene_lights) {
+        if (!light.local_volume_source) continue;
+        const auto li = lm.getInstance(light.entity);
+        if (!li) continue;
+        const float gain = lens_flare_power_gain(lm.getIntensity(li), light.nominal_intensity);
+        if (gain <= 0.0f) continue;
+        const auto position = lm.getPosition(li);
+        const glm::vec3 offset = glm::vec3(position.x, position.y, position.z) - cam;
+        const float distance = glm::length(offset);
+        if (!std::isfinite(distance)) continue;
+        // Touching/near-tangent spheres stay. This does not remove source
+        // lights or shadow casters; it selects only cosmetic volume uniforms.
+        const float reserve = std::max(
+            1.0e-4f * std::max(distance, radius),
+            distance * 2.0f * tangent_y / static_cast<float>(std::max(viewport_h, 1)));
+        if (std::any_of(inside_normals.begin(), inside_normals.end(),
+                [&](glm::vec3 normal) { return glm::dot(normal, offset) < -radius - reserve; }))
+            continue;
+        int slot = volume_count;
+        if (slot == MAX_LIGHTS) {
+            if (distance >= volumes.back().distance) continue;
+            slot = MAX_LIGHTS - 1;
+        } else {
+            ++volume_count;
+        }
+        while (slot > 0 && distance < volumes[slot - 1].distance) {
+            volumes[slot] = volumes[slot - 1];
+            --slot;
+        }
+        volumes[slot] = {{position.x, position.y, position.z, radius}, gain, distance};
+    }
+    std::array<filament::math::float4, MAX_LIGHTS> volume_positions{};
+    std::array<filament::math::float4, MAX_LIGHTS> volume_colors{};
+    const auto volume_color = fog_tuning.lamp_volume_color;
+    for (int i = 0; i < volume_count; ++i) {
+        volume_positions[i] = volumes[i].position_radius;
+        volume_colors[i] = {volume_color.x, volume_color.y, volume_color.z, volumes[i].gain};
+    }
+    mi_->setParameter("numLampVolumes", volume_count);
+    mi_->setParameter("lampVolumePosRadius", volume_positions.data(), MAX_LIGHTS);
+    mi_->setParameter("lampVolumeColorGain", volume_colors.data(), MAX_LIGHTS);
 
     // Score every scene light entity. We score by `falloff_radius /
     // distance` so lights whose visible reach extends near the camera
@@ -377,15 +445,11 @@ void VolfogFeature::update(RenderContext& ctx, const FrameContext& frame) {
         float falloff = lm.getFalloff(li);
         float intensity = lm.getIntensity(li);
 
-        // Match the visual contribution to the lit pipeline: Filament
-        // intensity is in lumens (or lux for sun), but for fog
-        // scattering we want a unitless "fraction of a typical
-        // lamp's flux contributing to scattering". Empirically
-        // intensity ÷ 200000 lands a typical 150–200k-lumen lamp
-        // around flux=0.8, so accumulated inscatter from 16 lights
-        // stays under 1.0 even when many lamps line up. Earlier
-        // values of ÷30000 produced flux=6 and washed the scene
-        // saturated orange when the camera turned around.
+        // Punctual-light getIntensity returns candela, after Filament converts
+        // the builder's lumen input. Normalize live source power by the artistic
+        // reference below; this is neither a lumen value nor a physical fog
+        // transport model. Lamp power changes also affect local inscatter, so
+        // review the full night scene rather than only its illuminated surfaces.
         float flux = intensity /
             render_tuning::volumetric_fog.light_flux_reference;
 
@@ -400,9 +464,6 @@ void VolfogFeature::update(RenderContext& ctx, const FrameContext& frame) {
     // the shader from the quad's own world position, so the fog no
     // longer needs an inverse view-projection matrix; the march length
     // is clamped at the linear scene depth instead.
-    float aspect = safe_aspect(viewport_w, viewport_h);
-    glm::mat4 view_mat = camera.view_matrix();
-
     mi_->setParameter("cameraPos",
         filament::math::float3{cam.x, cam.y, cam.z});
     mi_->setParameter("sunDir",
@@ -427,15 +488,19 @@ void VolfogFeature::update(RenderContext& ctx, const FrameContext& frame) {
 
     // This unlit material receives already-normalized scattering radiance,
     // so a constant noon tint would glow equally brightly at midnight.
-    // Follow the same ambient illumination ratio as LightingSystem, retaining
-    // the established noon appearance and its nonzero night environment fill.
+    // Follow absolute ambient illumination with a fixed radiance reference.
+    // Renormalizing by the current noon tuning would brighten the night fog
+    // whenever daytime environment lighting is reduced.
     const auto& environment = render_tuning::lighting;
     const float daylight = std::max(0.0f, lighting.sun_intensity) /
         environment.reference_sun_lux;
+    const auto& fog = render_tuning::volumetric_fog;
+    mi_->setParameter("density", std::lerp(
+        fog.medium.x, fog.day_density, std::clamp(daylight, 0.0f, 1.0f)));
     const float ambient_scale =
         (environment.environment_floor_lux +
          daylight * environment.environment_day_span_lux) /
-        (environment.environment_floor_lux + environment.environment_day_span_lux);
+        render_tuning::volumetric_fog.ambient_reference_lux;
     const auto fog_color = render_tuning::volumetric_fog.color;
     mi_->setParameter("fogColor", filament::math::float3{
         fog_color.x * ambient_scale,

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 # third_party/stb_vorbis.c compiles with the C toolchain, mirroring the
 # top-level project's bundled lz4.c precedent. Our own renderer code is all
 # C++ (the standard is set per-target below); enabling C does not change it.
-project(HeavenBench VERSION 1.0.0 LANGUAGES C CXX)
+project(HeavenBench VERSION 1.0.1 LANGUAGES C CXX)
 
 # Note: C++ standard is set per-target below, not globally,
 # to avoid leaking C++23 into Filament's subdirectory build.
@@ -866,6 +866,22 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/specular_occluded_moment_contract_test.py
                 --filament ${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament
                 --matc $<TARGET_FILE:matc>)
+    # Execute the actual material helper with a host compiler. These desktop
+    # tests are not registered in Android builds; cross builds need a host tool.
+    if(CMAKE_CROSSCOMPILING)
+        find_program(HEAVEN_SURFACE_COLOR_HOST_CXX NAMES c++ clang++ g++ cl
+            NO_CMAKE_FIND_ROOT_PATH)
+    else()
+        set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
+    endif()
+    if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_surface_color_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/surface_color_contract_test.py
+                    --materials ${CMAKE_CURRENT_SOURCE_DIR}/materials
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}")
+        set_tests_properties(heaven_surface_color_contract PROPERTIES TIMEOUT 120)
+    endif()
     # The headless source/math contract uses the host shader compiler, not a GPU.
     add_dependencies(heaven_benchmark_tests matc)
     set_tests_properties(heaven_gtao_bent_normal_contract

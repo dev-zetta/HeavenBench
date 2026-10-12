@@ -708,6 +708,10 @@ struct CaseContext {
 // Actual lens material: camera/light translation preserves appearance and distance fade.
 [[nodiscard]] CaseResult run_lens_flare_case(const CaseContext& ctx);
 
+// Production local lamp volumes: finite depth-clipped radiance, live source
+// power/position, independent background transmission and borrower cleanup.
+[[nodiscard]] CaseResult run_lamp_volume_case(const CaseContext& ctx);
+
 // Actual NOOP textures, explicit roots and production material borrower lifetime.
 [[nodiscard]] CaseResult run_render_test_assets_case(const CaseContext& ctx);
 

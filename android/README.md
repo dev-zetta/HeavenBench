@@ -9,7 +9,7 @@ export ANDROID_HOME=/path/to/android-sdk
 sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
 ./scripts/fetch_dependencies.sh
 ./scripts/build_android.sh --abi arm64-v8a --jobs 6
-adb install -r build/packages/HeavenBench-1.0.0-android-arm64-v8a-debug.apk
+adb install -r build/packages/HeavenBench-1.0.1-android-arm64-v8a-debug.apk
 ```
 
 The helper downloads checksum-pinned SDL 2.32.10 and Gradle 8.13 into the ignored `build/` tree. Android Gradle Plugin 8.11.1 packages SDK 35 with minimum API 26. NDK r28c supplies the C++23 library and enables 16 KiB native-library alignment by default; APK signatures, ZIP alignment, and required package contents are checked before delivery. The pinned versions are reproducible inputs, not a claim that they are the latest releases. [AGP compatibility](https://developer.android.com/build/releases/agp-8-11-0-release-notes), [NDK r28 changes](https://github.com/android/ndk/wiki/Changelog-r28), [SDL Android integration](https://wiki.libsdl.org/SDL2/README-android).

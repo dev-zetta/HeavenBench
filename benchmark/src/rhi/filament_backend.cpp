@@ -763,6 +763,7 @@ RendererFeatureStats FilamentBackend::renderer_feature_stats() const {
     if (texture_store_) {
         const auto& stats = texture_store_->stats();
         out.srgb_textures = stats.srgb;
+        out.legacy_color_textures = stats.legacy_color;
         out.scalar_textures = stats.scalar;
         out.normal_textures = stats.normal;
         out.hdr_textures = stats.hdr;
@@ -2064,7 +2065,7 @@ FrameResult FilamentBackend::render_frame(
         const std::string_view workflow = material_workflow_id(stats.material_workflow_active);
         std::printf(
             "  Renderer features: workflow=%.*s (%llu surfaces, %llu uses), "
-            "textures=%llu sRGB/%llu scalar/%llu normal/%llu HDR, "
+            "textures=%llu sRGB/%llu legacy-color/%llu scalar/%llu normal/%llu HDR, "
             "IBL=%s, MSAA=%dx%s, A2C=%s, features=%llu\n",
             static_cast<int>(workflow.size()), workflow.data(),
             static_cast<unsigned long long>(
@@ -2078,6 +2079,7 @@ FrameResult FilamentBackend::render_frame(
                     ? stats.experimental_workflow_instances
                     : stats.compatibility_workflow_instances),
             static_cast<unsigned long long>(stats.srgb_textures),
+            static_cast<unsigned long long>(stats.legacy_color_textures),
             static_cast<unsigned long long>(stats.scalar_textures),
             static_cast<unsigned long long>(stats.normal_textures),
             static_cast<unsigned long long>(stats.hdr_textures),

@@ -225,7 +225,8 @@ class LinuxPipelineTest(unittest.TestCase):
                      for call in calls if call["name"] == "ctest" and
                      "profiler_trace_tests" in " ".join(call["arguments"])]
         for name in ("benchmark_tests", "profiler_trace_tests", "microprofile_analysis", "runtime_paths_cli",
-                     "asset_packer_cli", "gtao_bent_normal_contract", "specular_occluded_moment_contract"):
+                     "asset_packer_cli", "gtao_bent_normal_contract", "specular_occluded_moment_contract",
+                     "surface_color_contract"):
             self.assertIsNotNone(re.fullmatch(pattern, "heaven_" + name), name)
         self.assertIsNone(re.fullmatch(pattern, "heaven_benchmark_smoke"))
         self.assertTrue(any(call["name"] == "verify_appimage.py" for call in calls))

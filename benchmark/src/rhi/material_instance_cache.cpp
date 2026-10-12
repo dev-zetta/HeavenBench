@@ -461,6 +461,14 @@ filament::MaterialInstance* MaterialInstanceCache::get_or_create_impl(
     mi->setParameter("hasBaseColor", diffuse_tex != nullptr);
     mi->setParameter("baseColorMap", diffuse_tex ? diffuse_tex : placeholder_tex_, sampler);
 
+    // Preserve the original encoded detail-composition domain. Explicit sRGB
+    // and procedural colors have already decoded and must not be decoded twice.
+    const int32_t legacy_color_flags =
+        (diffuse_tex && gpu_mat.diffuse_semantic == TextureSemantic::ColorLegacyGamma2 ? 1 : 0) |
+        (gpu_mat.has_detail && gpu_mat.detail_diffuse_semantic == TextureSemantic::ColorLegacyGamma2 ? 2 : 0) |
+        (gpu_mat.has_detail && gpu_mat.detail_diffuse_semantic == TextureSemantic::ColorSRGB ? 4 : 0);
+    mi->setParameter("legacyColorFlags", legacy_color_flags);
+
     // ── Normal map ──────────────────────────────────────────────
     auto* normal_tex = textures_.get(gpu_mat.normal);
     mi->setParameter("hasNormal", normal_tex != nullptr);
@@ -761,6 +769,8 @@ filament::MaterialInstance* MaterialInstanceCache::build_glass_instance(
     auto* diffuse_tex = textures_.get(gpu_mat.diffuse);
     mi->setParameter("hasBaseColor", diffuse_tex != nullptr);
     mi->setParameter("baseColorMap", diffuse_tex ? diffuse_tex : placeholder_tex_, sampler);
+    mi->setParameter("legacyColorFlags", int32_t{
+        diffuse_tex && gpu_mat.diffuse_semantic == TextureSemantic::ColorLegacyGamma2 ? 1 : 0});
 
     // ── Normal map ──────────────────────────────────────────────
     auto* normal_tex = textures_.get(gpu_mat.normal);

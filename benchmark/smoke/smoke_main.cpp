@@ -70,6 +70,7 @@ const CaseEntry kCases[] = {
     {"overlay_render",      &heaven::smoke::run_overlay_render_case},
     {"hdr_output",          &heaven::smoke::run_hdr_output_case},
     {"lens_flare",          &heaven::smoke::run_lens_flare_case},
+    {"lamp_volume",         &heaven::smoke::run_lamp_volume_case},
     {"perframe_discipline", &heaven::smoke::run_perframe_discipline_case},
     {"wet_reflections_capability",
                             &heaven::smoke::run_wet_reflections_capability_case},

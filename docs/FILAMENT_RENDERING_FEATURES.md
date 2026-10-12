@@ -71,7 +71,7 @@ Foliage budgets count blades generated for each source mesh template, not the sc
 
 | Improvement | Configuration | Active fallback / platform limit |
 |---|---|---|
-| Texture color spaces | Authored `format="srgb"` plus `TextureSemantic` role inference | Unsupported/missing DDS data uses the role-appropriate placeholder |
+| Texture color spaces | Authored color metadata plus legacy diffuse/detail color-role decoding | Unsupported/missing DDS data uses the role-appropriate placeholder |
 | HDR prefiltered IBL | Four fixed time bands, generated at startup | One diagnostic and flat SH ambient plus the procedural sky probe if filtering fails |
 | Legacy specular workflow | `material_workflow`, `--material-workflow`, Quality-panel combo | Specialized models remain on compatibility mapping |
 | Ultra AO | `quality.ao_quality`, `--ao-quality` | High uses full-resolution GTAO/Ultra; SSCT deliberately stays off |
@@ -89,11 +89,10 @@ measured rendering, so authored time-of-day changes only switch handles.
 
 `TextureSemantic` is part of each load and cache key:
 
-- `ColorSRGB`: bindings authored with `format="srgb"`, role-inferred
-  diffuse/detail-diffuse/emission textures from convention auto-discovery, and
-  explicitly annotated custom-feature color assets such as grass and lens dirt.
-- Authored bindings without format metadata retain their authored/default
-  linear interpretation; role inference must not override them.
+- `ColorSRGB`: explicit `format="srgb"` bindings, auto-discovered diffuse/detail-diffuse/emission, and explicitly annotated feature assets such as grass and lens dirt. Hardware sampling decodes these colors.
+- `ColorLegacyGamma2`: unmarked authored diffuse/detail-diffuse maps. Preserve encoded texture sampling and the original engine's additive/multiplicative detail composition, then square the final diffuse RGB before lighting. The shared `surface_color.glsl` helper retains the detail overlay's neutral 0.5; hardware sRGB decoding before this operation would crush those materials. Alpha and coverage are unchanged. A mixed linear base/legacy detail enters the same gamma-2 composition domain; decoded sRGB detail is re-encoded for that blend, while signed/data detail remains a raw relative offset.
+- Legacy color has a distinct cache identity and `textures.legacy_color` report counter even though its GPU storage uses a raw format. Procedural fixtures and explicitly decoded colors default to no additional conversion. This reproduces the legacy diffuse composition order, not the original renderer's complete BRDF, exposure, atmosphere or display transform.
+- Authored unmarked emission keeps its existing linear interpretation; this change does not recalibrate lamp emission or convert specular/gloss masks into color.
 - `NormalLinear`: normal and detail-normal maps.
 - `ScalarLinear`: specular, height, tessellation density, masks and depth.
 - `HDRLinear`: floating-point radiance.
@@ -137,6 +136,16 @@ environment. SDR applies a further -0.5 EV before the selected tone mapper
 (-0.75 EV total). HDR retains its independent GT7, paper-white,
 peak-luminance, and PQ calibration. These display compensations do not alter
 scene lighting, physical-camera exposure, or texture data.
+
+Daylight tuning uses 20,000 lux nominal noon environment intensity with an independent 800-lux night floor; direct noon sunlight remains 110,000 lux. The shared visible-sky/probe atmosphere producer reduces high-Sun scattering to 50%, smoothly restoring the existing gain between solar elevations with sine 0.50 and 0.10. The solar disk, dawn/sunset tails and separate night sources retain their calibration. This keeps more blue-sky information below the tone mapper's white shoulder without changing the global display exposure.
+
+Volumetric fog keeps its 32-step, 250-metre integration and local lights. Its nominal density blends from the existing 0.005 night medium to 0.0015 at full daylight; ignoring noise modulation, noon transmittance is approximately 93% at 50 metres and 69% at 250 metres. Fog ambient radiance uses a fixed 30,000-lux normalization rather than the tuned noon environment value, preventing a daylight adjustment from inadvertently brightening night haze. Weather's separate distance fog remains active.
+
+The same volumetric-fog pass also adds bounded analytic lamp volumes, independently of the ray march and optical-axis lens flares. A synthetic enclosed bulb owns one volume; its paired authored light, open flames, windows and lighting-only accents do not duplicate it. A fixed nearest-visible list holds at most sixteen three-metre spheres, with conservative perspective-frustum selection and live native source position/power. The camera-to-opaque-depth segment's closest approach drives a smooth additive golden profile; it also works inside a sphere and beyond the medium's integration distance. Existing extinction, physical source illumination, bloom and the flare's five-to-twenty-degree angular gate remain separate. Disabling volumetric fog removes both the medium and these atmospheric glows. No additional render pass or independent GPU timing cost is implied.
+
+The local profile references original `light_volume_big` density 0.1, power 1 and RGB `(0.119996, 0.055651, 0)` at strength one. This is a bounded artistic approximation anchored to current bulb geometry, not an import of every authored `ObjectVolumeSphere`: original house spheres use radius 2.2 and power 1.5, and some laboratory volumes have distinct offsets. Original CPU fade, color conversion, composition and staggered enablement also differ. Modern halos follow the existing smooth night gain through live/nominal candela, with zero glow for a shut-off, invalid or retired source. Camera-depth clipping preserves foreground air when a wall intersects the sphere; it does not implement full light-path volumetric shadows.
+
+Enclosed lamp/lantern illumination uses `render_tuning::lighting.enclosed_lamp_power_scale = 48` against the existing heuristic lumen baselines. It applies once to synthetic night-luminaire points and uniquely associated authored sources before Filament stores nominal candela; the existing night schedule scales those nominal values without compounding. Synthetic enclosures use a golden linear-RGB tint `(1, 0.71665, 0.15)`, referenced to the original street source's normalized color; authored light colors remain data-driven and open flames retain their orange tint. This restores warm pools on decoded legacy masonry and paving, guided by matched original-engine night views rather than original photometric or pixel parity. Glass emission, camera exposure, Moon/IBL, light ranges, cones, shadow eligibility and unrelated window/fire/accent sources retain their policies. Local volumetric fog reads the brighter live candela, so nearby haze also responds; broad sky/background washout and closest-source highlight compression are explicit visual guards. [Night lamp controls](../tests/visual/night_lamp_lighting.json) cover the actual street and village at midnight, daytime-off behavior and Visual Ultra with generated 4K textures.
 
 Report schema v2 records the effective preset/configuration, CPU stress,
 requested/active MSAA, custom resolve, A2C, AO material options, IBL status,

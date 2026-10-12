@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.1 — 2026-10-12
+
+Correct legacy diffuse-color conversion and tune daylight lighting to reduce the scene's washed-out appearance. Preserve the original encoded-domain detail blend before gamma-2 RGB conversion, lower broad daytime ambient fill, retain more sky color below the tone mapper's white shoulder, and reduce clear-day fog while preserving its night medium. Explicit sRGB colors, alpha handling, direct sunlight and independent night sources keep their existing policies; corrected material colors intentionally affect both day and night.
+
+Add eleven maintained real-scene lighting views covering daylight, rain, twilight, night and optional 4K textures. A host contract executes the shared material-color helper with independent numeric oracles and negative controls. Reports and capture metadata distinguish legacy color from sRGB and linear data, including separate cache identities and accurate texture totals.
+
+Increase enclosed street-lamp illumination to restore readable warm pools on nearby walls, benches and paving after legacy color correction. Refine synthetic lamps toward the original's golden hue and raise the initial corrected source power by another 50%, guided by matched native original Heaven night views. Preserve authored light colors, the daytime-off schedule, unrelated light sources, lamp-glass emission and existing light ranges; add real-scene night/day/4K controls and native selective-power/color, twilight-repeat and restoration checks.
+
+Add soft golden local lamp volumes within the existing volumetric-fog pass, guided by the original benchmark's analytic halo. Clip the bounded glow against scene depth and follow live lamp motion, night scheduling and power-off independently of optical-axis flares. Preserve the medium's extinction and current physical lighting; add native controls for occlusion, camera-inside behavior, off-axis lamps, source changes, depth rebinding and cleanup.
+
+Run the material-color contract in the Linux, Windows and macOS host-test pipelines. Release tags reuse the tested source commit without starting duplicate platform build matrices; branch, pull-request and manual builds remain available.
+
+The benchmark version is **1.0.1** and Android versionCode is **3**. Extraction tools remain **0.3.1**, result schema remains **2**, and score version remains **3**. Lighting changes alter the GPU workload even with the same preset; compare results using matching application and score versions, workloads and effective settings.
+
 ## 1.0.0 macOS package — 2026-10-12
 
 Publish a native Apple Silicon (M1+) macOS app on the existing 1.0.0 release, requiring macOS 15+. Add Vulkan/MoltenVK window support, LLVM 21 build helpers and app packaging with bundled runtime libraries, notices, checksums and relocation checks. The package is ad hoc signed without Developer ID signing or notarization; full rendering and interactive acceptance on a physical Mac remain unverified.

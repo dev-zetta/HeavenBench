@@ -11,7 +11,9 @@
  * reach from the scene's point/spot lights (provided via
  * FrameContext::scene_light_entities).
  *
- * Migrated verbatim out of FilamentBackend::init_volfog / update_volfog.
+ * A separate bounded analytic local-volume list adds soft enclosed-lamp glow
+ * within this pass. It follows live source power/position and scene depth,
+ * independently of optical-axis flares and the medium's scattering budget.
  */
 #ifndef HEAVENBENCH_SRC_RHI_FEATURES_VOLFOG_FEATURE_H_
 #define HEAVENBENCH_SRC_RHI_FEATURES_VOLFOG_FEATURE_H_

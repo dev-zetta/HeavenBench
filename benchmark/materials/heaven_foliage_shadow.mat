@@ -56,6 +56,7 @@ material {
     parameters : [
         { type : sampler2d, name : baseColorMap },
         { type : bool,      name : hasBaseColor },
+        { type : int,       name : legacyColorFlags },
         { type : sampler2d, name : normalMap },
         { type : bool,      name : hasNormal },
         { type : float,     name : normalStrength },
@@ -127,6 +128,7 @@ vertex {
 }
 
 fragment {
+    #include "includes/surface_color.glsl"
     void material(inout MaterialInputs material) {
         // Heaven's per-material UV transform — see heaven_lit_twosided.mat.
         float2 uv = getUV0() * materialParams.baseTransform.xy
@@ -191,16 +193,10 @@ fragment {
         prepareMaterial(material);
 
         // ── Foliage colour + coverage ──────────────────────────────
-        if (materialParams.hasDetail) {
-            if (materialParams.detailMode <= 2) {
-                base.rgb = clamp(base.rgb
-                        + (detailSample.rgb * 2.0 - 1.0) * detailBlend.x,
-                        0.0, 1.0);
-            } else {
-                base.rgb *= clamp(
-                        detailSample.rgb + 1.0 - detailBlend.x, 0.0, 1.0);
-            }
-        }
+        base.rgb = composeSurfaceColor(
+                base.rgb, detailSample.rgb, detailBlend.x,
+                materialParams.hasDetail, materialParams.detailMode,
+                materialParams.legacyColorFlags);
         base.rgb *= foliageDetail;
 
         // Coverage remap (AGENTS.md). The DXT5 foliage alpha is

@@ -1,5 +1,13 @@
 # First-release readiness
 
+## October 12 1.0.1 release preparation
+
+The authorized 1.0.1 patch release contains the legacy diffuse/detail color correction, reduced daylight ambient fill and haze, golden enclosed-lamp illumination and bounded depth-aware local lamp halos. Benchmark version advances to 1.0.1 and Android versionCode to 3; extraction tools remain 0.3.1, result schema 2 and score version 3. The rendering appearance and workload change, so hardware comparisons must retain the same application version and effective settings.
+
+Local lighting qualification includes all eight host suites, complete native Vulkan and OpenGL suites with 53 passes and two existing unavailable-reference-image skips each, and maintained original-scene day/night/weather/4K-texture controls documented in [the visual audit](VISUAL_AUDIT.md#october-12-local-lamp-halos). The release pipelines now include the shared surface-color contract. Version tags reuse the exact branch commit already checked by CI rather than launch a duplicate package matrix. Fresh Linux portable/Zen1/Zen5, Windows x64, macOS ARM64 and Android ARM64 package jobs and downloaded-artifact verification are pending at this preparation checkpoint.
+
+Existing distribution limits remain: original Heaven assets are external, Android is development-signed without a persistent production key, and macOS is ad hoc signed without notarization. A changed Android certificate requires backing up app data and uninstalling the older package before installation. Hosted CI does not establish native Windows/Mac GPU rendering, sustained tablet performance, complete platform tours or calibrated physical HDR acceptance. Release evidence is retained under `build/releases/20261012-v1.0.1/`; the publication checkpoint will identify the exact commit, workflows and verified packages.
+
 ## October 12 macOS release addition
 
 The existing [HeavenBench 1.0.0 release](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.0) now includes a native Apple Silicon app requiring macOS 15.0 or newer. Its matching source is commit [`6e959ae59338258743b8226776d8a2b265fe20bc`](https://github.com/dev-zetta/HeavenBench/commit/6e959ae59338258743b8226776d8a2b265fe20bc), supplied separately as `HeavenBench-1.0.0-macos-source.tar.gz` with macOS provenance, a release manifest and `SHA256SUMS-macos`. The original version tag and earlier platform assets retain their October 11 identities.

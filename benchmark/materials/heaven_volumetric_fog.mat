@@ -88,6 +88,13 @@ material {
         { type : float4[16], name : lightPosRadius },     // xyz=pos, w=radius
         { type : float4[16], name : lightColorIntensity },// rgb=colour, a=flux
 
+        // Bounded original-style local lamp glow. This analytic additive
+        // volume is independent of the medium march and optical-axis flares.
+        { type : int,        name : numLampVolumes },
+        { type : float4[16], name : lampVolumePosRadius, precision : high },
+        { type : float4[16], name : lampVolumeColorGain },
+        { type : float4,     name : lampVolumeTuning }, // density, power, strength
+
         // Time, used to scroll the noise tile.
         { type : float,    name : time },
 
@@ -120,6 +127,31 @@ fragment {
         float g2 = g * g;
         float denom = 1.0 + g2 - 2.0 * g * cosTheta;
         return INV_4PI * (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
+    }
+
+    // Closest approach on the finite camera-to-visible-surface segment.
+    // Only the foreground part of a sphere can contribute: a wall entirely
+    // before it hides it, while a wall inside it retains foreground glow.
+    // The original volume_light sphere uses this radial response rather than
+    // a path integral. Keep it deterministic and finite when the camera is
+    // inside a volume or when the segment is shorter than a fog march step.
+    float3 lampVolumeRadiance(float3 origin, float3 direction, float rayLength) {
+        float3 radiance = float3(0.0);
+        for (int i = 0; i < materialParams.numLampVolumes; ++i) {
+            float4 sphere = materialParams.lampVolumePosRadius[i];
+            float3 toCenter = sphere.xyz - origin;
+            float closestT = clamp(dot(toCenter, direction), 0.0, max(rayLength, 0.0));
+            float3 offset = (direction * closestT - toCenter) / max(sphere.w, 1e-4);
+            float radiusSquared = dot(offset, offset);
+            if (radiusSquared >= 1.0) continue;
+            float profileDensity = max(materialParams.lampVolumeTuning.x, 1e-4);
+            float response = clamp((1.0 + profileDensity) /
+                (1.0 + radiusSquared / profileDensity) - profileDensity, 0.0, 1.0);
+            response = pow(response, max(materialParams.lampVolumeTuning.y, 1e-4));
+            float4 colorGain = materialParams.lampVolumeColorGain[i];
+            radiance += colorGain.rgb * colorGain.a * response * materialParams.lampVolumeTuning.z;
+        }
+        return radiance;
     }
 
     void material(inout MaterialInputs material) {
@@ -198,6 +230,7 @@ fragment {
         #endif
 
         float distLimit = min(sceneRayLen, materialParams.maxDistance);
+        float3 localGlow = lampVolumeRadiance(rayStart, rayDir, sceneRayLen);
 
         #if DEBUG == 6
             float dbg6 = clamp(distLimit / 50.0, 0.0, 1.0);
@@ -206,7 +239,7 @@ fragment {
         #endif
 
         if (distLimit < 0.5) {
-            material.baseColor = float4(0.0, 0.0, 0.0, 0.0);
+            material.baseColor = float4(localGlow, 0.0);
             return;
         }
 
@@ -343,6 +376,6 @@ fragment {
             return;
         #endif
 
-        material.baseColor = float4(inscattered, opacity);
+        material.baseColor = float4(inscattered + localGlow, opacity);
     }
 }

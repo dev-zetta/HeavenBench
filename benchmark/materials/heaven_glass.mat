@@ -34,6 +34,7 @@ material {
     parameters : [
         { type : sampler2d, name : baseColorMap },
         { type : bool,      name : hasBaseColor },
+        { type : int,       name : legacyColorFlags },
         { type : sampler2d, name : normalMap },
         { type : bool,      name : hasNormal },
         { type : float,     name : normalStrength },
@@ -66,6 +67,7 @@ material {
 }
 
 fragment {
+    #include "includes/surface_color.glsl"
     void material(inout MaterialInputs material) {
         // Per-material UV transform — uv*scale + offset, identity {1,1,0,0}
         // for most panes (matches heaven_lit's baseTransform convention).
@@ -92,6 +94,9 @@ fragment {
         // behind the glass. Default to the authored tint when no map.
         if (materialParams.hasBaseColor) {
             material.baseColor = texture(materialParams_baseColorMap, uv);
+            material.baseColor.rgb = composeSurfaceColor(
+                    material.baseColor.rgb, float3(0.5), 0.0, false, 0,
+                    materialParams.legacyColorFlags);
             material.baseColor.rgb *= materialParams.glassTint;
         } else {
             material.baseColor = float4(materialParams.glassTint, 1.0);

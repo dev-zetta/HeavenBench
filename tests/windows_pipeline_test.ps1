@@ -146,7 +146,7 @@ Remove-Item -LiteralPath $stage -Recurse -Force
         foreach ($hostTest in @('heaven_benchmark_tests', 'heaven_profiler_trace_tests',
                                'heaven_microprofile_analysis', 'heaven_runtime_paths_cli',
                                'heaven_asset_packer_cli', 'heaven_gtao_bent_normal_contract',
-                               'heaven_specular_occluded_moment_contract')) {
+                               'heaven_specular_occluded_moment_contract', 'heaven_surface_color_contract')) {
             Assert-That ($hostTest -match $hostPattern) "Host test gate omits $hostTest."
         }
         Assert-That ('heaven_benchmark_smoke' -notmatch $hostPattern) 'Host test gate absorbs the separately controlled graphical smoke gate.'

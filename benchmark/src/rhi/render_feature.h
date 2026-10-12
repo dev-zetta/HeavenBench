@@ -87,6 +87,9 @@ struct SceneLightInfo {
     bool          shadow_eligible = true;
     // Ungated source candela, retained even while a night bulb is off.
     float         nominal_intensity = 0.0f;
+    // One local atmospheric volume per synthetic enclosed bulb. Authored
+    // lighting-only sources and open flames must not duplicate that glow.
+    bool          local_volume_source = false;
 };
 
 // ── Resource provider ───────────────────────────────────────────
