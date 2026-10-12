@@ -3,7 +3,7 @@ name: Linux AppImage
 on:
   push:
     # Release tags reuse the exact commit already built on the branch.
-    tags-ignore: ['v*']
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
