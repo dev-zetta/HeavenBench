@@ -2,6 +2,8 @@
 
 `scripts/build_android.sh` builds the renderer and SDL as shared libraries, compiles SDL's matching Java activity, and packages an installable, debug-signed APK. The native renderer is optimized. Release signing and publication are separate. Android device rendering, pause/resume, touch interaction, memory use, and GPU compatibility require device testing; a successful cross-build alone does not establish those properties.
 
+The published 1.0.1 APK uses a different development signing certificate from the published 1.0.0 APK. Back up imported assets and user data before uninstalling 1.0.0 and installing 1.0.1; `adb install -r` cannot update that older release in place. Local builds can update installations signed with the same local debug key.
+
 The Linux build host needs the renderer's normal Clang/libc++ dependencies, Java 17 or newer, and an Android SDK. Install the versions pinned in [versions.properties](versions.properties):
 
 ```sh

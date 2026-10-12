@@ -6,7 +6,7 @@
 
 *Captured in HeavenBench on Linux with Vulkan, Visual Ultra and the enhanced 4K texture pack enabled, at 1920×1080.*
 
-**Downloads:** [get the latest release for Linux, Windows, macOS or Android](https://github.com/dev-zetta/HeavenBench/releases/latest). The Android APK is development-signed; [release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
+**Downloads:** [HeavenBench 1.0.1 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.1). The Android APK is development-signed; upgrading from 1.0.0 requires backing up imported assets and user data before uninstalling and reinstalling. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
 The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is ad hoc signed, without notarization, and full rendering on a physical Mac remains unverified. See [macOS setup and launch instructions](docs/MACOS.md).
 

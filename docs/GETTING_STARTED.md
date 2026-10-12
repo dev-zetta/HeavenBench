@@ -31,6 +31,8 @@ The normal asset location is an `assets/` directory containing compatible ZIP pa
 | macOS | On an Apple Silicon Mac with macOS 15+, extract the ZIP, place `assets.zip` beside `HeavenBench.app`, then open the app. See [macOS launch instructions](MACOS.md#run-the-app) for the signing prompt. |
 | Android | Install the APK, import `assets.zip` through the file picker, then choose **Run benchmark** or **Explore**. |
 
+**Android 1.0.0 upgrade:** the published 1.0.1 development APK has a different signing certificate. Back up imported assets and user data before uninstalling the older app and installing 1.0.1; an in-place update is not supported.
+
 On Linux systems without FUSE, launch the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1 ./HeavenBench-*.AppImage`. Linux packages use host graphics drivers and the ALSA audio library; see [platform package requirements](BUILDING.md#platform-packages) if startup fails.
 
 A development checkout uses the same scene pack:
