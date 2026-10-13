@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_FSR31_PORTABILITY_H
+#define HEAVEN_FSR31_PORTABILITY_H
 
 #ifndef _WIN32
 #include <algorithm>
@@ -11,10 +12,6 @@
 #include <string>
 
 using std::abs;
-
-#ifndef FFX_UNUSED
-#define FFX_UNUSED(x) ((void)(x))
-#endif
 
 #define _countof(array) (sizeof(array) / sizeof((array)[0]))
 #define sprintf_s std::snprintf
@@ -36,4 +33,10 @@ inline int strcpy_s(char* dest, size_t capacity, const char* source) {
     std::memcpy(dest, source, length + 1);
     return 0;
 }
+// Use the SDK's own utility macros once, including FFX_UNUSED needed by
+// ffx_message.cpp, instead of redefining them before its other headers.
+#include <FidelityFX/host/ffx_util.h>
+
 #endif
+
+#endif // HEAVEN_FSR31_PORTABILITY_H

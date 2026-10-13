@@ -190,7 +190,7 @@ public:
         output_ = std::make_unique<FrameGenerationOutput>(BackendCore{
             .engine = &engine_, .scene = scene_, .view = scene_view_, .renderer = renderer_, .camera = camera_});
         resize(80, 64, false);
-        require(!output_->ensure(0, height_) && output_->valid(), "Invalid extent replaced valid output targets");
+        require(!output_->ensure(0, static_cast<int>(height_)) && output_->valid(), "Invalid extent replaced valid output targets");
     }
 
     void set_widget(std::size_t index, bool present, Rect rect) {

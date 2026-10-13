@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_DLSS_RUNTIME_LOADER_H
+#define HEAVEN_DLSS_RUNTIME_LOADER_H
 
 #include <filesystem>
 #include <string>
@@ -19,3 +20,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_DLSS_RUNTIME_LOADER_H

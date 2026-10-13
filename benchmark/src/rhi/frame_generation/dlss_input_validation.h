@@ -1,9 +1,11 @@
-#pragma once
+#ifndef HEAVEN_DLSS_INPUT_VALIDATION_H
+#define HEAVEN_DLSS_INPUT_VALIDATION_H
 
 #include "dlss_provider.h"
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <string_view>
 
 namespace heaven {
@@ -69,7 +71,8 @@ inline std::string_view validate_dlss_present_inputs(
     if (!std::isfinite(camera.near_plane) || !std::isfinite(camera.far_plane) ||
             !std::isfinite(camera.vertical_fov_radians) || !std::isfinite(camera.aspect_ratio) ||
             camera.near_plane <= 0.0f || camera.far_plane <= camera.near_plane ||
-            camera.vertical_fov_radians <= 0.0f || camera.vertical_fov_radians >= 3.141593f ||
+            camera.vertical_fov_radians <= 0.0f ||
+            camera.vertical_fov_radians >= std::numbers::pi_v<float> ||
             camera.aspect_ratio <= 0.0f || camera.motion_scale[0] == 0.0f ||
             camera.motion_scale[1] == 0.0f)
         return "Invalid temporal camera projection or motion scale";
@@ -85,3 +88,5 @@ inline std::string_view validate_dlss_present_inputs(
 }
 
 } // namespace heaven
+
+#endif // HEAVEN_DLSS_INPUT_VALIDATION_H

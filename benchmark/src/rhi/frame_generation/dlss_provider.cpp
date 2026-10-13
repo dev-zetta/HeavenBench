@@ -176,10 +176,12 @@ DlssProvider::DlssProvider() : impl_(std::make_unique<Impl>()) {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE && defined(_WIN32)
     impl_->status.built = true;
     impl_->status.reason = "DLSS requires initialization before Vulkan device creation";
-#elif defined(_WIN32)
+#else
+#ifdef _WIN32
     impl_->status.reason = "DLSS support was not built; configure the optional Streamline 2.14.1 SDK";
 #else
     impl_->status.reason = "Native DLSS frame generation is available only in the optional Windows build";
+#endif
 #endif
 }
 
@@ -190,7 +192,7 @@ DlssProvider::~DlssProvider() {
 #endif
 }
 
-bool DlssProvider::bootstrap(const DlssBootstrapOptions& options) {
+bool DlssProvider::bootstrap([[maybe_unused]] const DlssBootstrapOptions& options) {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (impl_->status.initialized || impl_->loader.loaded()) {
         impl_->status.reason = "Streamline bootstrap can run only once per provider";
@@ -279,7 +281,6 @@ bool DlssProvider::bootstrap(const DlssBootstrapOptions& options) {
     asynchronous_api_error.store(VK_SUCCESS, std::memory_order_relaxed);
     return true;
 #else
-    (void)options;
     return false;
 #endif
 }
@@ -288,22 +289,18 @@ const DlssVulkanRequirements& DlssProvider::requirements() const noexcept { retu
 std::span<const char* const> DlssProvider::mandatory_instance_hooks() noexcept { return instance_hooks; }
 std::span<const char* const> DlssProvider::mandatory_device_hooks() noexcept { return device_hooks; }
 
-PFN_vkVoidFunction DlssProvider::instance_hook(VkInstance instance, const char* name) const {
+PFN_vkVoidFunction DlssProvider::instance_hook([[maybe_unused]] VkInstance instance, [[maybe_unused]] const char* name) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (impl_->status.initialized && contains_hook(instance_hooks, name))
         return impl_->instance_resolver(instance, name);
-#else
-    (void)instance; (void)name;
 #endif
     return nullptr;
 }
 
-PFN_vkVoidFunction DlssProvider::device_hook(VkDevice device, const char* name) const {
+PFN_vkVoidFunction DlssProvider::device_hook([[maybe_unused]] VkDevice device, [[maybe_unused]] const char* name) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (impl_->status.initialized && contains_hook(device_hooks, name))
         return impl_->device_resolver(device, name);
-#else
-    (void)device; (void)name;
 #endif
     return nullptr;
 }
@@ -320,12 +317,10 @@ PFN_vkCreateInstance DlssProvider::create_instance_proxy() const {
     return nullptr;
 }
 
-PFN_vkCreateDevice DlssProvider::create_device_proxy(VkInstance instance) const {
+PFN_vkCreateDevice DlssProvider::create_device_proxy([[maybe_unused]] VkInstance instance) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (impl_->status.initialized)
         return reinterpret_cast<PFN_vkCreateDevice>(impl_->instance_resolver(instance, "vkCreateDevice"));
-#else
-    (void)instance;
 #endif
     return nullptr;
 }
@@ -340,7 +335,7 @@ bool DlssProvider::adopt_interposed_device(VkInstance instance, VkPhysicalDevice
     return bind_device_impl(info, true);
 }
 
-bool DlssProvider::bind_device_impl(const DlssVulkanDevice& device, bool automatic_queues) {
+bool DlssProvider::bind_device_impl([[maybe_unused]] const DlssVulkanDevice& device, [[maybe_unused]] bool automatic_queues) {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->status.initialized) return false;
     if (!device.instance || !device.physical_device || !device.device || !device.hooks_installed) {
@@ -405,13 +400,11 @@ bool DlssProvider::bind_device_impl(const DlssVulkanDevice& device, bool automat
     impl_->status.reason = "Ready; awaiting complete temporal inputs and Reflex frame markers";
     return true;
 #else
-    (void)device;
-    (void)automatic_queues;
     return false;
 #endif
 }
 
-bool DlssProvider::begin_frame(uint64_t application_frame, DlssFrameToken& token) {
+bool DlssProvider::begin_frame([[maybe_unused]] uint64_t application_frame, DlssFrameToken& token) {
     token = {};
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->frame_available.load(std::memory_order_acquire)) return false;
@@ -427,12 +420,11 @@ bool DlssProvider::begin_frame(uint64_t application_frame, DlssFrameToken& token
     token = {native, application_frame, index};
     return true;
 #else
-    (void)application_frame;
     return false;
 #endif
 }
 
-bool DlssProvider::mark(const DlssFrameToken& token, DlssLatencyMarker marker) const {
+bool DlssProvider::mark([[maybe_unused]] const DlssFrameToken& token, [[maybe_unused]] DlssLatencyMarker marker) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!token.native_token || !impl_->pcl_marker) return false;
     sl::PCLMarker native_marker;
@@ -452,14 +444,13 @@ bool DlssProvider::mark(const DlssFrameToken& token, DlssLatencyMarker marker) c
         impl_->threaded_result.store(static_cast<int32_t>(result), std::memory_order_relaxed);
     return result == sl::Result::eOk;
 #else
-    (void)token; (void)marker;
     return false;
 #endif
 }
 
 uint32_t DlssProvider::latency_ping_message() const noexcept { return impl_->ping_message; }
 
-bool DlssProvider::prepare_present(const DlssPresentInputs& inputs) {
+bool DlssProvider::prepare_present([[maybe_unused]] const DlssPresentInputs& inputs) {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->status.available) return false;
     if (const auto invalid = validate_dlss_present_inputs(inputs, impl_->minimum_dimension,
@@ -524,7 +515,6 @@ bool DlssProvider::prepare_present(const DlssPresentInputs& inputs) {
     impl_->status.reason = "DLSS requested; presentation statistics are reported separately from rendered FPS";
     return true;
 #else
-    (void)inputs;
     return false;
 #endif
 }
@@ -569,7 +559,7 @@ bool DlssProvider::collect_state() {
 #endif
 }
 
-bool DlssProvider::suspend(const DlssFrameToken* token) {
+bool DlssProvider::suspend([[maybe_unused]] const DlssFrameToken* token) {
     impl_->status.enabled = false;
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->status.initialized || !impl_->set_options) return true;
@@ -588,7 +578,6 @@ bool DlssProvider::suspend(const DlssFrameToken* token) {
     impl_->last_token = {};
     return success;
 #else
-    (void)token;
     return true;
 #endif
 }

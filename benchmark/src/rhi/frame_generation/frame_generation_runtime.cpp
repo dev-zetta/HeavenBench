@@ -62,7 +62,7 @@ struct FrameGenerationRuntime::Native {
     VkExtent2D size{};
     bool initialized_layout = false;
     uint64_t frame_id = 0;
-    std::chrono::steady_clock::time_point previous_callback{};
+    std::chrono::steady_clock::time_point previous_callback;
     uint64_t previous_pacing_wait = 0;
     double unpaced_interval_ns = 16'666'667.0;
     std::atomic<bool> failed{false};
@@ -162,7 +162,7 @@ struct FrameGenerationRuntime::Native {
             writes[i].descriptorType=bindings[i].descriptorType; writes[i].pImageInfo=&images[i];
         }
         bluevk::vkUpdateDescriptorSets(device,2,writes,0,nullptr);
-        std::lock_guard lock(owner.mutex_);
+        std::scoped_lock lock(owner.mutex_);
         owner.state_.set_capability({FrameGenerationMode::Fsr3,true,"FSR 3.1 Vulkan (experimental)"});
     }
     struct Packet { Native* native; Camera camera; bool reset; float dt_ms; float near_plane; };
@@ -170,8 +170,11 @@ struct FrameGenerationRuntime::Native {
         std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
         auto& self=*packet->native;
         auto& owner=self.owner;
-        const bool reset=self.history.should_reset(packet->reset,owner.platform_->history_epoch());
         const auto callback_time=std::chrono::steady_clock::now();
+        // A prepared packet can remain queued across process suspension. The
+        // frontend's gap check cannot see that delay, so invalidate here too.
+        const bool callback_gap=frame_generation_callback_gap(self.previous_callback,callback_time);
+        const bool reset=self.history.should_reset(packet->reset,owner.platform_->history_epoch()) || callback_gap;
         const auto total_pacing=owner.platform_->presentation_status().pacing_wait_ns;
         if(self.previous_callback.time_since_epoch().count()) {
             const auto interval=std::chrono::duration<double,std::nano>(callback_time-self.previous_callback).count();
@@ -181,7 +184,7 @@ struct FrameGenerationRuntime::Native {
         }
         self.previous_callback=callback_time; self.previous_pacing_wait=total_pacing;
         uint64_t source;
-        { std::lock_guard lock(owner.mutex_);
+        { std::scoped_lock lock(owner.mutex_);
           if(reset) owner.state_.invalidate_history();
           source=owner.state_.record_real_frame(true); }
         owner.platform_->arm_real(source);
@@ -223,7 +226,7 @@ struct FrameGenerationRuntime::Native {
                 VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_LAYOUT_GENERAL};
             auto produced=self.provider->record(frame);
             if (!produced) throw std::runtime_error(produced.error());
-            { std::lock_guard lock(owner.mutex_);
+            { std::scoped_lock lock(owner.mutex_);
               owner.state_.set_capability({FrameGenerationMode::Fsr3,true,"FSR 3.1 Vulkan (experimental)"}); }
             if (*produced) {
                 bool captured_ui_inputs = false;
@@ -244,7 +247,7 @@ struct FrameGenerationRuntime::Native {
                 barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
                 bluevk::vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&barrier,0,nullptr,0,nullptr);
                 uint64_t generated_id;
-                { std::lock_guard lock(owner.mutex_); generated_id=owner.state_.record_generated_frame(source); }
+                { std::scoped_lock lock(owner.mutex_); generated_id=owner.state_.record_generated_frame(source); }
                 const bool armed = generated_id && owner.platform_->arm_generated(self.generated,
                     VK_FORMAT_R8G8B8A8_UNORM,self.size,source,static_cast<uint64_t>(self.unpaced_interval_ns));
                 if (armed && captured_ui_inputs) owner.platform_->commit_ui_inputs(source);
@@ -257,7 +260,7 @@ struct FrameGenerationRuntime::Native {
                 if(context.discard) *context.discard=true;
             }
             std::fprintf(stderr,"Frame generation unavailable: %s\n",error.what());
-            std::lock_guard lock(owner.mutex_);
+            std::scoped_lock lock(owner.mutex_);
             owner.state_.set_capability({FrameGenerationMode::Fsr3,false,error.what()});
             self.failed.store(true);
             if(owner.platform_) owner.platform_->arm_real(source);
@@ -283,19 +286,27 @@ FrameGenerationRuntime::FrameGenerationRuntime(const BackendCore& core, FrameGen
 FrameGenerationRuntime::~FrameGenerationRuntime() {
     // Callers drain queued native callbacks and GPU consumers first.
     drain();
-    const auto final=status();
-    const auto count=[](uint64_t value,bool available) {
-        return available?std::to_string(value):std::string("unavailable");
-    };
-    std::printf("Frame generation: requested=%s effective=%s real=%llu generated=%s native-real=%s native-generated=%s failed=%s reason=%s\n",
-        std::string(frame_generation_mode_id(final.requested)).c_str(),std::string(frame_generation_mode_id(final.effective)).c_str(),
-        static_cast<unsigned long long>(final.counters.real_frames),
-        count(final.counters.generated_frames,final.counters.generated_frames_available).c_str(),
-        count(final.counters.real_presented_frames,final.counters.presentation_submissions_available).c_str(),
-        count(final.counters.generated_presented_frames,final.counters.presentation_submissions_available).c_str(),
-        count(final.counters.failed_presentations,final.counters.presentation_submissions_available).c_str(),final.reason.c_str());
-    if(final.sdk_presented_frames) std::printf("Frame generation SDK combined native submissions: %llu\n",
-        static_cast<unsigned long long>(*final.sdk_presented_frames));
+    // Snapshot and formatting can allocate. A diagnostic failure must not
+    // prevent resource retirement after the required drain has completed.
+    try {
+        const auto final=status();
+        const auto count=[](uint64_t value,bool available) {
+            return available?std::to_string(value):std::string("unavailable");
+        };
+        std::printf("Frame generation: requested=%s effective=%s real=%llu generated=%s native-real=%s native-generated=%s failed=%s reason=%s\n",
+            std::string(frame_generation_mode_id(final.requested)).c_str(),std::string(frame_generation_mode_id(final.effective)).c_str(),
+            static_cast<unsigned long long>(final.counters.real_frames),
+            count(final.counters.generated_frames,final.counters.generated_frames_available).c_str(),
+            count(final.counters.real_presented_frames,final.counters.presentation_submissions_available).c_str(),
+            count(final.counters.generated_presented_frames,final.counters.presentation_submissions_available).c_str(),
+            count(final.counters.failed_presentations,final.counters.presentation_submissions_available).c_str(),final.reason.c_str());
+        if(final.sdk_presented_frames) std::printf("Frame generation SDK combined native submissions: %llu\n",
+            static_cast<unsigned long long>(*final.sdk_presented_frames));
+    } catch (const std::exception& error) {
+        std::fprintf(stderr,"Frame generation final diagnostics unavailable: %s\n",error.what());
+    } catch (...) {
+        std::fputs("Frame generation final diagnostics unavailable\n",stderr);
+    }
     native_.reset(); dlss_.reset(); output_.reset(); grass_.reset(); temporal_.reset();
     if(motion_) core_.engine->destroy(motion_);
     if(masked_) core_.engine->destroy(masked_);
@@ -319,7 +330,7 @@ void FrameGenerationRuntime::request(FrameGenerationMode mode) {
     active_=false;
     temporal_->invalidate_history();
     if(grass_) grass_->invalidate_history();
-    std::lock_guard lock(mutex_);
+    std::scoped_lock lock(mutex_);
     state_.request(mode);
     std::string reason;
     if(mode==FrameGenerationMode::Dlss) {
@@ -344,7 +355,7 @@ void FrameGenerationRuntime::request(FrameGenerationMode mode) {
     if(!reason.empty()) state_.set_capability({mode,false,std::move(reason)});
     reset_=true; previous_source_={}; previous_camera_.reset();
 }
-void FrameGenerationRuntime::begin_application_frame(uint64_t application_frame) {
+void FrameGenerationRuntime::begin_application_frame([[maybe_unused]] uint64_t application_frame) {
     dlss_token_={};
 #if HEAVEN_HAS_DLSS
     if(dlss_ && status().requested==FrameGenerationMode::Dlss)
@@ -359,7 +370,7 @@ void FrameGenerationRuntime::end_simulation() {
     }
 #endif
 }
-void FrameGenerationRuntime::native_window_message(uint32_t message) {
+void FrameGenerationRuntime::native_window_message([[maybe_unused]] uint32_t message) {
 #if HEAVEN_HAS_DLSS
     if(dlss_platform_ && dlss_ && dlss_token_.native_token &&
        message==dlss_platform_->latency_ping_message())
@@ -367,7 +378,7 @@ void FrameGenerationRuntime::native_window_message(uint32_t message) {
 #endif
 }
 FrameGenerationStatus FrameGenerationRuntime::status() {
-    std::lock_guard lock(mutex_);
+    std::scoped_lock lock(mutex_);
 #if HEAVEN_HAS_FSR3
     if(platform_) for(const auto& event:platform_->take_presentation_events()) {
         switch(event.kind) {
@@ -404,11 +415,13 @@ FrameGenerationStatus FrameGenerationRuntime::status() {
 #endif
     return snapshot;
 }
-bool FrameGenerationRuntime::prepare(MeshStore& meshes, TextureStore& textures,
-    std::span<const Instance> instances, std::span<const GpuMesh> gpu_meshes,
-    const MaterialResolver& resolver, const AppConfig& config,
-    const Camera& camera, int width, int height, bool has_ui) {
+bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe_unused]] TextureStore& textures,
+    [[maybe_unused]] std::span<const Instance> instances, [[maybe_unused]] std::span<const GpuMesh> gpu_meshes,
+    [[maybe_unused]] const MaterialResolver& resolver, [[maybe_unused]] const AppConfig& config,
+    [[maybe_unused]] const Camera& camera, [[maybe_unused]] int width, [[maybe_unused]] int height, [[maybe_unused]] bool has_ui) {
+#if HEAVEN_HAS_FSR3 || HEAVEN_HAS_DLSS
     const bool was_active=active_;
+#endif
     active_=false;
 #if HEAVEN_HAS_FSR3 || HEAVEN_HAS_DLSS
     const auto requested=status().requested;
@@ -435,7 +448,7 @@ bool FrameGenerationRuntime::prepare(MeshStore& meshes, TextureStore& textures,
         temporal_->invalidate_history();
         if(grass_) grass_->invalidate_history();
         reset_=true;
-        std::lock_guard lock(mutex_);
+        std::scoped_lock lock(mutex_);
         state_.set_capability({requested,false,"Frame generation currently requires SDR output and fixed resolution"});
         return false;
     }
@@ -450,7 +463,7 @@ bool FrameGenerationRuntime::prepare(MeshStore& meshes, TextureStore& textures,
         config.features.lens_flares || config.features.refraction ||
         (config.features.rain && config.weather.rain_intensity>0.0f))) {
         if(was_active) drain();
-        std::lock_guard lock(mutex_);
+        std::scoped_lock lock(mutex_);
         state_.set_capability({requested,false,
             "DLSS temporal coverage currently requires particles, heat haze, cloud layers, god rays, volumetric fog, lens flares, refraction and active rain disabled"});
         reset_=true;
@@ -508,7 +521,7 @@ void FrameGenerationRuntime::prepare_grass(std::span<const TemporalGrassPatch> p
 }
 bool FrameGenerationRuntime::unavailable(std::string reason) {
     active_=false; reset_=true;
-    std::lock_guard lock(mutex_);
+    std::scoped_lock lock(mutex_);
     state_.set_capability({state_.status().requested,false,std::move(reason)});
     return false;
 }
@@ -518,8 +531,8 @@ void FrameGenerationRuntime::render_temporal() {
     core_.renderer->render(temporal_->view()); output_->render_extract();
 }
 void FrameGenerationRuntime::render_composite() { if(active_) output_->render_composite(); }
-void FrameGenerationRuntime::submit(bool accepted,const Camera& camera) {
-    if(!accepted) { std::lock_guard lock(mutex_); state_.record_real_frame(false); return; }
+void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera& camera) {
+    if(!accepted) { std::scoped_lock lock(mutex_); state_.record_real_frame(false); return; }
 #if HEAVEN_HAS_DLSS
     if(active_ && status().requested==FrameGenerationMode::Dlss && dlss_) {
         DlssRuntimeFrame frame;
@@ -536,21 +549,21 @@ void FrameGenerationRuntime::submit(bool accepted,const Camera& camera) {
             [](void* data,const void* context) noexcept {
                 std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
                 auto& owner=*packet->owner;
-                { std::lock_guard lock(owner.mutex_);
+                { std::scoped_lock lock(owner.mutex_);
                   if(packet->frame.reset) owner.state_.invalidate_history();
                   owner.state_.record_real_frame(true); }
                 if(context) {
                     const auto result=owner.dlss_->prepare_native(
                         *static_cast<const filament::backend::VulkanCommandContext*>(context),packet->camera,packet->frame);
-                    if(!result) { std::lock_guard lock(owner.mutex_);
+                    if(!result) { std::scoped_lock lock(owner.mutex_);
                         owner.state_.set_capability({FrameGenerationMode::Dlss,false,result.error()}); }
                     else { const auto provider=owner.dlss_platform_->provider_status();
-                        std::lock_guard lock(owner.mutex_);
+                        std::scoped_lock lock(owner.mutex_);
                         owner.state_.set_capability({FrameGenerationMode::Dlss,
                             provider.available && provider.enabled,provider.reason}); }
                 }
                 else { owner.dlss_->suspend_generation();
-                    std::lock_guard lock(owner.mutex_);
+                    std::scoped_lock lock(owner.mutex_);
                     owner.state_.set_capability({FrameGenerationMode::Dlss,false,
                         "Native Vulkan temporal resources unavailable"}); }
             },packet);
@@ -586,19 +599,19 @@ void FrameGenerationRuntime::submit(bool accepted,const Camera& camera) {
             [](void* data,const void*) noexcept {
                 auto& owner=*static_cast<FrameGenerationRuntime*>(data);
                 uint64_t source;
-                { std::lock_guard lock(owner.mutex_);
+                { std::scoped_lock lock(owner.mutex_);
                   source=owner.state_.record_real_frame(true); }
                 owner.platform_->arm_real(source);
             },this);
         return;
     }
 #endif
-    std::lock_guard lock(mutex_);
+    std::scoped_lock lock(mutex_);
     native_tracking_complete_=false;
     state_.record_real_frame(true);
 }
-void FrameGenerationRuntime::set_bones(int index,std::span<const glm::mat4> matrices) {
-    if(status().requested!=FrameGenerationMode::Off) temporal_->set_bones(index,matrices);
+void FrameGenerationRuntime::set_bones(int mesh_index,std::span<const glm::mat4> matrices) {
+    if(status().requested!=FrameGenerationMode::Off) temporal_->set_bones(mesh_index,matrices);
 }
 void FrameGenerationRuntime::set_positions(uint64_t handle,std::span<const Vertex> vertices) {
     if(status().requested!=FrameGenerationMode::Off) temporal_->set_positions(handle,vertices);
@@ -606,6 +619,6 @@ void FrameGenerationRuntime::set_positions(uint64_t handle,std::span<const Verte
 void FrameGenerationRuntime::invalidate_history() {
     temporal_->invalidate_history(); reset_=true; previous_source_={}; previous_camera_.reset();
     if(grass_) grass_->invalidate_history();
-    std::lock_guard lock(mutex_); state_.invalidate_history();
+    std::scoped_lock lock(mutex_); state_.invalidate_history();
 }
 }

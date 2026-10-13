@@ -3,15 +3,23 @@
 // HEAVEN_DLSS_CONTRACT_TEST_MAIN, for a standalone host acceptance executable.
 #include "dlss_input_validation.h"
 
+#include <cstddef>
+#include <cmath>
 #include <cstdio>
+#include <exception>
 #include <limits>
+#include <numbers>
 #include <type_traits>
 
 namespace heaven {
 namespace {
 
 template <class T> T handle(uintptr_t value) {
-    if constexpr (std::is_pointer_v<T>) return reinterpret_cast<T>(value);
+    if constexpr (std::is_pointer_v<T>) {
+        if (!value) return nullptr;
+        static std::array<std::max_align_t, 8> identities{};
+        return reinterpret_cast<T>(&identities.at(value));
+    }
     else return static_cast<T>(value);
 }
 
@@ -32,7 +40,7 @@ DlssImage test_image(uint32_t width, uint32_t height, VkFormat format) {
 
 DlssPresentInputs valid_inputs() {
     DlssPresentInputs input;
-    input.token.native_token = reinterpret_cast<void*>(4);
+    input.token.native_token = handle<void*>(4);
     input.token.application_frame = 7;
     input.token.stream_frame = 7;
     input.depth = test_image(1280, 720, VK_FORMAT_R32_SFLOAT);
@@ -60,8 +68,6 @@ bool check(bool condition, const char* message) {
     if (!condition) std::fprintf(stderr, "[dlss_contract] %s\n", message);
     return condition;
 }
-
-} // namespace
 
 bool run_dlss_contract_tests() {
     const auto valid = valid_inputs();
@@ -103,6 +109,15 @@ bool run_dlss_contract_tests() {
     reject_change([](auto& in) { in.camera.motion_scale[0] = 0; }, "zero motion scale accepted");
     reject_change([](auto& in) { in.camera.near_plane = in.camera.far_plane; },
         "invalid depth reconstruction accepted");
+    reject_change([](auto& in) { in.camera.vertical_fov_radians = std::numbers::pi_v<float>; },
+        "pi-radian field of view accepted");
+    reject_change([](auto& in) {
+        in.camera.vertical_fov_radians = std::nextafter(std::numbers::pi_v<float>,
+            std::numeric_limits<float>::infinity());
+    }, "field of view above pi accepted");
+    auto near_pi = valid;
+    near_pi.camera.vertical_fov_radians = std::nextafter(std::numbers::pi_v<float>, 0.0f);
+    success &= check(accepts(near_pi), "field of view immediately below pi rejected");
     reject_change([](auto& in) { in.camera.clip_to_previous_clip = {}; },
         "uninitialized temporal transform accepted");
     reject_change([](auto& in) {
@@ -123,7 +138,7 @@ bool run_dlss_contract_tests() {
     // These lifecycle checks are valid in every build. No bootstrap or native
     // handle is supplied, so an unavailable adapter must remain inactive.
     DlssProvider provider;
-    DlssFrameToken token{reinterpret_cast<void*>(4), 7, 7};
+    DlssFrameToken token{handle<void*>(4), 7, 7};
     success &= check(!provider.status().available && !provider.status().enabled,
         "new provider claims generation is active");
     success &= check(!provider.begin_frame(8, token) && !token.native_token,
@@ -142,12 +157,21 @@ bool run_dlss_contract_tests() {
     return success;
 }
 
+} // namespace
 } // namespace heaven
 
-#if defined(HEAVEN_DLSS_CONTRACT_TEST_MAIN)
+#ifdef HEAVEN_DLSS_CONTRACT_TEST_MAIN
 int main() {
-    const bool passed = heaven::run_dlss_contract_tests();
-    std::printf("DLSS host contracts: %s\n", passed ? "PASS" : "FAIL");
-    return passed ? 0 : 1;
+    try {
+        const bool passed = heaven::run_dlss_contract_tests();
+        std::printf("DLSS host contracts: %s\n", passed ? "PASS" : "FAIL");
+        return passed ? 0 : 1;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "DLSS host contracts: exception: %s\n", error.what());
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "DLSS host contracts: unknown exception\n");
+        return 1;
+    }
 }
 #endif

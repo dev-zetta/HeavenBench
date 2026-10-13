@@ -1,4 +1,5 @@
 #include "frame_generation_capture.h"
+#include "test_fake_handle.h"
 
 #include <algorithm>
 #include <array>
@@ -16,10 +17,7 @@
 namespace {
 using namespace bluevk;
 namespace fs = std::filesystem;
-template<class T> T handle(uintptr_t value) {
-    if constexpr (std::is_pointer_v<T>) return reinterpret_cast<T>(value);
-    else return static_cast<T>(value);
-}
+using heaven::test::fake_handle;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -39,56 +37,50 @@ uintptr_t next_handle = 100;
 unsigned api_calls = 0, allocation_calls = 0, fail_allocation = 0, waits = 0, copies = 0;
 VkDeviceSize requirement_padding = 0;
 bool fail_wait = false;
-VKAPI_ATTR void VKAPI_CALL physical_memory(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties* out) {
+VKAPI_ATTR void VKAPI_CALL physical_memory([[maybe_unused]] VkPhysicalDevice physicalDevice, VkPhysicalDeviceMemoryProperties* out) {
     ++api_calls; *out = {}; out->memoryTypeCount = 1;
     out->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 }
-VKAPI_ATTR VkResult VKAPI_CALL create_buffer(VkDevice, const VkBufferCreateInfo* info,
-        const VkAllocationCallbacks*, VkBuffer* out) {
-    ++api_calls; *out = handle<VkBuffer>(next_handle++); buffers.emplace(*out, Buffer{info->size}); return VK_SUCCESS;
+VKAPI_ATTR VkResult VKAPI_CALL create_buffer([[maybe_unused]] VkDevice device, const VkBufferCreateInfo* info, [[maybe_unused]] const VkAllocationCallbacks* allocator, VkBuffer* out) {
+    ++api_calls; *out = fake_handle<VkBuffer>(next_handle++); buffers.emplace(*out, Buffer{info->size}); return VK_SUCCESS;
 }
-VKAPI_ATTR void VKAPI_CALL buffer_requirements(VkDevice, VkBuffer buffer, VkMemoryRequirements* out) {
+VKAPI_ATTR void VKAPI_CALL buffer_requirements([[maybe_unused]] VkDevice device, VkBuffer buffer, VkMemoryRequirements* out) {
     ++api_calls; *out = {buffers.at(buffer).size + requirement_padding, 1, 1};
 }
-VKAPI_ATTR VkResult VKAPI_CALL allocate_memory(VkDevice, const VkMemoryAllocateInfo* info,
-        const VkAllocationCallbacks*, VkDeviceMemory* out) {
+VKAPI_ATTR VkResult VKAPI_CALL allocate_memory([[maybe_unused]] VkDevice device, const VkMemoryAllocateInfo* info, [[maybe_unused]] const VkAllocationCallbacks* allocator, VkDeviceMemory* out) {
     ++api_calls; ++allocation_calls;
     if (allocation_calls == fail_allocation) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    *out = handle<VkDeviceMemory>(next_handle++);
+    *out = fake_handle<VkDeviceMemory>(next_handle++);
     // Only small byte fixtures are mapped; large-limit cases never allocate a
     // real large host array. Size accounting follows the fake native request.
     memories.emplace(*out, Memory{info->allocationSize, std::vector<uint8_t>(std::min<VkDeviceSize>(info->allocationSize, 4096))});
     return VK_SUCCESS;
 }
-VKAPI_ATTR VkResult VKAPI_CALL bind_buffer(VkDevice, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize) {
+VKAPI_ATTR VkResult VKAPI_CALL bind_buffer([[maybe_unused]] VkDevice device, VkBuffer buffer, VkDeviceMemory memory, [[maybe_unused]] VkDeviceSize offset) {
     ++api_calls; buffers.at(buffer).memory = memory; return VK_SUCCESS;
 }
-VKAPI_ATTR void VKAPI_CALL destroy_buffer(VkDevice, VkBuffer buffer, const VkAllocationCallbacks*) {
+VKAPI_ATTR void VKAPI_CALL destroy_buffer([[maybe_unused]] VkDevice device, VkBuffer buffer, [[maybe_unused]] const VkAllocationCallbacks* allocator) {
     ++api_calls; require(buffers.erase(buffer) == 1, "Destroyed unknown or duplicate capture buffer");
 }
-VKAPI_ATTR void VKAPI_CALL free_memory(VkDevice, VkDeviceMemory memory, const VkAllocationCallbacks*) {
+VKAPI_ATTR void VKAPI_CALL free_memory([[maybe_unused]] VkDevice device, VkDeviceMemory memory, [[maybe_unused]] const VkAllocationCallbacks* allocator) {
     ++api_calls; require(memories.erase(memory) == 1, "Freed unknown or duplicate capture memory");
 }
-VKAPI_ATTR void VKAPI_CALL copy_image(VkCommandBuffer, VkImage image, VkImageLayout layout,
-        VkBuffer buffer, uint32_t count, const VkBufferImageCopy* regions) {
+VKAPI_ATTR void VKAPI_CALL copy_image([[maybe_unused]] VkCommandBuffer commandBuffer, VkImage image, VkImageLayout layout, VkBuffer buffer, uint32_t count, const VkBufferImageCopy* regions) {
     ++api_calls; ++copies;
     require(layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && count == 1, "Invalid capture copy contract");
     const size_t bytes = size_t(regions[0].imageExtent.width) * regions[0].imageExtent.height * 4;
     require(images.at(image).size() == bytes, "Capture image extent mismatch");
     memories.at(buffers.at(buffer).memory).bytes = images.at(image);
 }
-VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags,
-        VkDependencyFlags, uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*,
-        uint32_t, const VkImageMemoryBarrier*) { ++api_calls; }
-VKAPI_ATTR VkResult VKAPI_CALL wait(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t) {
+VKAPI_ATTR void VKAPI_CALL barrier([[maybe_unused]] VkCommandBuffer commandBuffer, [[maybe_unused]] VkPipelineStageFlags srcStageMask, [[maybe_unused]] VkPipelineStageFlags dstStageMask, [[maybe_unused]] VkDependencyFlags dependencyFlags, [[maybe_unused]] uint32_t memoryBarrierCount, [[maybe_unused]] const VkMemoryBarrier* memoryBarriers, [[maybe_unused]] uint32_t bufferMemoryBarrierCount, [[maybe_unused]] const VkBufferMemoryBarrier* bufferMemoryBarriers, [[maybe_unused]] uint32_t imageMemoryBarrierCount, [[maybe_unused]] const VkImageMemoryBarrier* imageMemoryBarriers) { ++api_calls; }
+VKAPI_ATTR VkResult VKAPI_CALL wait([[maybe_unused]] VkDevice device, [[maybe_unused]] uint32_t fenceCount, [[maybe_unused]] const VkFence* fences, [[maybe_unused]] VkBool32 waitAll, [[maybe_unused]] uint64_t timeout) {
     ++api_calls; ++waits; return fail_wait ? VK_TIMEOUT : VK_SUCCESS;
 }
-VKAPI_ATTR VkResult VKAPI_CALL map(VkDevice, VkDeviceMemory memory, VkDeviceSize, VkDeviceSize,
-        VkMemoryMapFlags, void** out) {
+VKAPI_ATTR VkResult VKAPI_CALL map([[maybe_unused]] VkDevice device, VkDeviceMemory memory, [[maybe_unused]] VkDeviceSize offset, [[maybe_unused]] VkDeviceSize size, [[maybe_unused]] VkMemoryMapFlags flags, void** out) {
     ++api_calls; *out = memories.at(memory).bytes.data(); return VK_SUCCESS;
 }
-VKAPI_ATTR void VKAPI_CALL unmap(VkDevice, VkDeviceMemory) { ++api_calls; }
-VKAPI_ATTR VkResult VKAPI_CALL invalidate(VkDevice, uint32_t, const VkMappedMemoryRange*) {
+VKAPI_ATTR void VKAPI_CALL unmap([[maybe_unused]] VkDevice device, [[maybe_unused]] VkDeviceMemory memory) { ++api_calls; }
+VKAPI_ATTR VkResult VKAPI_CALL invalidate([[maybe_unused]] VkDevice device, [[maybe_unused]] uint32_t rangeCount, [[maybe_unused]] const VkMappedMemoryRange* ranges) {
     ++api_calls; return VK_SUCCESS;
 }
 void install_fakes() {
@@ -111,12 +103,12 @@ void options(const fs::path& destination, const std::string& start = "1", bool u
     environment("HEAVEN_FG_CAPTURE_UI_INPUTS", ui ? "1" : "");
 }
 constexpr VkExtent2D size{4,4};
-const auto device = handle<VkDevice>(1);
-const auto physical = handle<VkPhysicalDevice>(2);
-const auto commands = handle<VkCommandBuffer>(3);
-const auto fence = handle<VkFence>(4);
-const auto before_image = handle<VkImage>(5), ui_image = handle<VkImage>(6);
-const auto generated_image = handle<VkImage>(7), real_image = handle<VkImage>(8);
+const auto device = fake_handle<VkDevice>(1);
+const auto physical = fake_handle<VkPhysicalDevice>(2);
+const auto commands = fake_handle<VkCommandBuffer>(3);
+const auto fence = fake_handle<VkFence>(4);
+const auto before_image = fake_handle<VkImage>(5), ui_image = fake_handle<VkImage>(6);
+const auto generated_image = fake_handle<VkImage>(7), real_image = fake_handle<VkImage>(8);
 bool prepare(heaven::FrameGenerationCapture& capture, uint64_t source, VkExtent2D extent = size) {
     return capture.prepare_ui_inputs(device, physical, extent,
         VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, source);
@@ -135,10 +127,10 @@ void pair(heaven::FrameGenerationCapture& capture, uint64_t source) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) { std::fprintf(stderr, "Pass a writable temporary test directory\n"); return 2; }
-    const fs::path destination = fs::path(argv[1]) / std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
     try {
+        if (argc != 2) { std::fprintf(stderr, "Pass a writable temporary test directory\n"); return 2; }
+        const fs::path destination = fs::path(argv[1]) / std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count());
         require(!fs::exists(destination), "Refusing to overwrite a capture-contract directory");
         install_fakes();
         environment("HEAVEN_FG_CAPTURE_DIR", ""); environment("HEAVEN_FG_CAPTURE_UI_INPUTS", "1");
@@ -163,10 +155,11 @@ int main(int argc, char** argv) {
         images[generated_image] = std::vector<uint8_t>(64); images[real_image] = std::vector<uint8_t>(64);
         for (unsigned pixel = 0; pixel < 16; ++pixel) {
             const std::array<uint8_t,4> pre{11,73,199,255}, ui{9,35,57,96}, gen{41,93,217,255}, real{47,101,223,255};
-            std::copy(pre.begin(),pre.end(),images[before_image].begin()+pixel*4);
-            std::copy(ui.begin(),ui.end(),images[ui_image].begin()+pixel*4);
-            std::copy(gen.begin(),gen.end(),images[generated_image].begin()+pixel*4);
-            std::copy(real.begin(),real.end(),images[real_image].begin()+pixel*4);
+            const auto pixel_offset = static_cast<std::ptrdiff_t>(pixel) * 4;
+            std::copy(pre.begin(),pre.end(),images[before_image].begin()+pixel_offset);
+            std::copy(ui.begin(),ui.end(),images[ui_image].begin()+pixel_offset);
+            std::copy(gen.begin(),gen.end(),images[generated_image].begin()+pixel_offset);
+            std::copy(real.begin(),real.end(),images[real_image].begin()+pixel_offset);
         }
         options(destination);
         for (unsigned failure = 1; failure <= 4; ++failure) {
@@ -245,7 +238,7 @@ int main(int argc, char** argv) {
         unsigned receipts = 0, ppms = 0, pams = 0;
         const std::string ppm_header = "P6\n4 4\n255\n";
         for (const auto& entry : fs::directory_iterator(destination)) {
-            const auto path = entry.path();
+            const auto& path = entry.path();
             if (path.filename() == "failed-fence" || path.filename() == "failed-export") continue;
             const auto data = contents(path);
             if (path.extension() == ".json") {
@@ -253,7 +246,7 @@ int main(int argc, char** argv) {
                 require(data.find("\"ui_inputs_source_frame\"") != std::string::npos, "Input source metadata missing");
                 require(data.find("source1-") == std::string::npos, "Abandoned source exported");
             } else if (path.extension() == ".ppm") {
-                ++ppms; require(data.size() == ppm_header.size()+48 && data.compare(0,ppm_header.size(),ppm_header)==0, "Invalid native PPM");
+                ++ppms; require(data.size() == ppm_header.size()+48 && data.starts_with(ppm_header), "Invalid native PPM");
                 const auto offset = ppm_header.size(); const bool pre = path.string().find("before-ui") != std::string::npos;
                 const bool real = path.string().find("-real.ppm") != std::string::npos;
                 const std::array<uint8_t,3> expected = pre ? std::array<uint8_t,3>{11,73,199} :
@@ -270,5 +263,7 @@ int main(int argc, char** argv) {
         return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"Capture contract FAIL: %s\n",error.what()); return 1;
+    } catch (...) {
+        std::fprintf(stderr, "Capture contract FAIL: unknown exception\n"); return 1;
     }
 }

@@ -1,13 +1,18 @@
-#pragma once
+#ifndef HEAVEN_DLSS_PLATFORM_H
+#define HEAVEN_DLSS_PLATFORM_H
 
-#if defined(__ANDROID__)
+#ifdef __ANDROID__
 #include <backend/platforms/VulkanPlatformAndroid.h>
-#elif defined(_WIN32)
+#else
+#ifdef _WIN32
 #include <backend/platforms/VulkanPlatformWindows.h>
-#elif defined(__APPLE__)
+#else
+#ifdef __APPLE__
 #include <backend/platforms/VulkanPlatformApple.h>
 #else
 #include <backend/platforms/VulkanPlatformLinux.h>
+#endif
+#endif
 #endif
 #include "dlss_provider.h"
 
@@ -15,14 +20,18 @@
 
 namespace heaven {
 
-#if defined(__ANDROID__)
+#ifdef __ANDROID__
 using DlssNativePlatform = filament::backend::VulkanPlatformAndroid;
-#elif defined(_WIN32)
+#else
+#ifdef _WIN32
 using DlssNativePlatform = filament::backend::VulkanPlatformWindows;
-#elif defined(__APPLE__)
+#else
+#ifdef __APPLE__
 using DlssNativePlatform = filament::backend::VulkanPlatformApple;
 #else
 using DlssNativePlatform = filament::backend::VulkanPlatformLinux;
+#endif
+#endif
 #endif
 
 struct DlssSwapchainDescription {
@@ -76,3 +85,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_DLSS_PLATFORM_H

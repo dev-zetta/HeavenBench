@@ -196,75 +196,75 @@ std::expected<std::unique_ptr<Fsr31Vulkan>, std::string> Fsr31Vulkan::create(con
     return provider;
 }
 
-std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& f) {
+std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& frame) {
     auto& state = *impl_;
-    if (!f.commands || !f.depth.image || !f.motion_vectors.image || !f.hudless_color.image || !f.generated_output.image) {
+    if (!frame.commands || !frame.depth.image || !frame.motion_vectors.image || !frame.hudless_color.image || !frame.generated_output.image) {
         return std::unexpected("FSR 3.1 dispatch requires native commands and four live images");
     }
-    if (!same_extent(f.depth.extent, f.motion_vectors.extent) || !valid_extent(f.depth.extent) ||
-        f.depth.extent.width > state.config.max_render_size.width || f.depth.extent.height > state.config.max_render_size.height ||
-        !same_extent(f.hudless_color.extent, state.config.display_size) || !same_extent(f.generated_output.extent, state.config.display_size) ||
-        f.hudless_color.format != state.config.color_format || f.generated_output.format != state.config.color_format ||
-        f.hudless_color.image == f.generated_output.image) {
+    if (!same_extent(frame.depth.extent, frame.motion_vectors.extent) || !valid_extent(frame.depth.extent) ||
+        frame.depth.extent.width > state.config.max_render_size.width || frame.depth.extent.height > state.config.max_render_size.height ||
+        !same_extent(frame.hudless_color.extent, state.config.display_size) || !same_extent(frame.generated_output.extent, state.config.display_size) ||
+        frame.hudless_color.format != state.config.color_format || frame.generated_output.format != state.config.color_format ||
+        frame.hudless_color.image == frame.generated_output.image) {
         return std::unexpected("FSR 3.1 dispatch image extents/formats do not match the context");
     }
-    for (const auto* input : {&f.depth, &f.motion_vectors, &f.hudless_color}) {
+    for (const auto* input : {&frame.depth, &frame.motion_vectors, &frame.hudless_color}) {
         if (!(input->usage & VK_IMAGE_USAGE_SAMPLED_BIT) ||
             (input->layout != VK_IMAGE_LAYOUT_GENERAL && input->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)) {
             return std::unexpected("FSR 3.1 sampled inputs must enter in GENERAL or SHADER_READ_ONLY_OPTIMAL");
         }
     }
-    if (!(f.hudless_color.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
-        !(f.generated_output.usage & VK_IMAGE_USAGE_STORAGE_BIT) || f.generated_output.layout != VK_IMAGE_LAYOUT_GENERAL ||
-        (f.motion_vectors.format != VK_FORMAT_R16G16_SFLOAT && f.motion_vectors.format != VK_FORMAT_R32G32_SFLOAT) ||
-        (f.depth.format != VK_FORMAT_D32_SFLOAT && f.depth.format != VK_FORMAT_R32_SFLOAT)) {
+    if (!(frame.hudless_color.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
+        !(frame.generated_output.usage & VK_IMAGE_USAGE_STORAGE_BIT) || frame.generated_output.layout != VK_IMAGE_LAYOUT_GENERAL ||
+        (frame.motion_vectors.format != VK_FORMAT_R16G16_SFLOAT && frame.motion_vectors.format != VK_FORMAT_R32G32_SFLOAT) ||
+        (frame.depth.format != VK_FORMAT_D32_SFLOAT && frame.depth.format != VK_FORMAT_R32_SFLOAT)) {
         return std::unexpected("FSR 3.1 requires R32F/D32F depth, RG16F/RG32F velocity, transferable color and GENERAL storage output");
     }
     // Infinite projection uses the exact rendered near plane and the depth
     // flags. A finite sentinel avoids inf/inf in the SDK's unused finite
     // coefficient calculation and never substitutes the culling far plane.
-    const float sdk_far = state.config.infinite_depth ? std::numeric_limits<float>::max() : f.camera_far;
-    if (!std::isfinite(f.frame_time_ms) || f.frame_time_ms <= 0.0f ||
-        !std::isfinite(f.camera_near) || f.camera_near <= 0.0f || !std::isfinite(sdk_far) || sdk_far <= f.camera_near ||
-        !std::isfinite(f.vertical_fov_radians) || f.vertical_fov_radians <= 0.0f || f.vertical_fov_radians >= 3.14f ||
-        !std::isfinite(f.view_units_to_meters) || f.view_units_to_meters <= 0.0f ||
-        !finite_basis(f.camera_up) || !finite_basis(f.camera_right) || !finite_basis(f.camera_forward)) {
+    const float sdk_far = state.config.infinite_depth ? std::numeric_limits<float>::max() : frame.camera_far;
+    if (!std::isfinite(frame.frame_time_ms) || frame.frame_time_ms <= 0.0f ||
+        !std::isfinite(frame.camera_near) || frame.camera_near <= 0.0f || !std::isfinite(sdk_far) || sdk_far <= frame.camera_near ||
+        !std::isfinite(frame.vertical_fov_radians) || frame.vertical_fov_radians <= 0.0f || frame.vertical_fov_radians >= 3.14f ||
+        !std::isfinite(frame.view_units_to_meters) || frame.view_units_to_meters <= 0.0f ||
+        !finite_basis(frame.camera_up) || !finite_basis(frame.camera_right) || !finite_basis(frame.camera_forward)) {
         return std::unexpected("FSR 3.1 requires finite frame timing and a normalized perspective camera");
     }
-    for (float value : f.camera_position) if (!std::isfinite(value)) return std::unexpected("Nonfinite FSR camera position");
-    for (float value : f.jitter_pixels) if (!std::isfinite(value)) return std::unexpected("Nonfinite FSR jitter");
-    for (float value : f.motion_vector_scale) if (!std::isfinite(value) || value == 0.0f) return std::unexpected("Invalid FSR motion-vector scale");
+    for (float value : frame.camera_position) if (!std::isfinite(value)) return std::unexpected("Nonfinite FSR camera position");
+    for (float value : frame.jitter_pixels) if (!std::isfinite(value)) return std::unexpected("Nonfinite FSR jitter");
+    for (float value : frame.motion_vector_scale) if (!std::isfinite(value) || value == 0.0f) return std::unexpected("Invalid FSR motion-vector scale");
     auto dot = [](const auto& a, const auto& b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; };
-    if (std::abs(dot(f.camera_up, f.camera_right)) > 0.01f || std::abs(dot(f.camera_up, f.camera_forward)) > 0.01f ||
-        std::abs(dot(f.camera_right, f.camera_forward)) > 0.01f ||
-        !std::isfinite(f.min_luminance) || !std::isfinite(f.max_luminance) || f.min_luminance < 0.0f || f.max_luminance <= f.min_luminance ||
-        (f.transfer_function != Fsr31TransferFunction::Srgb && f.transfer_function != Fsr31TransferFunction::Pq && f.transfer_function != Fsr31TransferFunction::LinearScRgb)) {
+    if (std::abs(dot(frame.camera_up, frame.camera_right)) > 0.01f || std::abs(dot(frame.camera_up, frame.camera_forward)) > 0.01f ||
+        std::abs(dot(frame.camera_right, frame.camera_forward)) > 0.01f ||
+        !std::isfinite(frame.min_luminance) || !std::isfinite(frame.max_luminance) || frame.min_luminance < 0.0f || frame.max_luminance <= frame.min_luminance ||
+        (frame.transfer_function != Fsr31TransferFunction::Srgb && frame.transfer_function != Fsr31TransferFunction::Pq && frame.transfer_function != Fsr31TransferFunction::LinearScRgb)) {
         return std::unexpected("FSR 3.1 requires an orthogonal camera basis and valid color-transfer/luminance inputs");
     }
 
-    const bool reset = f.reset || state.force_reset || !state.has_history || state.last_frame == std::numeric_limits<uint64_t>::max() || f.frame_id != state.last_frame + 1;
-    const auto commands = ffxGetCommandListVK(f.commands);
-    const auto color = image_resource(f.hudless_color, L"Heaven HUDless color");
+    const bool reset = frame.reset || state.force_reset || !state.has_history || state.last_frame == std::numeric_limits<uint64_t>::max() || frame.frame_id != state.last_frame + 1;
+    const auto commands = ffxGetCommandListVK(frame.commands);
+    const auto color = image_resource(frame.hudless_color, L"Heaven HUDless color");
     FfxFrameInterpolationPrepareDescription prepare{};
     prepare.commandList = commands;
-    prepare.renderSize = dimensions(f.depth.extent);
-    prepare.jitterOffset = {f.jitter_pixels[0], f.jitter_pixels[1]};
-    prepare.motionVectorScale = {f.motion_vector_scale[0], f.motion_vector_scale[1]};
-    prepare.frameTimeDelta = f.frame_time_ms;
-    prepare.cameraNear = f.camera_near;
+    prepare.renderSize = dimensions(frame.depth.extent);
+    prepare.jitterOffset = {frame.jitter_pixels[0], frame.jitter_pixels[1]};
+    prepare.motionVectorScale = {frame.motion_vector_scale[0], frame.motion_vector_scale[1]};
+    prepare.frameTimeDelta = frame.frame_time_ms;
+    prepare.cameraNear = frame.camera_near;
     prepare.cameraFar = sdk_far;
-    prepare.viewSpaceToMetersFactor = f.view_units_to_meters;
-    prepare.cameraFovAngleVertical = f.vertical_fov_radians;
-    prepare.depth = image_resource(f.depth, L"Heaven depth");
-    prepare.motionVectors = image_resource(f.motion_vectors, L"Heaven velocity");
-    prepare.frameID = f.frame_id;
+    prepare.viewSpaceToMetersFactor = frame.view_units_to_meters;
+    prepare.cameraFovAngleVertical = frame.vertical_fov_radians;
+    prepare.depth = image_resource(frame.depth, L"Heaven depth");
+    prepare.motionVectors = image_resource(frame.motion_vectors, L"Heaven velocity");
+    prepare.frameID = frame.frame_id;
     prepare.dilatedDepth = state.resource(2);
     prepare.dilatedMotionVectors = state.resource(3);
     prepare.reconstructedPrevDepth = state.resource(4);
-    std::copy(f.camera_position.begin(), f.camera_position.end(), prepare.cameraPosition);
-    std::copy(f.camera_up.begin(), f.camera_up.end(), prepare.cameraUp);
-    std::copy(f.camera_right.begin(), f.camera_right.end(), prepare.cameraRight);
-    std::copy(f.camera_forward.begin(), f.camera_forward.end(), prepare.cameraForward);
+    std::copy(frame.camera_position.begin(), frame.camera_position.end(), prepare.cameraPosition);
+    std::copy(frame.camera_up.begin(), frame.camera_up.end(), prepare.cameraUp);
+    std::copy(frame.camera_right.begin(), frame.camera_right.end(), prepare.cameraRight);
+    std::copy(frame.camera_forward.begin(), frame.camera_forward.end(), prepare.cameraForward);
     FfxErrorCode result;
     {
         Fsr31PrepareViewScope prepare_scope(state.backend);
@@ -272,7 +272,7 @@ std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& f) 
     }
     if (result != FFX_OK) { state.force_reset = true; return std::unexpected(sdk_error("Interpolation prepare", result)); }
 
-    const auto transfer = static_cast<FfxBackbufferTransferFunction>(f.transfer_function);
+    const auto transfer = static_cast<FfxBackbufferTransferFunction>(frame.transfer_function);
     FfxOpticalflowDispatchDescription optical{};
     optical.commandList = commands;
     optical.color = color;
@@ -280,32 +280,32 @@ std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& f) 
     optical.opticalFlowSCD = state.resource(1);
     optical.reset = reset;
     optical.backbufferTransferFunction = transfer;
-    optical.minMaxLuminance = {f.min_luminance, f.max_luminance};
+    optical.minMaxLuminance = {frame.min_luminance, frame.max_luminance};
     result = ffxOpticalflowContextDispatch(state.optical_flow.get(), &optical);
     if (result != FFX_OK) { state.force_reset = true; return std::unexpected(sdk_error("Optical-flow dispatch", result)); }
 
     FfxFrameInterpolationDispatchDescription dispatch{};
     dispatch.commandList = commands;
     dispatch.displaySize = dimensions(state.config.display_size);
-    dispatch.renderSize = dimensions(f.depth.extent);
+    dispatch.renderSize = dimensions(frame.depth.extent);
     dispatch.currentBackBuffer = color;
-    dispatch.output = image_resource(f.generated_output, L"Heaven generated frame");
+    dispatch.output = image_resource(frame.generated_output, L"Heaven generated frame");
     dispatch.interpolationRect = {0, 0, static_cast<int32_t>(state.config.display_size.width), static_cast<int32_t>(state.config.display_size.height)};
     dispatch.opticalFlowVector = state.resource(0);
     dispatch.opticalFlowSceneChangeDetection = state.resource(1);
     dispatch.opticalFlowBufferSize = {dispatch.opticalFlowVector.description.width, dispatch.opticalFlowVector.description.height};
-    dispatch.opticalFlowScale = {1.0f / state.config.display_size.width, 1.0f / state.config.display_size.height};
+    dispatch.opticalFlowScale = {1.0f / static_cast<float>(state.config.display_size.width), 1.0f / static_cast<float>(state.config.display_size.height)};
     dispatch.opticalFlowBlockSize = 8;
-    dispatch.cameraNear = f.camera_near;
+    dispatch.cameraNear = frame.camera_near;
     dispatch.cameraFar = sdk_far;
-    dispatch.cameraFovAngleVertical = f.vertical_fov_radians;
-    dispatch.viewSpaceToMetersFactor = f.view_units_to_meters;
-    dispatch.frameTimeDelta = f.frame_time_ms;
+    dispatch.cameraFovAngleVertical = frame.vertical_fov_radians;
+    dispatch.viewSpaceToMetersFactor = frame.view_units_to_meters;
+    dispatch.frameTimeDelta = frame.frame_time_ms;
     dispatch.reset = reset;
     dispatch.backBufferTransferFunction = transfer;
-    dispatch.minMaxLuminance[0] = f.min_luminance;
-    dispatch.minMaxLuminance[1] = f.max_luminance;
-    dispatch.frameID = f.frame_id;
+    dispatch.minMaxLuminance[0] = frame.min_luminance;
+    dispatch.minMaxLuminance[1] = frame.max_luminance;
+    dispatch.frameID = frame.frame_id;
     dispatch.dilatedDepth = state.resource(2);
     dispatch.dilatedMotionVectors = state.resource(3);
     dispatch.reconstructedPrevDepth = state.resource(4);
@@ -313,7 +313,7 @@ std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& f) 
     if (result != FFX_OK) { state.force_reset = true; return std::unexpected(sdk_error("Interpolation dispatch", result)); }
     state.force_reset = false;
     state.has_history = true;
-    state.last_frame = f.frame_id;
+    state.last_frame = frame.frame_id;
     return !reset;
 }
 

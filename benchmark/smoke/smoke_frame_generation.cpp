@@ -7,22 +7,34 @@
 #include "rhi/filament_backend.h"
 
 #include <filament/Engine.h>
+#include <filament/Renderer.h>
 #include <filament/View.h>
 #include <SDL2/SDL.h>
 #include <imgui.h>
 
 #include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
+
+#if HEAVEN_HAS_FSR3 && defined(__linux__)
+#include <cerrno>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 namespace heaven::smoke {
 namespace {
@@ -32,6 +44,106 @@ constexpr const char* kTag = "[smoke_frame_generation]";
 void require(bool condition, const char* reason) {
     if (!condition) throw std::runtime_error(reason);
 }
+
+#if defined(__linux__)
+// A test-only driver gate holds a queued packet across an actual process stop.
+// The controller releases rejected attempts without stopping them. Callback
+// data owns its pipe/state until execution, including exceptional teardown.
+class ProcessPauseGate {
+public:
+    enum class Mode { Control, Pause };
+    ProcessPauseGate() : state_(std::make_shared<State>()) {
+        const char* value = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE_FD");
+        require(value && *value, "process pause requires the maintained pipe controller");
+        const std::string_view input(value);
+        int descriptor = -1;
+        const auto parsed = std::from_chars(input.data(), input.data() + input.size(), descriptor);
+        require(parsed.ec == std::errc{} && parsed.ptr == input.data() + input.size() &&
+                descriptor >= 3 && ::fcntl(descriptor, F_GETFD) >= 0,
+                "invalid process-pause controller descriptor");
+        state_->descriptor = descriptor;
+    }
+    void begin(Mode mode, uint64_t source) {
+        require(!armed_ && (!queued_ || state_->done.load()), "process gate reused before callback retirement");
+        ++serial_; source_ = source; mode_ = mode; armed_ = true; queued_ = false;
+        state_->frontend.store(-1); state_->failure.store(0); state_->done.store(false);
+        state_->held_ns.store(0);
+    }
+    bool armed() const noexcept { return armed_; }
+    bool queued() const noexcept { return queued_; }
+    void enqueue(filament::Renderer& renderer) {
+        require(armed_ && !queued_, "process gate queued more than once");
+        auto packet = std::make_unique<Packet>(Packet{state_, serial_, source_, mode_});
+        renderer.nativeCommand(nullptr, nullptr, nullptr, nullptr, callback, packet.get());
+        packet.release(); queued_ = true; armed_ = false;
+    }
+    void frontend_complete(bool accepted, uint64_t epoch, bool ready) noexcept {
+        state_->frontend.store(accepted ? 1 : 0, std::memory_order_release);
+        std::printf("[smoke_frame_generation_process_pause] packet-queued serial=%llu source=%llu mode=%s accepted=%d epoch=%llu ready=%d\n",
+            static_cast<unsigned long long>(serial_), static_cast<unsigned long long>(source_),
+            mode_ == Mode::Pause ? "pause" : "control", accepted ? 1 : 0,
+            static_cast<unsigned long long>(epoch), ready ? 1 : 0);
+        std::fflush(stdout);
+    }
+    bool completed() const noexcept { return state_->done.load() && state_->failure.load() == 0; }
+    uint64_t held_ns() const noexcept { return state_->held_ns.load(); }
+    void cancel() noexcept { state_->cancelled.store(true); }
+private:
+    struct State {
+        ~State() { if (descriptor >= 0) ::close(descriptor); }
+        int descriptor = -1;
+        std::atomic<int> frontend{-1}, failure{0};
+        std::atomic<bool> done{false}, cancelled{false};
+        std::atomic<uint64_t> held_ns{0};
+    };
+    struct Packet {
+        std::shared_ptr<State> state;
+        uint64_t serial, source;
+        Mode mode;
+    };
+    static void callback(void* data, [[maybe_unused]] const void* native_context) noexcept {
+        const std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
+        auto& state = *packet->state;
+        const auto start = std::chrono::steady_clock::now();
+        std::printf("[smoke_frame_generation_process_pause] gate-enter serial=%llu source=%llu mode=%s\n",
+            static_cast<unsigned long long>(packet->serial), static_cast<unsigned long long>(packet->source),
+            packet->mode == Mode::Pause ? "pause" : "control");
+        std::fflush(stdout);
+        char release = 0;
+        int failure = 0;
+        while (!release && !failure) {
+            if (state.cancelled.load()) { failure = 1; break; }
+            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
+                failure = 2; break;
+            }
+            pollfd input{state.descriptor, POLLIN, 0};
+            const int polled = ::poll(&input, 1, 50);
+            if (polled < 0 && errno != EINTR) { failure = 3; break; }
+            if (polled <= 0) continue;
+            if ((input.revents & POLLIN) != 0) {
+                const auto bytes = ::read(state.descriptor, &release, 1);
+                if (bytes < 0 && errno == EINTR) continue;
+                if (bytes != 1) failure = 4;
+            } else if (input.revents != 0) failure = 5;
+        }
+        const int accepted = state.frontend.load(std::memory_order_acquire);
+        const char expected = accepted == 0 ? 'R' : packet->mode == Mode::Pause ? 'P' : 'C';
+        if (!failure && (accepted < 0 || release != expected)) failure = 6;
+        const auto held = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        state.held_ns.store(static_cast<uint64_t>(held));
+        state.failure.store(failure); state.done.store(true);
+        std::printf("[smoke_frame_generation_process_pause] gate-release serial=%llu source=%llu held_ns=%llu failure=%d\n",
+            static_cast<unsigned long long>(packet->serial), static_cast<unsigned long long>(packet->source),
+            static_cast<unsigned long long>(held), failure);
+        std::fflush(stdout);
+    }
+    std::shared_ptr<State> state_;
+    uint64_t serial_ = 0, source_ = 0;
+    Mode mode_ = Mode::Control;
+    bool armed_ = false, queued_ = false;
+};
+#endif
 
 // Renderer scene/depth/temporal borrowers must retire before mesh owners.
 bool retire_meshes(FilamentBackend& backend, std::optional<RenderTestScene>& scene) {
@@ -142,8 +254,23 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
     int width = ctx.width, height = ctx.height;
     const auto* ui_oracle_setting = std::getenv("HEAVEN_SMOKE_FG_UI_ORACLE");
     const bool ui_oracle = ui_oracle_setting && std::string_view(ui_oracle_setting) == "1";
+    const char* process_setting = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE");
+    const bool process_pause = process_setting && std::string_view(process_setting) == "1";
+#if defined(__linux__)
+    std::unique_ptr<ProcessPauseGate> process_gate;
+    std::optional<ProcessPauseGate::Mode> gate_mode;
+#endif
+    bool asynchronous_frames = false;
     bool ok = true;
     try {
+#if defined(__linux__)
+        if (process_pause) {
+            require(!ui_oracle && original.renderer, "process pause requires ordinary lifecycle UI and renderer");
+            process_gate = std::make_unique<ProcessPauseGate>();
+        }
+#else
+        require(!process_pause, "process pause controller requires native Linux");
+#endif
         AppConfig config = ctx.config;
         require(apply_render_test_scene_defaults(config, "animation"), "animation defaults unavailable");
         config.frame_generation = FrameGenerationMode::Fsr3;
@@ -173,6 +300,9 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         const auto* ui_context = ImGui::GetCurrentContext();
         backend.overlay_set_draw([&] {
             ++ui_calls;
+#if defined(__linux__)
+            if (process_gate && process_gate->armed()) process_gate->enqueue(*original.renderer);
+#endif
             if (ui_oracle) {
                 // Exact opaque sentinels make native generated/real UI placement
                 // independently observable. The moving block alternates on
@@ -241,9 +371,16 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
             const auto before = snapshot();
             const uint64_t first_attempt = attempts;
             unsigned accepted = 0;
-            const auto deadline = SDL_GetTicks64() + 15000;
-            while (accepted < count && attempts - first_attempt < 192 && SDL_GetTicks64() < deadline) {
+            const auto deadline = SDL_GetTicks64() + (asynchronous_frames ? 30000 : 15000);
+            const uint64_t attempt_limit = asynchronous_frames ? uint64_t(count) * 32 + 192 : 192;
+            while (accepted < count && attempts - first_attempt < attempt_limit && SDL_GetTicks64() < deadline) {
                 SDL_PumpEvents();
+#if defined(__linux__)
+                if (gate_mode) {
+                    require(count == 1, "queued process gate requires one accepted source");
+                    process_gate->begin(*gate_mode, before.counters.real_frames + 1);
+                }
+#endif
                 backend.begin_application_frame(++attempts);
                 const float time = float(accepted_total) / 60.0f;
                 backend.set_capture_time(time);
@@ -269,7 +406,25 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                 const auto frame = backend.render_frame(scene->scene.instances, dirty,
                     scene->scene.gpu_meshes, resolve, camera, lighting, weather, tonemap, width, height);
                 if (frame.presented) { ++accepted; ++accepted_total; }
-                original.engine->flushAndWait();
+#if defined(__linux__)
+                if (gate_mode) {
+                    require(process_gate->queued(), "process gate was not queued before the SDK callback");
+                    // This reads owner counters without GPU draining. Any reset
+                    // performed by prepare() would otherwise mask the queued-
+                    // callback gap under test. No subsequent prepare runs until
+                    // this exact source has completed and its oracle is checked.
+                    const auto queued = backend.frame_generation_status();
+                    const bool unchanged = queued.history_epoch == before.history_epoch &&
+                        queued.history_ready && queued.counters.real_frames == before.counters.real_frames;
+                    process_gate->frontend_complete(frame.presented && unchanged,
+                        queued.history_epoch, queued.history_ready);
+                    original.engine->flushAndWait();
+                    require(process_gate->completed(), "process gate controller failed or timed out");
+                    require(!frame.presented || unchanged, "frontend reset preceded queued process pause");
+                    if (frame.presented) gate_mode.reset();
+                } else
+#endif
+                if (!asynchronous_frames) original.engine->flushAndWait();
                 require(ImGui::GetCurrentContext() == ui_context, "UI target lifecycle replaced its context");
                 if (!frame.presented) SDL_Delay(2);
             }
@@ -303,13 +458,63 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         require(bone_updates > 0 && ui_calls >= attempts, "fixture never exercised actual bones/UI preparation");
         if (ui_oracle) std::printf("%s native UI oracle: opaque sentinels and alternating accepted-source block, initial sources=12\n", kTag);
 
+#if defined(__linux__)
+        if (process_pause) {
+            const auto owners = [&] {
+                return std::array{original.engine->getBufferObjectCount(), original.engine->getViewCount(),
+                    original.engine->getSceneCount(), original.engine->getSwapChainCount(),
+                    original.engine->getVertexBufferCount(), original.engine->getIndexBufferCount(),
+                    original.engine->getSkinningBufferCount(), original.engine->getInstanceBufferCount(),
+                    original.engine->getTextureCount(), original.engine->getRenderTargetCount()};
+            };
+            asynchronous_frames = true;
+            const auto async_before = frames(128, "process pause asynchronous ring warmup");
+            require_active(async_before);
+            const auto owner_baseline = owners();
+            asynchronous_frames = false;
+            gate_mode = ProcessPauseGate::Mode::Control;
+            const auto control = frames(1, "queued no-pause control");
+            require(control.history_epoch == async_before.history_epoch &&
+                    control.counters.generated_frames == async_before.counters.generated_frames + 1 &&
+                    control.counters.generated_presented_frames == async_before.counters.generated_presented_frames + 1,
+                    "no-pause queued gate did not interpolate exactly one source");
+            gate_mode = ProcessPauseGate::Mode::Pause;
+            const auto suspended = frames(1, "queued source after process SIGCONT");
+            require(process_gate->held_ns() >= 500000000,
+                    "process pause did not exceed the independent half-second minimum");
+            require(suspended.counters.real_frames == control.counters.real_frames + 1 &&
+                    suspended.counters.real_presented_frames == control.counters.real_presented_frames + 1,
+                    "queued process pause lost or duplicated its real source");
+            std::printf("[smoke_frame_generation_process_pause] first-resumed source=%llu epoch_before=%llu epoch_after=%llu generated_before=%llu generated_after=%llu native_generated_before=%llu native_generated_after=%llu\n",
+                static_cast<unsigned long long>(suspended.counters.real_frames),
+                static_cast<unsigned long long>(control.history_epoch), static_cast<unsigned long long>(suspended.history_epoch),
+                static_cast<unsigned long long>(control.counters.generated_frames), static_cast<unsigned long long>(suspended.counters.generated_frames),
+                static_cast<unsigned long long>(control.counters.generated_presented_frames), static_cast<unsigned long long>(suspended.counters.generated_presented_frames));
+            require(suspended.history_epoch > control.history_epoch &&
+                    suspended.counters.generated_frames == control.counters.generated_frames &&
+                    suspended.counters.generated_presented_frames == control.counters.generated_presented_frames,
+                    "queued callback interpolated across OS process suspension");
+            const auto recovered = frames(5, "queued process pause recovery");
+            require_active(recovered);
+            require(recovered.counters.generated_frames > suspended.counters.generated_frames &&
+                    recovered.counters.generated_presented_frames > suspended.counters.generated_presented_frames,
+                    "process-pause history did not recover within five accepted sources");
+            asynchronous_frames = true;
+            require_active(frames(128, "process pause asynchronous ring recovery"));
+            asynchronous_frames = false;
+            require(owners() == owner_baseline, "process-pause asynchronous phases leaked Filament owners");
+            std::printf("[smoke_frame_generation_process_pause] PASS: same queued source reset, five-source recovery, 256 asynchronous sources and exact owner counts\n");
+        }
+#endif
+
         // A wall-time pause must invalidate SDK and geometry history even when
         // camera, drawable and simulation time remain continuous. This is a
         // Linux long-gap control, not a physical Android activity test.
+        const auto before_long_gap = snapshot();
         SDL_Delay(300);
         const auto resumed = frames(1, "pause first source");
-        require(resumed.history_epoch > initial.history_epoch &&
-                resumed.counters.generated_frames == initial.counters.generated_frames,
+        require(resumed.history_epoch > before_long_gap.history_epoch &&
+                resumed.counters.generated_frames == before_long_gap.counters.generated_frames,
                 "pause reused interpolation history from before the long gap");
         const auto pause_recovery = frames(5, "pause recovery");
         require_active(pause_recovery);
@@ -408,6 +613,9 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         std::printf("%s FAIL: %s\n", kTag, error.what());
         ok = false;
     }
+#if defined(__linux__)
+    if (process_gate) process_gate->cancel();
+#endif
     ok = restore.run() && ok;
     if (!ok) return CaseResult::Fail;
     std::printf("%s PASS: %llu accepted sources, native interpolation/submission controls, "

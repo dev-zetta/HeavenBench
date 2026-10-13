@@ -4,15 +4,22 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <limits>
+#include <numbers>
 #include <type_traits>
 
 namespace heaven {
 namespace {
 
 template<class T> T fake_handle(uintptr_t value) {
-    if constexpr (std::is_pointer_v<T>) return reinterpret_cast<T>(value);
+    if constexpr (std::is_pointer_v<T>) {
+        if (!value) return nullptr;
+        static std::array<std::max_align_t, 8> identities{};
+        return reinterpret_cast<T>(&identities.at(value));
+    }
     else return static_cast<T>(value);
 }
 
@@ -41,8 +48,6 @@ glm::vec3 screen_from_gl(const glm::vec4& clip) {
             0.5f - 0.5f * clip.y / clip.w,
             0.5f - 0.5f * clip.z / clip.w};
 }
-
-} // namespace
 
 bool run_dlss_runtime_bridge_tests() {
     constexpr float near_plane = 0.5f;
@@ -115,6 +120,17 @@ bool run_dlss_runtime_bridge_tests() {
     success &= check(!dlss_runtime_detail::camera_constants(glm::inverse(view), invalid,
         current_vp, previous_vp, near_plane, 2000, fov, aspect, false),
         "non-finite camera accepted");
+    // Retain well-conditioned matrices to isolate the scalar FOV contract.
+    const auto with_fov = [&](float value) {
+        return dlss_runtime_detail::camera_constants(glm::inverse(view), projection,
+            current_vp, previous_vp, near_plane, std::numeric_limits<float>::max(),
+            value, aspect, false);
+    };
+    success &= check(!with_fov(std::numbers::pi_v<float>), "pi-radian field of view accepted");
+    success &= check(!with_fov(std::nextafter(std::numbers::pi_v<float>,
+        std::numeric_limits<float>::infinity())), "field of view above pi accepted");
+    success &= check(with_fov(std::nextafter(std::numbers::pi_v<float>, 0.0f)).has_value(),
+        "field of view immediately below pi rejected");
 
     filament::backend::VulkanCommandImage native;
     native.image = fake_handle<VkImage>(1);
@@ -140,12 +156,21 @@ bool run_dlss_runtime_bridge_tests() {
     return success;
 }
 
+} // namespace
 } // namespace heaven
 
-#if defined(HEAVEN_DLSS_RUNTIME_INPUT_TEST_MAIN)
+#ifdef HEAVEN_DLSS_RUNTIME_INPUT_TEST_MAIN
 int main() {
-    const bool passed = heaven::run_dlss_runtime_bridge_tests();
-    std::printf("DLSS runtime camera/layout contracts: %s\n", passed ? "PASS" : "FAIL");
-    return passed ? 0 : 1;
+    try {
+        const bool passed = heaven::run_dlss_runtime_bridge_tests();
+        std::printf("DLSS runtime camera/layout contracts: %s\n", passed ? "PASS" : "FAIL");
+        return passed ? 0 : 1;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "DLSS runtime camera/layout contracts: exception: %s\n", error.what());
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "DLSS runtime camera/layout contracts: unknown exception\n");
+        return 1;
+    }
 }
 #endif

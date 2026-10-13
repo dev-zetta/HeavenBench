@@ -19,7 +19,7 @@ DlssRuntimeLoader::~DlssRuntimeLoader() {
 #endif
 }
 
-bool DlssRuntimeLoader::load(const std::filesystem::path& absolute_directory, std::string& reason) {
+bool DlssRuntimeLoader::load([[maybe_unused]] const std::filesystem::path& absolute_directory, std::string& reason) {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE && defined(_WIN32)
     if (module_) { reason = "Streamline interposer is already loaded"; return false; }
     if (absolute_directory.empty() || !absolute_directory.is_absolute()) {
@@ -59,18 +59,16 @@ bool DlssRuntimeLoader::load(const std::filesystem::path& absolute_directory, st
     }
     return true;
 #else
-    (void)absolute_directory;
     reason = "Native DLSS frame generation requires the optional Windows Streamline build";
     return false;
 #endif
 }
 
-DlssRuntimeLoader::Function DlssRuntimeLoader::find_export(const char* name) const noexcept {
+DlssRuntimeLoader::Function DlssRuntimeLoader::find_export([[maybe_unused]] const char* name) const noexcept {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE && defined(_WIN32)
     return module_ && name ? reinterpret_cast<Function>(
         GetProcAddress(static_cast<HMODULE>(module_), name)) : nullptr;
 #else
-    (void)name;
     return nullptr;
 #endif
 }

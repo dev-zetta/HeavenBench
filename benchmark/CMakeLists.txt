@@ -902,7 +902,9 @@ add_executable(heaven_filament_ssr_variant_tests
     src/rhi/frame_generation/filament_ssr_variant_test.cpp
     ../lib/filament/libs/filabridge/src/Variant.cpp
     ../lib/filament/libs/filamat/src/MaterialVariants.cpp)
-target_compile_features(heaven_filament_ssr_variant_tests PRIVATE cxx_std_17)
+# This fixture compiles Filament sources and includes DriverEnums.h, whose
+# designated stencil initializers require C++20 on native MSVC.
+target_compile_features(heaven_filament_ssr_variant_tests PRIVATE cxx_std_20)
 target_include_directories(heaven_filament_ssr_variant_tests SYSTEM PRIVATE
     ../lib/filament/libs/filabridge/include
     ../lib/filament/filament/include
@@ -961,6 +963,14 @@ add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        # CPU-only controller checks; the real GPU pause fixture stays opt-in.
+        add_test(NAME heaven_frame_generation_pause_controller
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/frame_generation_process_pause_test.py
+                    --self-test --work-dir "${CMAKE_CURRENT_BINARY_DIR}/frame-generation-pause-controller")
+        set_tests_properties(heaven_frame_generation_pause_controller PROPERTIES TIMEOUT 30)
+    endif()
     add_test(NAME heaven_fsr31_source_contract
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/verify_fsr31_source_test.py)

@@ -86,14 +86,14 @@ bool TemporalGrass::rebuild(std::span<const TemporalGrassPatch> patches) {
 }
 
 bool TemporalGrass::prepare(std::span<const TemporalGrassPatch> patches,
-        std::span<const Instance> instances, float time, const glm::mat4& clip) {
+        std::span<const Instance> instances, float time, const glm::mat4& clip_from_user_world) {
     prepared_ = false;
-    if (!core_.engine || !scene_ || !material_ || !std::isfinite(time) || !finite(clip)) {
+    if (!core_.engine || !scene_ || !material_ || !std::isfinite(time) || !finite(clip_from_user_world)) {
         invalidate_history();
         return false;
     }
     if (!matching_ranges(patches) && !rebuild(patches)) return false;
-    current_clip_ = clip;
+    current_clip_ = clip_from_user_world;
     current_time_ = time;
     // FView::computeCameraInfo rotates Filament world by transpose(IBL
     // rotation). Visible grass adds its wind in that world, so convert it back
@@ -144,7 +144,7 @@ bool TemporalGrass::prepare(std::span<const TemporalGrassPatch> patches,
         proxy.material->setParameter("currentWindToUser", matrix_parameter(current_wind_to_user_));
         proxy.material->setParameter("previousWindToUser", matrix_parameter(previous_wind_to_user_));
         proxy.material->setParameter("previousModel", glm_to_filament(proxy.previous_model));
-        proxy.material->setParameter("currentClipFromUserWorld", glm_to_filament(clip));
+        proxy.material->setParameter("currentClipFromUserWorld", glm_to_filament(clip_from_user_world));
         proxy.material->setParameter("previousClipFromUserWorld", glm_to_filament(previous_clip_));
         proxy.material->setParameter("historyValid", valid);
         if (visible) {

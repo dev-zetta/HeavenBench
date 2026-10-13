@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -49,6 +50,7 @@ struct FrameGenerationCapture::Impl {
     std::filesystem::path directory;
     std::string prefix;
     std::string error;
+    bool error_storage_failed = false;
     VkDevice device{};
     VkExtent2D extent{};
     VkFormat format = VK_FORMAT_UNDEFINED;
@@ -78,7 +80,11 @@ struct FrameGenerationCapture::Impl {
         pending = false;
     }
     void fail(const char* reason) noexcept {
-        try { error = reason; } catch (...) {}
+        try { error = reason; error_storage_failed = false; }
+        catch (...) {
+            error_storage_failed = true;
+            std::fprintf(stderr, "Native capture error could not be retained: %s\n", reason);
+        }
         disabled = true;
         clear_ui_stage();
         clear_pair();
@@ -169,9 +175,18 @@ struct FrameGenerationCapture::Impl {
 
     void write_image(size_t index, VkFormat image_format, bool preserve_alpha,
             const std::filesystem::path& destination) {
-        void* mapping = nullptr;
-        require(vkMapMemory(device, buffers[index].memory, 0, VK_WHOLE_SIZE, 0, &mapping), "Map native capture");
-        try {
+        struct Mapping {
+            VkDevice device;
+            VkDeviceMemory memory;
+            void* address = nullptr;
+            Mapping(VkDevice device_in, VkDeviceMemory memory_in) : device(device_in), memory(memory_in) {
+                require(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &address), "Map native capture");
+            }
+            ~Mapping() { vkUnmapMemory(device, memory); }
+            Mapping(const Mapping&) = delete;
+            Mapping& operator=(const Mapping&) = delete;
+        } mapping(device, buffers[index].memory);
+        {
             if (!buffers[index].coherent) {
                 VkMappedMemoryRange range{}; range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
                 range.memory = buffers[index].memory;
@@ -181,7 +196,7 @@ struct FrameGenerationCapture::Impl {
             const auto temporary = destination.string() + ".tmp";
             std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
             stream.exceptions(std::ios::badbit | std::ios::failbit);
-            const auto* pixels = static_cast<const uint8_t*>(mapping);
+            const auto* pixels = static_cast<const uint8_t*>(mapping.address);
             if (preserve_alpha) {
                 // Input validation fixes this buffer to RGBA8_UNORM. PAM keeps
                 // the actual premultiplied RGB and alpha without conversion.
@@ -196,17 +211,16 @@ struct FrameGenerationCapture::Impl {
                 for (uint32_t y = 0; y < extent.height; ++y) {
                     for (uint32_t x = 0; x < extent.width; ++x) {
                         const auto* pixel = pixels + (size_t(y) * extent.width + x) * 4;
-                        row[x * 3] = static_cast<char>(pixel[bgra ? 2 : 0]);
-                        row[x * 3 + 1] = static_cast<char>(pixel[1]);
-                        row[x * 3 + 2] = static_cast<char>(pixel[bgra ? 0 : 2]);
+                        row[size_t(x) * 3] = static_cast<char>(pixel[bgra ? 2 : 0]);
+                        row[size_t(x) * 3 + 1] = static_cast<char>(pixel[1]);
+                        row[size_t(x) * 3 + 2] = static_cast<char>(pixel[bgra ? 0 : 2]);
                     }
                     stream.write(row.data(), static_cast<std::streamsize>(row.size()));
                 }
             }
             stream.close();
             std::filesystem::rename(temporary, destination);
-        } catch (...) { vkUnmapMemory(device, buffers[index].memory); throw; }
-        vkUnmapMemory(device, buffers[index].memory);
+        }
     }
 };
 
@@ -368,7 +382,7 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
             << ",\n  \"real_present_return_cpu_monotonic_ns\": " << real_present_ns
             << ",\n  \"readback_fence_completed_cpu_monotonic_ns\": " << completed
             << ",\n  \"diagnostic_gpu_wait_enabled\": true,\n  \"display_scanout_verified\": false,\n"
-            << "  \"generated\": \"" << generated << "\",\n  \"real\": \"" << real << '"';
+            << R"(  "generated": ")" << generated << "\",\n  \"real\": \"" << real << '"';
         if (p.ui_requested) {
             stream << ",\n  \"ui_inputs_source_frame\": " << p.pair_ui_source
                 << ",\n  \"generated_before_ui_vk_format\": " << VK_FORMAT_R8G8B8A8_UNORM
@@ -387,7 +401,11 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
         return false;
     }
 }
-std::string FrameGenerationCapture::last_error() const { return impl_ ? impl_->error : std::string{}; }
+std::string FrameGenerationCapture::last_error() const {
+    if (!impl_) return {};
+    if (impl_->error_storage_failed) return "Native capture failed; error text allocation failed";
+    return impl_->error;
+}
 void FrameGenerationCapture::release_after_drain() { if (impl_) impl_->release(); }
 
 } // namespace heaven

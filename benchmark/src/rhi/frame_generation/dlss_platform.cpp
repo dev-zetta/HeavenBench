@@ -22,7 +22,7 @@ struct DlssPlatform::Impl {
     bool creation_failed = false;
     VkResult creation_result = VK_SUCCESS;
     std::atomic<bool> bound{false};
-#if defined(_WIN32)
+#ifdef _WIN32
     struct Hooks {
         PFN_vkCreateWin32SurfaceKHR create_surface{};
         PFN_vkDestroySurfaceKHR destroy_surface{};
@@ -83,12 +83,12 @@ struct DlssPlatform::Impl {
     void publish(std::string reason = {}) {
         auto state = provider.status();
         if (!reason.empty()) { state.available = false; state.enabled = false; state.reason = std::move(reason); }
-        std::lock_guard lock(mutex);
+        std::scoped_lock lock(mutex);
         snapshot = std::move(state);
     }
 
     void publish_swapchain(const Base::SwapChainBundle& bundle, bool surface, uint64_t flags) {
-        std::lock_guard lock(mutex);
+        std::scoped_lock lock(mutex);
         ++swapchain.epoch;
         swapchain.format = bundle.colorFormat;
         swapchain.extent = bundle.extent;
@@ -108,7 +108,7 @@ DlssPlatform::DlssPlatform(const DlssBootstrapOptions& options) : impl_(std::mak
 
 DlssPlatform::~DlssPlatform() {
     // Engine must have called terminate first, while its device still existed.
-#if defined(_WIN32)
+#ifdef _WIN32
     impl_->restore();
 #endif
 }
@@ -141,7 +141,7 @@ filament::backend::Driver* DlssPlatform::createDriver(void* sharedContext,
         const filament::backend::Platform::DriverConfig& config) {
     if (sharedContext) impl_->creation_enabled = false;
     auto* driver = Base::createDriver(sharedContext, config);
-#if defined(_WIN32)
+#ifdef _WIN32
     if (impl_->bootstrapped && !sharedContext && !impl_->creation_failed &&
             impl_->install(getInstance(), getDevice()) &&
             impl_->provider.adopt_interposed_device(getInstance(), getPhysicalDevice(), getDevice(), true)) {
@@ -187,11 +187,11 @@ void DlssPlatform::suspend_generation() {
     impl_->publish();
 }
 DlssProviderStatus DlssPlatform::provider_status() const {
-    std::lock_guard lock(impl_->mutex);
+    std::scoped_lock lock(impl_->mutex);
     return impl_->snapshot;
 }
 DlssSwapchainDescription DlssPlatform::swapchain_description() const {
-    std::lock_guard lock(impl_->mutex);
+    std::scoped_lock lock(impl_->mutex);
     return impl_->swapchain;
 }
 
@@ -236,7 +236,7 @@ void DlssPlatform::destroy(SwapChainPtr handle) {
     Base::destroy(handle);
     if (handle == impl_->surface_chain) {
         impl_->surface_chain = nullptr;
-        std::lock_guard lock(impl_->mutex);
+        std::scoped_lock lock(impl_->mutex);
         const auto epoch = impl_->swapchain.epoch + 1;
         impl_->swapchain = {};
         impl_->swapchain.epoch = epoch;
@@ -247,7 +247,7 @@ void DlssPlatform::terminate() {
     suspend_generation();
     if (getDevice()) vkDeviceWaitIdle(getDevice());
     impl_->provider.shutdown_after_drain();
-#if defined(_WIN32)
+#ifdef _WIN32
     impl_->restore();
 #endif
     impl_->publish();

@@ -206,7 +206,7 @@ struct Effects : RendererEffects {
     BenchmarkSystem& system;
     int cancellations = 0;
     explicit Effects(BenchmarkSystem& owner) : system(owner) {}
-    void set_feature_enabled(const char*, bool) override {}
+    void set_feature_enabled(const char* /*name*/, bool /*on*/) override {}
     void apply_live(SettingId id, const BenchConfig& config) override {
         if (id == SettingId::FrameGeneration)
             system.set_frame_generation_requested(config.frame_generation != FrameGenerationMode::Off);

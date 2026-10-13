@@ -1,5 +1,6 @@
 // Deterministic diagnostic camera motion; independent of simulation and GPU APIs.
-#pragma once
+#ifndef HEAVEN_CAPTURE_CAMERA_MOTION_H
+#define HEAVEN_CAPTURE_CAMERA_MOTION_H
 
 #include <algorithm>
 #include <array>
@@ -53,3 +54,5 @@ struct CaptureCameraSample {
 }
 
 } // namespace heaven
+
+#endif // HEAVEN_CAPTURE_CAMERA_MOTION_H

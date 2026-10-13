@@ -1013,13 +1013,15 @@ IRhiBackend::GpuInfoRaw FilamentBackend::gpu_info() const {
             info.model_name = props.deviceName;
             info.vendor_id = props.vendorID;
             info.device_id = props.deviceID;
+            // apiVersion is already uint32_t. Decode the same fields as the
+            // Vulkan C macros without their old-style casts.
             info.api_version = std::format(
-                "{}.{}.{}", VK_VERSION_MAJOR(props.apiVersion),
-                VK_VERSION_MINOR(props.apiVersion),
-                VK_VERSION_PATCH(props.apiVersion));
+                "{}.{}.{}", props.apiVersion >> 22U,
+                (props.apiVersion >> 12U) & 0x3FFU,
+                props.apiVersion & 0xFFFU);
 
             const bool has_driver_properties =
-                props.apiVersion >= VK_API_VERSION_1_2 ||
+                props.apiVersion >= ((1U << 22U) | (2U << 12U)) ||
                 supports_device_extension(
                     physical_device, VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME);
             const bool has_pci_bus_info = supports_device_extension(
@@ -2731,19 +2733,25 @@ void FilamentBackend::request_frame_generation(FrameGenerationMode mode) {
     config_.frame_generation=mode;
     if(!core_.engine) return;
     if(!frame_generation_ && mode!=FrameGenerationMode::Off) {
-        FrameGenerationPlatform* platform=nullptr;
 #if HEAVEN_HAS_FSR3
+        FrameGenerationPlatform* platform=nullptr;
         if(engine_->getBackend()==filament::Engine::Backend::VULKAN)
             platform=frame_generation_platform_.get();
+#else
+        constexpr auto platform = nullptr;
 #endif
-        DlssPlatform* dlss = nullptr;
 #if HEAVEN_HAS_DLSS
+        DlssPlatform* dlss = nullptr;
         if (engine_->getBackend() == filament::Engine::Backend::VULKAN)
             dlss = dlss_platform_.get();
+#else
+        constexpr auto dlss = nullptr;
 #endif
         // A Streamline-created device is tied to that provider until backend
         // recreation. Never also interpose the FSR swap chain on its resources.
-        if (dlss) platform = nullptr;
+#if HEAVEN_HAS_FSR3
+        if (dlss != nullptr) platform = nullptr;
+#endif
         frame_generation_=std::make_unique<FrameGenerationRuntime>(core_,platform,dlss);
     }
     if(frame_generation_) frame_generation_->request(mode);

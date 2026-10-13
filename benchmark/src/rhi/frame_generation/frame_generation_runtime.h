@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_FRAME_GENERATION_RUNTIME_H
+#define HEAVEN_FRAME_GENERATION_RUNTIME_H
 
 #include "engine/frame_generation.h"
 #include "rhi/backend_core.h"
@@ -56,8 +57,8 @@ private:
     struct Native;
     bool unavailable(std::string reason);
     BackendCore core_;
-    FrameGenerationPlatform* platform_ = nullptr;
-    DlssPlatform* dlss_platform_ = nullptr;
+    [[maybe_unused]] FrameGenerationPlatform* platform_ = nullptr;
+    [[maybe_unused]] DlssPlatform* dlss_platform_ = nullptr;
     std::unique_ptr<TemporalScene> temporal_;
     std::unique_ptr<TemporalGrass> grass_;
     std::shared_ptr<FrameGenerationOutput> output_;
@@ -71,14 +72,16 @@ private:
     FrameGenerationState state_;
     bool active_ = false;
     bool reset_ = true;
-    int width_ = 0, height_ = 0;
-    std::chrono::steady_clock::time_point previous_source_{};
+    [[maybe_unused]] int width_ = 0, height_ = 0;
+    std::chrono::steady_clock::time_point previous_source_;
     std::optional<Camera> previous_camera_;
     glm::mat4 projection_{1.0f};
     glm::mat4 current_clip_{1.0f};
     glm::mat4 previous_clip_{1.0f};
     bool temporal_coverage_complete_ = false;
-    bool has_ui_ = false;
+    [[maybe_unused]] bool has_ui_ = false;
     bool native_tracking_complete_ = true;
 };
 }
+
+#endif // HEAVEN_FRAME_GENERATION_RUNTIME_H

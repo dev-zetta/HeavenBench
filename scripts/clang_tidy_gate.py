@@ -36,26 +36,28 @@ BITMASK_PATH = Path("lib/filament/libs/utils/include/utils/BitmaskEnum.h")
 DRIVER_ENUMS_PATH = Path("lib/filament/filament/backend/include/backend/DriverEnums.h")
 TEXTURE_USAGE_SOURCES = {
     BITMASK_PATH: "ced2077e04ba983bd8c775ed30d085a20b66a2818f99bdb9161db44a87f59acf",
-    DRIVER_ENUMS_PATH: "5d51ce7e896c626644c1d7765c45388e35229d7f977938a2844eeccda74fdd4c",
+    DRIVER_ENUMS_PATH: "06cd2d117dff36dc9eb0d806f657168b9e626a9a3c38fceb95da7e8400ff4023",
 }
 # Full caller hashes, expression offsets and trace hashes intentionally require
 # renewed review after source or analyzer changes. Fixtures retain all notes.
+# The October 14 review retains the unchanged enum and bitmask expressions;
+# NativeCommand.h adds 35 bytes before TextureUsage, shifting its trace offsets.
 TEXTURE_USAGE_CALLERS = {
     Path("benchmark/src/rhi/height_sample_batch.cpp"): {
         "source_sha256": "090a76c61532083225d20b8ad0187a197e55987372eda9162920d7dd314ce976",
-        "trace_sha256": "4a635db9d9c09eed23894f771f0a3a2a161d84477fab7087badfe4ae279cc252",
+        "trace_sha256": "1c60df57202ec190bd7f0e5eadfa15bc61bb0b10e785616f9912413a72b6d1f5",
         "value": 65, "call_offset": 5094, "call_line": 122,
         "expression": "filament::Texture::Usage::COLOR_ATTACHMENT | filament::Texture::Usage::BLIT_SRC",
     },
     Path("benchmark/smoke/smoke_displacement_surface.cpp"): {
         "source_sha256": "022e5f28ff6d6d7ce9c2ac0991b87978ad8436d73395a14278f015e633aa8b7a",
-        "trace_sha256": "134e6c0eccfce9e398849d2009702037fabfee0cca14db97f6bae4bdc2a11419",
+        "trace_sha256": "73e62decb5d06db7a0ea9d73a34aae8fd86655c420d26a0d17e834882d648e83",
         "value": 65, "call_offset": 55152, "call_line": 889,
         "expression": "filament::Texture::Usage::COLOR_ATTACHMENT|filament::Texture::Usage::BLIT_SRC",
     },
     Path("benchmark/src/rhi/render_test_scene_assets.cpp"): {
         "source_sha256": "d72e9c502f8d7192a8c00b3acde6950ce3d29d802254040dbfa01640b8a0930a",
-        "trace_sha256": "58f24f5a024f08720fecc197338335810d581a32e630fbfc5956a2af4ffb8825",
+        "trace_sha256": "5a097ab28216dcf5ac5ebe18ab0f74071e18f879a321aea93b7c487c3bc1de1c",
         "value": 536, "call_offset": 1226, "call_line": 41,
         "expression": "Texture::Usage::DEFAULT | Texture::Usage::GEN_MIPMAPPABLE",
     },

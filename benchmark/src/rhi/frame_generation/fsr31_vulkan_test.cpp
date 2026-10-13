@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <utility>
 
 namespace {
 void check(VkResult result, const char* message) {
@@ -27,9 +28,9 @@ struct Fixture {
     std::vector<Image> images;
     std::unique_ptr<heaven::Fsr31Vulkan> provider;
     bool production_formats = false;
-    static constexpr VkDeviceSize color_bytes = width * height * 4 * sizeof(float);
-    static constexpr VkDeviceSize depth_bytes = width * height * sizeof(float);
-    static constexpr VkDeviceSize motion_bytes = width * height * 2 * sizeof(float);
+    static constexpr VkDeviceSize color_bytes = static_cast<VkDeviceSize>(width) * height * 4 * sizeof(float);
+    static constexpr VkDeviceSize depth_bytes = static_cast<VkDeviceSize>(width) * height * sizeof(float);
+    static constexpr VkDeviceSize motion_bytes = static_cast<VkDeviceSize>(width) * height * 2 * sizeof(float);
     static constexpr VkDeviceSize depth_offset = color_bytes;
     static constexpr VkDeviceSize motion_offset = depth_offset + depth_bytes;
     static constexpr VkDeviceSize output_offset = motion_offset + motion_bytes;
@@ -163,8 +164,8 @@ struct Fixture {
         auto* depth = reinterpret_cast<float*>(static_cast<char*>(mapped) + depth_offset);
         auto* motion = reinterpret_cast<float*>(static_cast<char*>(mapped) + motion_offset);
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
-            size_t i = y * width + x;
-            bool foreground = x >= static_cast<uint32_t>(x_position) && x < static_cast<uint32_t>(x_position + 32) && y >= 64 && y < 128;
+            size_t i = static_cast<size_t>(y) * width + x;
+            bool foreground = std::cmp_greater_equal(x, static_cast<uint32_t>(x_position)) && std::cmp_less(x, static_cast<uint32_t>(x_position + 32)) && y >= 64 && y < 128;
             color[i * 4] = foreground ? 0.9f : 0.05f;
             color[i * 4 + 1] = color[i * 4 + 2] = color[i * 4]; color[i * 4 + 3] = 1.0f;
             depth[i] = foreground ? 0.4f : 0.9f;
@@ -174,8 +175,8 @@ struct Fixture {
             auto* bytes = static_cast<uint8_t*>(mapped);
             auto* halves = reinterpret_cast<uint16_t*>(static_cast<char*>(mapped) + motion_offset);
             for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
-                const size_t i = y * width + x;
-                const bool foreground = x >= static_cast<uint32_t>(x_position) && x < static_cast<uint32_t>(x_position + 32) && y >= 64 && y < 128;
+                const size_t i = static_cast<size_t>(y) * width + x;
+                const bool foreground = std::cmp_greater_equal(x, static_cast<uint32_t>(x_position)) && std::cmp_less(x, static_cast<uint32_t>(x_position + 32)) && y >= 64 && y < 128;
                 bytes[i*4] = bytes[i*4+1] = bytes[i*4+2] = foreground ? 230 : 13;
                 bytes[i*4+3] = 255;
                 depth[i] = 1.0f - depth[i];
@@ -224,8 +225,8 @@ struct Fixture {
         const auto* output = reinterpret_cast<const float*>(static_cast<const char*>(mapped) + output_offset);
         double sum = 0.0, moment = 0.0, peak = 0.0;
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
-            const size_t pixel = (y * width + x) * 4;
-            float value = production_formats ? reinterpret_cast<const uint8_t*>(output)[pixel] / 255.0f : output[pixel];
+            const size_t pixel = (static_cast<size_t>(y) * width + x) * 4;
+            float value = production_formats ? static_cast<float>(reinterpret_cast<const uint8_t*>(output)[pixel]) / 255.0f : output[pixel];
             if (!std::isfinite(value) || value < -0.001f || value > 1.1f) throw std::runtime_error("Nonfinite/out-of-range generated pixel");
             peak = std::max(peak, static_cast<double>(value));
             double weight = std::max(0.0f, value - 0.15f); sum += weight; moment += weight * x;

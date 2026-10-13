@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -71,13 +72,13 @@ SharedAssetBuffer card_dds(bool masked) {
     header.pixelFormat.gBitMask = 0xff00;
     header.pixelFormat.bBitMask = 0xff0000;
     header.pixelFormat.aBitMask = 0xff000000;
-    auto bytes = std::make_shared<AssetBuffer>(4 + sizeof(header) + side * side * 4, 0);
+    auto bytes = std::make_shared<AssetBuffer>(4 + sizeof(header) + static_cast<std::size_t>(side) * side * 4, 0);
     const std::uint32_t magic = dds_detail::DDS_MAGIC;
     std::memcpy(bytes->data(), &magic, sizeof(magic));
     std::memcpy(bytes->data() + sizeof(magic), &header, sizeof(header));
     for (std::uint32_t y = 0; y < side; ++y) {
         for (std::uint32_t x = 0; x < side; ++x) {
-            const auto offset = 4 + sizeof(header) + (y * side + x) * 4;
+            const auto offset = 4 + sizeof(header) + (static_cast<std::size_t>(y) * side + x) * 4;
             (*bytes)[offset] = masked ? 24 : 255;
             (*bytes)[offset + 1] = masked ? 255 : 24;
             (*bytes)[offset + 2] = 12;
@@ -322,14 +323,14 @@ private:
 
 std::array<double, 3> probe(const Pixels& pixels, double world_x, double world_y) {
     // Independent perspective projection for the fixed 45-degree camera.
-    const double world_per_ndc = 4 * std::tan(3.14159265358979323846 / 8);
+    const double world_per_ndc = 4 * std::tan(std::numbers::pi / 8);
     const int px = static_cast<int>((world_x / world_per_ndc + 1) * kSize / 2);
     const int py = static_cast<int>((world_y / world_per_ndc + 1) * kSize / 2);
     std::array<double, 3> mean{};
     for (int y = py - 1; y <= py + 1; ++y) {
         for (int x = px - 1; x <= px + 1; ++x) {
-            require(x >= 0 && y >= 0 && x < static_cast<int>(kSize) &&
-                y < static_cast<int>(kSize), "pixel oracle outside target");
+            require(x >= 0 && y >= 0 && std::cmp_less(x, kSize) &&
+                std::cmp_less(y, kSize), "pixel oracle outside target");
             const auto index = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4;
             for (std::size_t c = 0; c < mean.size(); ++c) mean[c] += pixels[index + c] / 9.0;
         }

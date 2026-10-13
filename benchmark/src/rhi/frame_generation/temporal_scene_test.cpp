@@ -315,7 +315,7 @@ public:
         grass_diffuse_ = filament::Texture::Builder().width(128).height(128).levels(1)
             .format(filament::Texture::InternalFormat::RGBA8).build(*engine_);
         require(grass_diffuse_,"Grass cutout atlas unavailable");
-        std::vector<std::array<uint8_t,4>> atlas(128*128,{128,192,96,255});
+        std::vector<std::array<uint8_t,4>> atlas(size_t{128}*128,{128,192,96,255});
         for (unsigned y = 32; y < 96; ++y)
             for (unsigned x = 32; x < 96; ++x) atlas[y*128+x][3] = 0;
         grass_diffuse_->setImage(*engine_,0,{atlas.data(),atlas.size()*sizeof(atlas.front()),
@@ -412,7 +412,7 @@ public:
         native_read_ = read_target(native_texture_);
         require(native_read_, "Native isolation readback target unavailable");
         const glm::vec4 initial{.25f,.5f,.75f,1.0f};
-        std::vector<glm::vec4> pixels(kExtent*kExtent,initial);
+        std::vector<glm::vec4> pixels(static_cast<size_t>(kExtent)*kExtent,initial);
         native_texture_->setImage(*engine_,0,{pixels.data(),pixels.size()*sizeof(glm::vec4),
             filament::Texture::Format::RGBA,filament::Texture::Type::FLOAT});
         engine_->flushAndWait();
@@ -462,12 +462,12 @@ public:
             for (int component = 0; component < 4; ++component)
                 require(std::isfinite(plane[component]),"Temporal culling plane is nonfinite");
         output_->prepare(temporal_->packed_texture(),kExtent,kExtent,false);
-        std::vector<float> depths(kExtent*kExtent);
+        std::vector<float> depths(static_cast<size_t>(kExtent)*kExtent);
         // Request RG16F's native component type. Filament's generic HALF to
         // FLOAT readback conversion clamps negative values to zero; decoding
         // the native halves here preserves the signed motion being tested.
-        std::vector<std::array<uint16_t,2>> half_vectors(kExtent*kExtent);
-        std::vector<glm::vec4> packed(kExtent*kExtent);
+        std::vector<std::array<uint16_t,2>> half_vectors(static_cast<size_t>(kExtent)*kExtent);
+        std::vector<glm::vec4> packed(static_cast<size_t>(kExtent)*kExtent);
         std::array<std::atomic_bool,3> done{};
         bool accepted = false;
         for (int attempt = 0; attempt < 8 && !accepted; ++attempt) {
@@ -557,9 +557,9 @@ public:
         const auto incorrect = oracle::raster(grass_vertices_,current,incorrect_previous,
             glm::dvec4(grass_patch_.wind_tuning),glm::dvec4(grass_patch_.diffuse_uv),kExtent,history_valid);
         output_->prepare(temporal_->packed_texture(),kExtent,kExtent,false);
-        std::vector<float> depths(kExtent*kExtent);
-        std::vector<std::array<uint16_t,2>> half_vectors(kExtent*kExtent);
-        std::vector<glm::vec4> packed(kExtent*kExtent);
+        std::vector<float> depths(static_cast<size_t>(kExtent)*kExtent);
+        std::vector<std::array<uint16_t,2>> half_vectors(static_cast<size_t>(kExtent)*kExtent);
+        std::vector<glm::vec4> packed(static_cast<size_t>(kExtent)*kExtent);
         std::array<std::atomic_bool,3> done{};
         bool accepted = false;
         for (int retry = 0; retry < 8 && !accepted; ++retry) {

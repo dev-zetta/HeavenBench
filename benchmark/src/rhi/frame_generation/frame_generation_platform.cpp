@@ -63,7 +63,7 @@ struct FrameGenerationPlatform::Impl {
         bool backup_initialized = false;
         bool surface = false;
         bool broken = false;
-        Clock::time_point last_real_present{};
+        Clock::time_point last_real_present;
     };
     struct Armed {
         VkImage image = VK_NULL_HANDLE;
@@ -90,7 +90,9 @@ struct FrameGenerationPlatform::Impl {
         // interpolation provider or discard its successfully recorded work.
         try {
             event(FrameGenerationPresentEventKind::NativeCaptureFailed, source, VK_NOT_READY, message);
-        } catch (...) {}
+        } catch (...) {
+            std::fputs("Frame generation capture failure event could not be retained\n", stderr);
+        }
     }
 
     void event(FrameGenerationPresentEventKind kind, uint64_t source, VkResult result,
@@ -99,7 +101,7 @@ struct FrameGenerationPlatform::Impl {
             history.invalidate();
             if (reason.empty()) reason = "Native presentation failed: VkResult " + std::to_string(result);
         }
-        std::lock_guard lock(status_mutex);
+        std::scoped_lock lock(status_mutex);
         if (kind == FrameGenerationPresentEventKind::RealSubmitted) ++status.real_submissions;
         if (kind == FrameGenerationPresentEventKind::GeneratedSubmitted) ++status.generated_submissions;
         if (kind == FrameGenerationPresentEventKind::SubmissionFailed) {
@@ -113,14 +115,14 @@ struct FrameGenerationPlatform::Impl {
     }
 
     void set_availability(bool available, std::string reason) {
-        std::lock_guard lock(status_mutex);
+        std::scoped_lock lock(status_mutex);
         status.available = available;
         status.reason = std::move(reason);
     }
 
     void clear_armed() {
         armed = {};
-        std::lock_guard lock(status_mutex);
+        std::scoped_lock lock(status_mutex);
         status.armed = false;
     }
 
@@ -184,14 +186,17 @@ struct FrameGenerationPlatform::Impl {
             allocation.commandPool = chain.pool;
             allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             allocation.commandBufferCount = 1;
-            if ((result = vkAllocateCommandBuffers(device, &allocation, &work.command)) != VK_SUCCESS)
+            result = vkAllocateCommandBuffers(device, &allocation, &work.command);
+            if (result != VK_SUCCESS)
                 return allocation_failed(device, chain, result);
             VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
             fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            if ((result = vkCreateFence(device, &fence, nullptr, &work.complete)) != VK_SUCCESS)
+            result = vkCreateFence(device, &fence, nullptr, &work.complete);
+            if (result != VK_SUCCESS)
                 return allocation_failed(device, chain, result);
             VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-            if ((result = vkCreateSemaphore(device, &semaphore, nullptr, &work.present_ready)) != VK_SUCCESS)
+            result = vkCreateSemaphore(device, &semaphore, nullptr, &work.present_ready);
+            if (result != VK_SUCCESS)
                 return allocation_failed(device, chain, result);
         }
         VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -204,7 +209,8 @@ struct FrameGenerationPlatform::Impl {
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
         image.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if ((result = vkCreateImage(device, &image, nullptr, &chain.real_backup)) != VK_SUCCESS)
+        result = vkCreateImage(device, &image, nullptr, &chain.real_backup);
+        if (result != VK_SUCCESS)
             return allocation_failed(device, chain, result);
         VkMemoryRequirements required{};
         vkGetImageMemoryRequirements(device, chain.real_backup, &required);
@@ -224,9 +230,10 @@ struct FrameGenerationPlatform::Impl {
         VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         allocation.allocationSize = required.size;
         allocation.memoryTypeIndex = memory_type;
-        if ((result = vkAllocateMemory(device, &allocation, nullptr, &chain.backup_memory)) != VK_SUCCESS ||
-                (result = vkBindImageMemory(device, chain.real_backup, chain.backup_memory, 0)) != VK_SUCCESS)
-            return allocation_failed(device, chain, result);
+        result = vkAllocateMemory(device, &allocation, nullptr, &chain.backup_memory);
+        if (result != VK_SUCCESS) return allocation_failed(device, chain, result);
+        result = vkBindImageMemory(device, chain.real_backup, chain.backup_memory, 0);
+        if (result != VK_SUCCESS) return allocation_failed(device, chain, result);
         set_availability(true, "Native generated-frame presentation is ready");
         return true;
     }
@@ -244,7 +251,8 @@ struct FrameGenerationPlatform::Impl {
         // buffer reuse; an unrelated frame counter is never used as proof.
         auto result = vkWaitForFences(device, 1, &work.complete, VK_TRUE, UINT64_MAX);
         if (result != VK_SUCCESS) return result;
-        if ((result = vkResetCommandBuffer(work.command, 0)) != VK_SUCCESS) return result;
+        result = vkResetCommandBuffer(work.command, 0);
+        if (result != VK_SUCCESS) return result;
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         return vkBeginCommandBuffer(work.command, &begin);
@@ -253,7 +261,8 @@ struct FrameGenerationPlatform::Impl {
     VkResult submit_work(FrameGenerationPlatform& platform, ImageWork& work, VkSemaphore wait) {
         auto result = vkEndCommandBuffer(work.command);
         if (result != VK_SUCCESS) return result;
-        if ((result = vkResetFences(platform.getDevice(), 1, &work.complete)) != VK_SUCCESS) return result;
+        result = vkResetFences(platform.getDevice(), 1, &work.complete);
+        if (result != VK_SUCCESS) return result;
         const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.waitSemaphoreCount = wait ? 1u : 0u;
@@ -271,7 +280,7 @@ struct FrameGenerationPlatform::Impl {
         if (target <= before) return;
         std::this_thread::sleep_until(target);
         const auto waited = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - before).count();
-        std::lock_guard lock(status_mutex);
+        std::scoped_lock lock(status_mutex);
         status.pacing_wait_ns += static_cast<uint64_t>(waited);
     }
 };
@@ -302,7 +311,7 @@ bool FrameGenerationPlatform::arm_generated(VkImage output, VkFormat format, VkE
     if (impl_->armed.source && impl_->armed.source != source_frame)
         impl_->capture.abandon_ui_inputs(impl_->armed.source);
     impl_->armed = {output, format, extent, source_frame, std::min(interval_ns, uint64_t{100'000'000})};
-    std::lock_guard lock(impl_->status_mutex);
+    std::scoped_lock lock(impl_->status_mutex);
     impl_->status.armed = true;
     return true;
 }
@@ -315,7 +324,7 @@ bool FrameGenerationPlatform::arm_real(uint64_t source_frame) {
             VK_NOT_READY, "Generated output was replaced by a real-only presentation");
     impl_->armed = {};
     impl_->armed.source = source_frame;
-    std::lock_guard lock(impl_->status_mutex);
+    std::scoped_lock lock(impl_->status_mutex);
     impl_->status.armed = true;
     return true;
 }
@@ -382,6 +391,7 @@ bool FrameGenerationPlatform::record_ui_inputs(VkCommandBuffer command,
         recorded = impl_->capture.record_ui_inputs(command, generated.image, ui.image);
     } catch (...) {
         // Restore both borrowed layouts even if diagnostic recording fails.
+        recorded = false;
     }
     transition(command, generated.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
         VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
@@ -415,7 +425,7 @@ void FrameGenerationPlatform::drain_generated() {
 }
 
 FrameGenerationPresentationStatus FrameGenerationPlatform::presentation_status() const {
-    std::lock_guard lock(impl_->status_mutex);
+    std::scoped_lock lock(impl_->status_mutex);
     return impl_->status;
 }
 
@@ -429,7 +439,7 @@ void FrameGenerationPlatform::debug_out_of_date_once() noexcept {
 #endif
 
 std::vector<FrameGenerationPresentEvent> FrameGenerationPlatform::take_presentation_events() {
-    std::lock_guard lock(impl_->status_mutex);
+    std::scoped_lock lock(impl_->status_mutex);
     std::vector<FrameGenerationPresentEvent> result;
     result.reserve(impl_->events.size());
     while (!impl_->events.empty()) {
@@ -577,7 +587,8 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     }
     suboptimal |= result == VK_SUBOPTIMAL_KHR;
     auto& real_work = chain.work[sync.imageIndex];
-    if ((result = impl_->begin_work(getDevice(), real_work)) != VK_SUCCESS) {
+    result = impl_->begin_work(getDevice(), real_work);
+    if (result != VK_SUCCESS) {
         chain.broken = true;
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Real-frame restore command buffer is unavailable");
@@ -600,7 +611,8 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         capturing ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, capturing ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, 0,
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    if ((result = impl_->submit_work(*this, real_work, sync.imageReadySemaphore)) != VK_SUCCESS) {
+    result = impl_->submit_work(*this, real_work, sync.imageReadySemaphore);
+    if (result != VK_SUCCESS) {
         chain.broken = true;
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Real-frame restore submission failed");
@@ -661,9 +673,8 @@ void FrameGenerationPlatform::destroy(SwapChainPtr handle) {
 void FrameGenerationPlatform::terminate() {
     drain_generated();
     impl_->capture.release_after_drain();
-    for (auto& [handle, chain] : impl_->chains) {
-        (void)handle;
-        impl_->release_chain(getDevice(), chain);
+    for (auto& entry : impl_->chains) {
+        impl_->release_chain(getDevice(), entry.second);
     }
     impl_->chains.clear();
     Base::terminate();

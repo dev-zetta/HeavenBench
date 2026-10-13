@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_FSR31_VULKAN_H
+#define HEAVEN_FSR31_VULKAN_H
 
 #include <vulkan/vulkan.h>
 #include <array>
@@ -103,3 +104,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FSR31_VULKAN_H

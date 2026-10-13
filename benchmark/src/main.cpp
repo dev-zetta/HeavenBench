@@ -968,7 +968,7 @@ private:
             {"driver", active_gpu_info_.driver_name}, {"driver_version", active_gpu_info_.driver_version},
             {"format", config_.hdr ? "P6 diagnostic HDR preview: PQ decoded to nits, Rec.2020 to sRGB, divided by paper white, per-channel Reinhard, sRGB OETF" : "P6 RGB8 SDR, top row first"}, {"benchmark_score", false}
         };
-        if (capture_.camera_to && capture_camera_sample_) {
+        if (capture_.camera_to && capture_.camera_pose && capture_camera_sample_) {
             const auto& sample = *capture_camera_sample_;
             metadata["camera_position"] = {sample.pose[0], sample.pose[1], sample.pose[2]};
             metadata["camera_yaw"] = sample.pose[3];

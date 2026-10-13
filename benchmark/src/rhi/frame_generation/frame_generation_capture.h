@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_FRAME_GENERATION_CAPTURE_H
+#define HEAVEN_FRAME_GENERATION_CAPTURE_H
 
 #include <bluevk/BlueVK.h>
 
@@ -49,3 +50,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FRAME_GENERATION_CAPTURE_H

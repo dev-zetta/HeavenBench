@@ -1,5 +1,7 @@
 // Host-only regression against the actual generated SDK backend. Fake Vulkan
 // callbacks own synthetic handles; no device, queue, GPU work or wait exists.
+#include "test_fake_handle.h"
+
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -7,14 +9,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include HEAVEN_FSR31_TEST_BACKEND_COPY
 #include "fsr31_prepare_scope.h"
+#include HEAVEN_FSR31_TEST_BACKEND_COPY
 
 namespace {
-template<class T> T handle(uintptr_t value) {
-    if constexpr (std::is_pointer_v<T>) return reinterpret_cast<T>(value);
-    else return static_cast<T>(value);
-}
+using heaven::test::fake_handle;
 template<class T> uintptr_t identity(T object) {
     if constexpr (std::is_pointer_v<T>) return reinterpret_cast<uintptr_t>(object);
     else return static_cast<uintptr_t>(object);
@@ -34,19 +33,17 @@ struct HostState {
 };
 HostState* current = nullptr;
 
-VKAPI_ATTR VkResult VKAPI_CALL create_view(VkDevice, const VkImageViewCreateInfo* info,
-        const VkAllocationCallbacks*, VkImageView* output) {
+VKAPI_ATTR VkResult VKAPI_CALL create_view([[maybe_unused]] VkDevice device, const VkImageViewCreateInfo* info, [[maybe_unused]] const VkAllocationCallbacks* allocator, VkImageView* output) {
     require(current && info && output, "Invalid fake image-view allocation");
     require(info->format == VK_FORMAT_R8G8B8A8_UNORM && info->subresourceRange.levelCount == 1,
         "Unexpected actual SDK single-level image-view description");
-    *output = handle<VkImageView>(++current->next_handle);
+    *output = fake_handle<VkImageView>(++current->next_handle);
     require(current->live.emplace(identity(*output), current->current_record).second,
         "SDK overwrote a live image-view handle");
     ++current->created;
     return VK_SUCCESS;
 }
-VKAPI_ATTR void VKAPI_CALL destroy_view(VkDevice, VkImageView view,
-        const VkAllocationCallbacks*) {
+VKAPI_ATTR void VKAPI_CALL destroy_view([[maybe_unused]] VkDevice device, VkImageView view, [[maybe_unused]] const VkAllocationCallbacks* allocator) {
     const auto found = current->live.find(identity(view));
     require(found != current->live.end(), "Image view retired twice or without ownership");
     if (found->second > current->completed_record) {
@@ -57,9 +54,7 @@ VKAPI_ATTR void VKAPI_CALL destroy_view(VkDevice, VkImageView view,
     current->live.erase(found);
     ++current->deleted;
 }
-VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags,
-        VkDependencyFlags, uint32_t, const VkMemoryBarrier*, uint32_t,
-        const VkBufferMemoryBarrier*, uint32_t count, const VkImageMemoryBarrier* images) {
+VKAPI_ATTR void VKAPI_CALL barrier([[maybe_unused]] VkCommandBuffer commandBuffer, [[maybe_unused]] VkPipelineStageFlags srcStageMask, [[maybe_unused]] VkPipelineStageFlags dstStageMask, [[maybe_unused]] VkDependencyFlags dependencyFlags, [[maybe_unused]] uint32_t memoryBarrierCount, [[maybe_unused]] const VkMemoryBarrier* memoryBarriers, [[maybe_unused]] uint32_t bufferMemoryBarrierCount, [[maybe_unused]] const VkBufferMemoryBarrier* bufferMemoryBarriers, uint32_t count, const VkImageMemoryBarrier* images) {
     require(count > 0 && images, "SDK unregister omitted the real input barriers");
     for (uint32_t i = 0; i != count; ++i) {
         require(images[i].oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
@@ -76,8 +71,8 @@ struct Harness {
     BackendContext_VK backend{};
     BackendContext_VK::EffectContext effects[2]{};
     std::vector<BackendContext_VK::VkResourceView> views{
-        2 * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2};
-    std::vector<BackendContext_VK::Resource> resources{2 * FFX_MAX_RESOURCE_COUNT};
+        std::size_t{2} * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2};
+    std::vector<BackendContext_VK::Resource> resources{std::size_t{2} * FFX_MAX_RESOURCE_COUNT};
     FfxInterface interface{};
 
     Harness() {
@@ -86,7 +81,7 @@ struct Harness {
         backend.pEffectContexts = effects;
         backend.pResourceViews = views.data();
         backend.pResources = resources.data();
-        backend.device = handle<VkDevice>(1);
+        backend.device = fake_handle<VkDevice>(1);
         backend.vkFunctionTable.vkCreateImageView = create_view;
         backend.vkFunctionTable.vkDestroyImageView = destroy_view;
         backend.vkFunctionTable.vkCmdPipelineBarrier = barrier;
@@ -108,7 +103,7 @@ struct Harness {
         const auto first = getDynamicResourcesStartIndex(context);
         for (unsigned i = 0; i != count; ++i) {
             FfxResource resource{};
-            resource.resource = reinterpret_cast<void*>(uintptr_t(1000 + i));
+            resource.resource = fake_handle<void*>(1000 + i);
             resource.state = FFX_RESOURCE_STATE_COMPUTE_READ;
             resource.description.type = FFX_RESOURCE_TYPE_TEXTURE2D;
             resource.description.format = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
@@ -122,7 +117,7 @@ struct Harness {
             backend.pResources[output.internalIndex].currentState = FFX_RESOURCE_STATE_COPY_DEST;
         }
         require(UnregisterResourcesVK(&interface,
-            reinterpret_cast<FfxCommandList>(uintptr_t(1)), context) == FFX_OK,
+            fake_handle<FfxCommandList>(1), context) == FFX_OK,
             "Actual SDK unregister failed");
         for (auto imported_resource : imported) {
             const auto& resource = backend.pResources[imported_resource.internalIndex];
@@ -242,6 +237,9 @@ int main(int argc, char** argv) {
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
+        return 1;
+    } catch (...) {
+        std::cerr << "Unknown host fixture exception\n";
         return 1;
     }
 }

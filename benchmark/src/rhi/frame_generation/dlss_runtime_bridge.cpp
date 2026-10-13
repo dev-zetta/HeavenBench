@@ -4,6 +4,7 @@
 #include "dlss_runtime_inputs.h"
 #include "dlss_input_validation.h"
 #include "frame_generation_output.h"
+#include "frame_generation_history.h"
 #include "engine/camera.h"
 
 #include <filament/Texture.h>
@@ -33,12 +34,14 @@ bool DlssRuntimeBridge::mark(const DlssFrameToken& token, DlssLatencyMarker mark
 void DlssRuntimeBridge::suspend_generation() {
     platform_.suspend_generation();
     previous_application_frame_.reset();
+    previous_native_callback_ = {};
     swapchain_epoch_ = 0;
 }
 
 std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
         const filament::backend::VulkanCommandContext& context,
         const Camera& camera, const DlssRuntimeFrame& frame) {
+    const auto callback_time = std::chrono::steady_clock::now();
     const auto fail = [this](std::string reason) -> std::expected<void, std::string> {
         suspend_generation();
         return std::unexpected(std::move(reason));
@@ -78,7 +81,8 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
     const bool consecutive = previous_application_frame_ &&
         *previous_application_frame_ != std::numeric_limits<uint64_t>::max() &&
         frame.token.application_frame == *previous_application_frame_ + 1;
-    const bool reset = frame.reset || !consecutive || swapchain.epoch != swapchain_epoch_;
+    const bool reset = frame.reset || !consecutive || swapchain.epoch != swapchain_epoch_ ||
+        frame_generation_callback_gap(previous_native_callback_, callback_time);
     const auto camera_constants = dlss_runtime_detail::camera_constants(
         glm::inverse(camera.view_matrix()), frame.projection,
         frame.current_view_projection, frame.previous_view_projection,
@@ -114,6 +118,7 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
     if (!platform_.prepare_present(inputs))
         return fail(platform_.provider_status().reason);
     previous_application_frame_ = frame.token.application_frame;
+    previous_native_callback_ = callback_time;
     swapchain_epoch_ = swapchain.epoch;
     return {};
 }

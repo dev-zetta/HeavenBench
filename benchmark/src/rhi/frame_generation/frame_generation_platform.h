@@ -1,10 +1,11 @@
-#pragma once
+#ifndef HEAVEN_FRAME_GENERATION_PLATFORM_H
+#define HEAVEN_FRAME_GENERATION_PLATFORM_H
 
-#if defined(__ANDROID__)
+#ifdef __ANDROID__
 #include <backend/platforms/VulkanPlatformAndroid.h>
-#elif defined(_WIN32)
+#elifdef _WIN32
 #include <backend/platforms/VulkanPlatformWindows.h>
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 #include <backend/platforms/VulkanPlatformApple.h>
 #else
 #include <backend/platforms/VulkanPlatformLinux.h>
@@ -17,11 +18,11 @@
 
 namespace heaven {
 
-#if defined(__ANDROID__)
+#ifdef __ANDROID__
 using FrameGenerationNativePlatform = filament::backend::VulkanPlatformAndroid;
-#elif defined(_WIN32)
+#elifdef _WIN32
 using FrameGenerationNativePlatform = filament::backend::VulkanPlatformWindows;
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 using FrameGenerationNativePlatform = filament::backend::VulkanPlatformApple;
 #else
 using FrameGenerationNativePlatform = filament::backend::VulkanPlatformLinux;
@@ -122,3 +123,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FRAME_GENERATION_PLATFORM_H

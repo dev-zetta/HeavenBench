@@ -93,6 +93,7 @@ if ! python3 -c 'import yaml' >/dev/null 2>&1; then
     exit 1
 fi
 python3 -B "${REPO_ROOT}/tests/clang_tidy_gate_test.py"
+python3 -B "${REPO_ROOT}/tests/clang_tidy_coverage_test.py"
 export HEAVEN_CLANG_TIDY_REAL="$tidy_binary"
 tidy_binary="${REPO_ROOT}/scripts/clang_tidy_gate.py"
 
@@ -124,6 +125,15 @@ mapfile -t owned_cpp_files < <(
         -g '!materials_data.cpp' | sort
 )
 owned_cpp_files+=("${tool_sources[@]}")
+
+# run-clang-tidy silently ignores files absent from its compilation database.
+# Require ordinary owned sources and disclose the exact optional SDK paths;
+# enabled providers and fixtures must have their real compile context.
+python3 -B "${REPO_ROOT}/scripts/clang_tidy_coverage.py" --root "${REPO_ROOT}" \
+    --compile-db "${tools_build}/compile_commands.json" "${tool_sources[@]}"
+python3 -B "${REPO_ROOT}/scripts/clang_tidy_coverage.py" --root "${REPO_ROOT}" \
+    --compile-db "${renderer_build}/compile_commands.json" \
+    --cmake-cache "${renderer_build}/CMakeCache.txt" "${renderer_sources[@]}"
 
 # Clang deliberately exempts cast-to-void expressions from -Wold-style-cast,
 # and clang-tidy's cast checks follow that behavior. Reject the loophole before

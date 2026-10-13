@@ -1,9 +1,19 @@
-#pragma once
+#ifndef HEAVEN_FRAME_GENERATION_HISTORY_H
+#define HEAVEN_FRAME_GENERATION_HISTORY_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 
 namespace heaven {
+
+// Prepared packets can remain queued while every application thread is paused.
+// Check the native callback clock as well as the frontend's source clock.
+inline bool frame_generation_callback_gap(std::chrono::steady_clock::time_point previous,
+        std::chrono::steady_clock::time_point current) noexcept {
+    return previous.time_since_epoch().count() != 0 &&
+        current - previous > std::chrono::milliseconds(250);
+}
 
 // Native swapchain invalidation must reach the driver callback even when the
 // application has already queued its frame and has not consumed status events.
@@ -29,3 +39,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FRAME_GENERATION_HISTORY_H

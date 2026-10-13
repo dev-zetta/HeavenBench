@@ -1,10 +1,11 @@
-#pragma once
+#ifndef HEAVEN_FSR31_PREPARE_SCOPE_H
+#define HEAVEN_FSR31_PREPARE_SCOPE_H
 
 struct FfxInterface;
 
 // Private seam in the generated backend copy, not the fetched SDK interface.
 // Return the previous policy so scoped cleanup is also correct under nesting.
-extern "C" bool heavenFsr31VkDeferViewRotation(FfxInterface* backend, bool defer) noexcept;
+extern "C" bool heavenFsr31VkDeferViewRotation(FfxInterface* backendInterface, bool defer) noexcept;
 
 namespace heaven {
 
@@ -30,3 +31,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FSR31_PREPARE_SCOPE_H

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_TEMPORAL_CAMERA_H
+#define HEAVEN_TEMPORAL_CAMERA_H
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -24,3 +25,5 @@ glm::mat4 temporal_gl_projection(const Matrix& user_projection,
 }
 
 }
+
+#endif // HEAVEN_TEMPORAL_CAMERA_H

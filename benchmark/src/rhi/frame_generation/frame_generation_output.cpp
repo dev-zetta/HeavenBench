@@ -18,7 +18,10 @@
 #include <filament/Viewport.h>
 #include <utils/EntityManager.h>
 #include <array>
+#include <bit>
+#include <type_traits>
 #include <cstdint>
+#include <utility>
 
 namespace heaven {
 
@@ -210,7 +213,14 @@ bool FrameGenerationOutput::ensure(int width, int height) {
     p.destroy_targets();
     p.width = width; p.height = height;
     auto& engine = *p.core.engine;
-    const auto sampled_color = filament::Texture::Usage::COLOR_ATTACHMENT | filament::Texture::Usage::SAMPLEABLE | filament::Texture::Usage::BLIT_SRC;
+    // TextureUsage has a fixed underlying bitmask representation. Preserve
+    // those bits without Clang 21's false invalid-enumerator enum-cast finding.
+    using Usage = filament::Texture::Usage;
+    using UsageBits = std::underlying_type_t<Usage>;
+    constexpr auto sampled_color_bits = static_cast<UsageBits>(
+        std::to_underlying(Usage::COLOR_ATTACHMENT) |
+        std::to_underlying(Usage::SAMPLEABLE) | std::to_underlying(Usage::BLIT_SRC));
+    constexpr auto sampled_color = std::bit_cast<Usage>(sampled_color_bits);
     auto texture = [&](filament::Texture::InternalFormat format, filament::Texture::Usage usage) {
         return filament::Texture::Builder().width(width).height(height).levels(1).format(format).usage(usage).build(engine);
     };

@@ -92,6 +92,11 @@ if(NOT fsr_pipeline_transform_result EQUAL 0)
     message(FATAL_ERROR "Pinned SDK backend correction transform failed: ${fsr_pipeline_transform_error}")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS transform_fsr31_backend.py)
+# The CPU fixtures intentionally include the exact private implementation to
+# exercise its failure paths. Give that include a conventional .inc extension;
+# COPYONLY keeps it byte-identical to the backend compiled into the SDK target.
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute_test.inc" COPYONLY)
 
 # Unix wchar_t is four bytes; the SDK's numerous wide descriptor names make
 # its private FI context larger than the Windows-sized opaque reservation.
@@ -138,7 +143,7 @@ install(FILES "${reflect_dir}/LICENSE"
 # Vulkan calls. This executable never creates a device or submits GPU work.
 add_executable(heaven_fsr31_pipeline_lifetime_test fsr31_pipeline_lifetime_test.cpp)
 target_compile_definitions(heaven_fsr31_pipeline_lifetime_test PRIVATE
-    HEAVEN_FSR31_TEST_BACKEND_COPY="${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute.cpp")
+    HEAVEN_FSR31_TEST_BACKEND_COPY="${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute_test.inc")
 target_include_directories(heaven_fsr31_pipeline_lifetime_test PRIVATE
     "${fsr_sdk}/src/shared" "${fsr_sdk}/src/backends/shared")
 target_compile_features(heaven_fsr31_pipeline_lifetime_test PRIVATE cxx_std_17)
@@ -155,7 +160,7 @@ endif()
 # code and the same prepare-scope guard used by the provider; no GPU execution.
 add_executable(heaven_fsr31_view_retirement_test fsr31_view_retirement_test.cpp)
 target_compile_definitions(heaven_fsr31_view_retirement_test PRIVATE
-    HEAVEN_FSR31_TEST_BACKEND_COPY="${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute.cpp")
+    HEAVEN_FSR31_TEST_BACKEND_COPY="${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute_test.inc")
 target_include_directories(heaven_fsr31_view_retirement_test PRIVATE
     "${fsr_sdk}/src/shared" "${fsr_sdk}/src/backends/shared")
 target_compile_features(heaven_fsr31_view_retirement_test PRIVATE cxx_std_17)

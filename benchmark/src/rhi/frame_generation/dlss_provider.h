@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_DLSS_PROVIDER_H
+#define HEAVEN_DLSS_PROVIDER_H
 
 #include <vulkan/vulkan_core.h>
 
@@ -25,10 +26,16 @@ struct DlssBootstrapOptions {
 struct DlssVulkanRequirements {
     std::vector<std::string> instance_extensions;
     std::vector<std::string> device_extensions;
-    VkPhysicalDeviceVulkan12Features features12{
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-    VkPhysicalDeviceVulkan13Features features13{
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    VkPhysicalDeviceVulkan12Features features12 = [] {
+        VkPhysicalDeviceVulkan12Features value{};
+        value.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        return value;
+    }();
+    VkPhysicalDeviceVulkan13Features features13 = [] {
+        VkPhysicalDeviceVulkan13Features value{};
+        value.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        return value;
+    }();
     uint32_t extra_graphics_queues = 0;
     uint32_t extra_compute_queues = 0;
     uint32_t extra_optical_flow_queues = 0;
@@ -203,3 +210,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_DLSS_PROVIDER_H

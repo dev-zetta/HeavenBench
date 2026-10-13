@@ -237,7 +237,7 @@ bool TemporalScene::set_bones(int mesh_index, std::span<const glm::mat4> matrice
 }
 
 bool TemporalScene::set_positions(uint64_t surface_handle, std::span<const Vertex> vertices) {
-    constexpr size_t max_positions = 2048u * 2048u;
+    constexpr size_t max_positions = size_t{2048} * 2048;
     if (surface_handle == 0 || vertices.empty() || vertices.size() > max_positions ||
         !std::ranges::all_of(vertices, [](const auto& vertex) {
         return std::isfinite(vertex.px) && std::isfinite(vertex.py) && std::isfinite(vertex.pz);
@@ -274,9 +274,9 @@ bool TemporalScene::upload_bone_history(BoneHistory& history) {
     if (!history.texture) return false;
     auto pixels = std::make_shared<std::vector<glm::vec4>>(history.previous.size() * 3);
     for (size_t bone = 0; bone < history.previous.size(); ++bone)
-        for (size_t row = 0; row < 3; ++row) {
+        for (int row = 0; row < 3; ++row) {
             const auto& matrix = history.previous[bone];
-            (*pixels)[bone * 3 + row] = {matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]};
+            (*pixels)[bone * 3 + static_cast<size_t>(row)] = {matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]};
         }
     upload_rgba(*core_.engine, *history.texture, std::move(pixels));
     return true;

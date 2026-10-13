@@ -18,7 +18,9 @@ bool capture_camera_motion_contract() {
         first->fraction != 0 || middle->fraction != .5 || last->fraction != 1 ||
         middle->pose != CaptureCameraPose{3,0,5,360,10} || middle->source_index != 3 ||
         middle->total_sources != 5) return false;
-    const auto reverse = sample_capture_camera_motion(end, start, 2, 5);
+    const auto& reverse_start = end;
+    const auto& reverse_end = start;
+    const auto reverse = sample_capture_camera_motion(reverse_start, reverse_end, 2, 5);
     if (!reverse || reverse->pose[3] != 0) return false;
     // The final source includes the consecutive screenshot tail: warmup 89
     // plus 32 captures gives 120 accepted sources, with the endpoint at 120.
@@ -58,7 +60,7 @@ bool capture_camera_motion_contract() {
 }
 } // namespace
 
-#if defined(HEAVEN_CAPTURE_CAMERA_MOTION_TEST_MAIN)
+#ifdef HEAVEN_CAPTURE_CAMERA_MOTION_TEST_MAIN
 int main() {
     if (!capture_camera_motion_contract()) {
         std::puts("FAIL: deterministic accepted-source camera motion");

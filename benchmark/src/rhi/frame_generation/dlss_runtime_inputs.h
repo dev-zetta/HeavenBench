@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_DLSS_RUNTIME_INPUTS_H
+#define HEAVEN_DLSS_RUNTIME_INPUTS_H
 
 #include "dlss_provider.h"
 
@@ -7,11 +8,10 @@
 
 #include <cmath>
 #include <expected>
+#include <numbers>
 #include <string>
 
-namespace heaven {
-
-namespace dlss_runtime_detail {
+namespace heaven::dlss_runtime_detail {
 
 inline bool finite_matrix(const glm::mat4& matrix) noexcept {
     for (int column = 0; column != 4; ++column)
@@ -26,7 +26,8 @@ inline std::array<float, 16> streamline_matrix(const glm::mat4& column_transform
     std::array<float, 16> result{};
     for (int row = 0; row != 4; ++row)
         for (int column = 0; column != 4; ++column)
-            result[static_cast<size_t>(row * 4 + column)] = column_transform[row][column];
+            result[static_cast<size_t>(row) * 4 + static_cast<size_t>(column)] =
+                column_transform[row][column];
     return result;
 }
 
@@ -57,7 +58,7 @@ inline std::expected<DlssCameraConstants, std::string> camera_constants(
     if (!std::isfinite(near_plane) || !std::isfinite(far_plane) ||
             near_plane <= 0.0f || far_plane <= near_plane ||
             !std::isfinite(vertical_fov_radians) || vertical_fov_radians <= 0.0f ||
-            vertical_fov_radians >= 3.141593f ||
+            vertical_fov_radians >= std::numbers::pi_v<float> ||
             !std::isfinite(aspect_ratio) || aspect_ratio <= 0.0f)
         return std::unexpected("Invalid DLSS camera projection limits");
 
@@ -118,5 +119,6 @@ inline bool sdr_backbuffer_format(VkFormat format) noexcept {
     return format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM;
 }
 
-} // namespace dlss_runtime_detail
-} // namespace heaven
+} // namespace heaven::dlss_runtime_detail
+
+#endif // HEAVEN_DLSS_RUNTIME_INPUTS_H

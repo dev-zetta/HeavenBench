@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HEAVEN_FRAME_GENERATION_OUTPUT_H
+#define HEAVEN_FRAME_GENERATION_OUTPUT_H
 
 #include "rhi/backend_core.h"
 #include <memory>
@@ -41,3 +42,5 @@ private:
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_FRAME_GENERATION_OUTPUT_H

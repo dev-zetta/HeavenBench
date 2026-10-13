@@ -1,10 +1,12 @@
-#pragma once
+#ifndef HEAVEN_DLSS_RUNTIME_BRIDGE_H
+#define HEAVEN_DLSS_RUNTIME_BRIDGE_H
 
 #include "dlss_provider.h"
 
 #include <glm/glm.hpp>
 
 #include <expected>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -66,7 +68,10 @@ private:
     DlssPlatform& platform_;
     std::shared_ptr<FrameGenerationOutput> output_;
     std::optional<uint64_t> previous_application_frame_;
+    std::chrono::steady_clock::time_point previous_native_callback_;
     uint64_t swapchain_epoch_ = 0;
 };
 
 } // namespace heaven
+
+#endif // HEAVEN_DLSS_RUNTIME_BRIDGE_H
