@@ -188,10 +188,16 @@ class LinuxPipelineTest(unittest.TestCase):
                    "args = sys.argv[1:]\n"
                    "with open(os.environ['FIXTURE_LINUX_CALLS'], 'a') as output:\n"
                    "    output.write(json.dumps({'name': name, 'arguments': args}) + '\\n')\n"
-                   "if name == 'ctest' and '--tests-regex' in args:\n"
-                   "    pattern = args[args.index('--tests-regex') + 1]\n"
+                   "if name == 'ctest' and '--test-dir' in args and pathlib.Path(args[args.index('--test-dir') + 1]).name == 'renderer':\n"
                    "    failing = os.environ.get('FIXTURE_CTEST_FAILURE')\n"
-                   "    if failing and re.fullmatch(pattern, failing):\n"
+                   "    selected = bool(failing)\n"
+                   "    for option in ('-R', '--tests-regex'):\n"
+                   "        if option in args and failing and not re.search(args[args.index(option) + 1], failing):\n"
+                   "            selected = False\n"
+                   "    for option in ('-E', '--exclude-regex'):\n"
+                   "        if option in args and failing and re.search(args[args.index(option) + 1], failing):\n"
+                   "            selected = False\n"
+                   "    if selected:\n"
                    "        sys.exit(37)\n"
                    "if name == 'package_appimage.sh':\n"
                    "    directory = pathlib.Path(args[args.index('--output-dir') + 1])\n"
@@ -216,19 +222,40 @@ class LinuxPipelineTest(unittest.TestCase):
                                 capture_output=True, check=False, timeout=15)
         return result, [json.loads(line) for line in self.calls.read_text().splitlines()]
 
+    def renderer_test_calls(self, calls):
+        return [call["arguments"] for call in calls if call["name"] == "ctest" and
+                "--test-dir" in call["arguments"] and
+                call["arguments"][call["arguments"].index("--test-dir") + 1] ==
+                str(self.directory / "build/renderer")]
+
+    def assert_host_and_smoke_gates(self, calls):
+        host, smoke = self.renderer_test_calls(calls)
+        for option in ("-R", "--tests-regex"):
+            self.assertNotIn(option, host, "Host gate has a restrictive include regex")
+        self.assertEqual(host.count("--exclude-regex"), 1)
+        self.assertNotIn("-E", host)
+        pattern = host[host.index("--exclude-regex") + 1]
+        self.assertEqual(pattern, "^heaven_benchmark_smoke$", "Host gate must exclude only graphical smoke")
+        for name in ("benchmark_tests", "profiler_trace_tests", "microprofile_analysis", "runtime_paths_cli",
+                     "asset_packer_cli", "gtao_bent_normal_contract", "specular_occluded_moment_contract",
+                     "surface_color_contract", "capture_camera_motion_tests", "frame_generation_history_tests",
+                     "filament_ssr_variant_tests", "vulkan_pipeline_lifetime_tests", "dlss_contract_tests",
+                     "dlss_runtime_bridge_tests", "fsr31_source_contract", "temporal_input_contract",
+                     "filament_depth_program_lifetime", "filament_froxel_stream_lifetime",
+                     "future_cpu_contract", "benchmark_smoke_cpu_contract"):
+            self.assertIsNone(re.search(pattern, "heaven_" + name), name)
+        self.assertIsNotNone(re.search(pattern, "heaven_benchmark_smoke"))
+        self.assertEqual(smoke.count("--tests-regex"), 1)
+        self.assertEqual(smoke[smoke.index("--tests-regex") + 1], "^heaven_benchmark_smoke$")
+        for option in ("-R", "-E", "--exclude-regex"):
+            self.assertNotIn(option, smoke)
+
     def test_portable_builds_and_selects_every_host_suite(self):
         result, calls = self.run_pipeline()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         [build] = [call["arguments"] for call in calls if call["name"] == "build.sh"]
         self.assertIn("heaven_profiler_trace_tests", build)
-        [pattern] = [call["arguments"][call["arguments"].index("--tests-regex") + 1]
-                     for call in calls if call["name"] == "ctest" and
-                     "profiler_trace_tests" in " ".join(call["arguments"])]
-        for name in ("benchmark_tests", "profiler_trace_tests", "microprofile_analysis", "runtime_paths_cli",
-                     "asset_packer_cli", "gtao_bent_normal_contract", "specular_occluded_moment_contract",
-                     "surface_color_contract"):
-            self.assertIsNotNone(re.fullmatch(pattern, "heaven_" + name), name)
-        self.assertIsNone(re.fullmatch(pattern, "heaven_benchmark_smoke"))
+        self.assert_host_and_smoke_gates(calls)
         self.assertTrue(any(call["name"] == "verify_appimage.py" for call in calls))
 
     def test_architecture_package_keeps_host_tests_on_portable_only(self):
@@ -242,7 +269,33 @@ class LinuxPipelineTest(unittest.TestCase):
     def test_new_host_failure_blocks_packaging(self):
         result, calls = self.run_pipeline(FIXTURE_CTEST_FAILURE="heaven_profiler_trace_tests")
         self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assertEqual(len(self.renderer_test_calls(calls)), 1, "Host failure must precede graphical smoke")
         self.assertFalse(any(call["name"] == "package_appimage.sh" for call in calls))
+
+    def test_future_host_failure_blocks_packaging(self):
+        result, calls = self.run_pipeline(FIXTURE_CTEST_FAILURE="heaven_future_cpu_contract")
+        self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assertEqual(len(self.renderer_test_calls(calls)), 1, "Future host failure must precede graphical smoke")
+        self.assertFalse(any(call["name"] == "package_appimage.sh" for call in calls))
+
+    def test_graphical_smoke_failure_blocks_packaging_at_its_separate_gate(self):
+        result, calls = self.run_pipeline(FIXTURE_CTEST_FAILURE="heaven_benchmark_smoke")
+        self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assert_host_and_smoke_gates(calls)
+        self.assertFalse(any(call["name"] == "package_appimage.sh" for call in calls))
+
+    def test_old_restrictive_host_gate_is_rejected(self):
+        script = self.directory / "scripts/ci_linux.sh"
+        current = "--exclude-regex '^heaven_benchmark_smoke$'"
+        legacy = "--tests-regex '^heaven_(benchmark_tests|profiler_trace_tests)$'"
+        source = script.read_text()
+        self.assertEqual(source.count(current), 1)
+        script.write_text(source.replace(current, legacy))
+        result, calls = self.run_pipeline(FIXTURE_CTEST_FAILURE="heaven_future_cpu_contract")
+        self.assertEqual(result.returncode, 0, "Legacy whitelist should demonstrate the missed future failure")
+        self.assertTrue(any(call["name"] == "package_appimage.sh" for call in calls))
+        with self.assertRaisesRegex(AssertionError, "restrictive include regex"):
+            self.assert_host_and_smoke_gates(calls)
 
 
 @unittest.skipUnless(os.name == "posix" and BASH, "Toolchain fixtures require Bash")

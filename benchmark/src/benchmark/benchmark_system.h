@@ -20,10 +20,12 @@
 #include "benchmark/scene_markers.h"
 #include "benchmark/stats_collector.h"
 #include "engine/camera_path.h"
+#include "engine/frame_generation.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace heaven {
@@ -56,7 +58,10 @@ using SettingsInfoGatherer = std::function<SettingsInfo()>;
 
 // Snapshot of a completed run, surfaced in the Result_Report.
 struct RunResult {
-    bool diagnostic = false; // Recording overhead makes this run unscored.
+    bool diagnostic = false;
+    std::string diagnostic_reason;
+    bool frame_generation_requested = false;
+    FrameGenerationStatus frame_generation;
     HardwareScoreResult performance{};
     double   average_fps = 0.0;
     float    min_fps     = 0.0f;
@@ -152,7 +157,25 @@ public:
     // make an already observed tour comparable to an uninstrumented tour.
     void set_microprofile_recording(bool recording) {
         microprofile_recording_ = recording;
-        if (recording && state_ == BenchmarkState::Running) diagnostic_ = true;
+        if (recording && state_ == BenchmarkState::Running) {
+            diagnostic_ = true;
+            diagnostic_microprofile_ = true;
+        }
+    }
+
+    // Requested means unscored even when the provider is unavailable. Turning
+    // the request off cannot restore comparability for this already-started tour.
+    void set_frame_generation_requested(bool requested) {
+        frame_generation_requested_ = requested;
+        if (requested && state_ == BenchmarkState::Running) {
+            diagnostic_ = true;
+            diagnostic_frame_generation_ = true;
+        }
+    }
+
+    void set_frame_generation_status(const FrameGenerationStatus& status) {
+        frame_generation_status_ = status;
+        set_frame_generation_requested(status.requested != FrameGenerationMode::Off);
     }
 
     // Replace the provisional per-frame GPU samples with the backend's final,
@@ -206,6 +229,10 @@ private:
     bool                has_result_  = false;
     bool                microprofile_recording_ = false;
     bool                diagnostic_ = false;
+    bool                frame_generation_requested_ = false;
+    bool                diagnostic_microprofile_ = false;
+    bool                diagnostic_frame_generation_ = false;
+    FrameGenerationStatus frame_generation_status_;
 };
 
 } // namespace heaven

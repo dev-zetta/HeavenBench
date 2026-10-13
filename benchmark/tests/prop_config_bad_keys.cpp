@@ -208,6 +208,8 @@ bool run_p9_bad_keys_property() {
                     return "Balanced System";
                 if (key == "material_workflow")
                     return "metallic-roughness";
+                if (key == "frame_generation")
+                    return "fsr3";
                 if (key == "texture_quality") {
                     const int idx = *rc::gen::inRange(0, 3);
                     return std::vector<std::string>{"original", "2k", "4k"}[idx];

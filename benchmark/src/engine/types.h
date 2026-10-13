@@ -8,6 +8,7 @@
 #define HEAVENBENCH_SRC_ENGINE_TYPES_H_
 
 #include "engine/number_parse.h"
+#include "engine/frame_generation.h"
 #include "render_tuning.h"
 
 #include <glm/glm.hpp>
@@ -1736,6 +1737,9 @@ struct AppConfig {
     int                width            = 1920;
     int                height           = 1080;
     bool               fullscreen       = false;
+    // Requested provider only. Runtime capability decides effective operation;
+    // any request during a benchmark tour makes that tour diagnostic/unscored.
+    FrameGenerationMode frame_generation = FrameGenerationMode::Off;
     // Android preview submission cap only; scored runs and captures remain
     // uncapped. Zero disables it. Desktop retains these config fields but does
     // not apply preview pacing or an Android Surface render scale.

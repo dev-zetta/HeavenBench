@@ -3,6 +3,8 @@
 
 Uses only the standard library. This is a diagnostic workload, not a benchmark.
 The application writes lossless PPM plus camera/driver and effective-config JSON.
+These are real application images. Generated images, provider activation and
+display cadence require separate native frame-generation diagnostics.
 """
 
 import argparse
@@ -471,7 +473,7 @@ def runtime_fingerprint():
             "kernel": os.uname().release, "boot_id": boot.read_text().strip() if boot.exists() else ""}
 
 
-def validate_case(case):
+def validate_case(case, default_frames=90):
     if not isinstance(case, dict) or not isinstance(case.get("name"), str) or not re.fullmatch(r"[A-Za-z0-9_-]+", case["name"]):
         raise ValueError("Each case needs a unique safe name (letters, numbers, underscores or hyphens)")
     if not isinstance(case.get("settings", {}), dict) or not isinstance(case.get("args", []), list):
@@ -489,13 +491,14 @@ def validate_case(case):
         relative_node_paths(case["asset_source_nodes"])
     if "pose" in case and "tour_time" in case:
         raise ValueError(f"Conflicting camera controls for {case['name']}")
-    if "pose" in case:
-        pose = case["pose"]
-        if not isinstance(pose, list) or len(pose) != 5 or any(type(value) not in (int, float) or not math.isfinite(value) for value in pose) or not -89 <= pose[4] <= 89:
-            raise ValueError(f"Invalid finite camera pose/pitch for {case['name']}")
+    for key in ("pose", "pose_to"):
+        if key in case:
+            pose = case[key]
+            if not isinstance(pose, list) or len(pose) != 5 or any(type(value) not in (int, float) or not math.isfinite(value) for value in pose) or not -89 <= pose[4] <= 89:
+                raise ValueError(f"Invalid finite camera pose/pitch for {case['name']}")
     if "tour_time" in case and (type(case["tour_time"]) not in (int, float) or not math.isfinite(case["tour_time"]) or case["tour_time"] < 0):
         raise ValueError(f"Invalid tour time for {case['name']}")
-    frames = case.get("frames", 90)
+    frames = case.get("frames", default_frames)
     if type(frames) is not int or not 1 <= frames <= 36000:
         raise ValueError(f"Invalid frame count for {case['name']}")
     count = case.get("count", 1)
@@ -507,7 +510,9 @@ def validate_case(case):
     realtime = case.get("realtime", False)
     if type(realtime) is not bool or (realtime and "fps" in case):
         raise ValueError(f"Invalid real-time capture mode for {case['name']}")
-    reserved = {"--capture", "--capture-frames", "--capture-count", "--capture-fps", "--capture-realtime", "--profile", "--profile-seconds", "--camera-pose", "--camera-tour-time", "--config", "--data",
+    if "pose_to" in case and ("pose" not in case or "tour_time" in case or realtime or frames + count - 1 < 2):
+        raise ValueError(f"Camera endpoint needs a pose, fixed-step capture and at least two total frames for {case['name']}")
+    reserved = {"--capture", "--capture-frames", "--capture-count", "--capture-fps", "--capture-realtime", "--capture-camera-to", "--profile", "--profile-seconds", "--camera-pose", "--camera-tour-time", "--config", "--data",
                 "--benchmark", "--pack-assets", "--build-tessellation-cache", "--benchmark-loading", "--write-config", "--help", "--hdr", "--test-scene", "--list-test-scenes"}
     if any(not isinstance(argument, str) or argument in reserved | WRAPPER_FLAGS for argument in case.get("args", [])):
         raise ValueError(f"Case {case['name']} overrides a controlled startup action")
@@ -533,6 +538,50 @@ def capture_fov(case):
         if not math.isfinite(result) or not 1 <= result <= 170:
             raise ValueError(f"Invalid camera FOV for {case['name']}")
     return result
+
+
+def capture_motion_pose(case, source_index):
+    """Derive the requested pose from accepted source ordinal, including the tail."""
+    total = case["frames"] + case.get("count", 1) - 1
+    if not 1 <= source_index <= total or total < 2:
+        raise ValueError("Camera motion source is outside the requested sequence")
+    start, end = case["pose"], case["pose_to"]
+    fraction = (source_index - 1) / (total - 1)
+    if source_index == 1:
+        return start, fraction, total
+    if source_index == total:
+        return end, fraction, total
+    pose = [a + (b - a) * fraction for a, b in zip(start, end)]
+    pose[3] = start[3] + math.remainder(end[3] - start[3], 360) * fraction
+    return pose, fraction, total
+
+
+def verify_camera_motion(metadata, case, frames):
+    expected_pose, fraction, total = capture_motion_pose(case, frames)
+    motion = metadata.get("capture_camera_motion")
+    if not isinstance(motion, dict):
+        raise ValueError("Capture camera motion metadata is missing or malformed")
+    expected = {"schema": 1, "source_index": frames, "total_sources": total,
+                "interpolation": "linear world position and pitch; shortest-arc yaw; exact endpoints",
+                "clock": "accepted application capture submissions; rejected attempts retain the same pose"}
+    for key, value in expected.items():
+        if type(motion.get(key)) is not type(value) or motion[key] != value:
+            raise ValueError(f"Capture camera motion {key} differs from the requested sequence")
+    for key, values in (("start_pose", case["pose"]), ("end_pose", case["pose_to"]),
+                        ("current_pose", expected_pose)):
+        actual = motion.get(key)
+        if (not isinstance(actual, list) or len(actual) != 5 or
+                any(type(a) not in (int, float) or not math.isfinite(a) or
+                    not math.isclose(a, b, rel_tol=1e-5, abs_tol=1e-5)
+                    for a, b in zip(actual, values))):
+            raise ValueError(f"Capture camera motion {key} differs from the requested sequence")
+    for key, value, tolerance in (("fraction", fraction, 1e-9),
+                                  ("vertical_fov", capture_fov(case) or 60, 1e-5)):
+        actual = motion.get(key)
+        if (type(actual) not in (int, float) or not math.isfinite(actual) or
+                not math.isclose(actual, value, rel_tol=tolerance, abs_tol=tolerance)):
+            raise ValueError(f"Capture camera motion {key} differs from the requested sequence")
+    return expected_pose
 
 
 def verify_camera(metadata, config, frames, case):
@@ -571,14 +620,18 @@ def verify_camera(metadata, config, frames, case):
         if "time_of_day" in config:
             number("time_of_day", config["time_of_day"])
         if "pose" in case:
+            pose = (verify_camera_motion(metadata, {**case, "frames": case.get("frames", frames)}, frames)
+                    if "pose_to" in case else case["pose"])
             position = metadata.get("camera_position")
             if not isinstance(position, list) or len(position) != 3:
                 raise ValueError("Capture camera position is missing or malformed")
-            for actual, expected in zip(position, case["pose"][:3]):
+            for actual, expected in zip(position, pose[:3]):
                 if type(actual) not in (int, float) or not math.isfinite(actual) or not math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-5):
                     raise ValueError("Capture camera position differs from the requested pose")
-            number("camera_yaw", case["pose"][3])
-            number("camera_pitch", case["pose"][4])
+            number("camera_yaw", pose[3])
+            number("camera_pitch", pose[4])
+    if "pose_to" not in case and "capture_camera_motion" in metadata:
+        raise ValueError("Capture unexpectedly used camera endpoint motion")
     fov = capture_fov(case)
     if fov is not None or "tour_time" not in case:
         number("camera_fov", fov if fov is not None else 60)
@@ -731,6 +784,8 @@ def write_receipts(path, receipts):
 
 
 def verify_sequence(image, config, api, frames, case):
+    # Resolve the CLI default once; later images must retain the same endpoint.
+    case = {**case, "frames": frames}
     products = verify_capture(image, config, api, frames, case.get("expected_metadata"), case)
     count = case.get("count", 1)
     if count > 1:
@@ -780,7 +835,7 @@ def main():
     if not isinstance(selected, list):
         parser.error("Case manifest must contain a JSON array")
     for case in selected:
-        validate_case(case)
+        validate_case(case, args.frames)
     if len({case["name"] for case in selected}) != len(selected):
         parser.error("Case names must be unique")
     selected = [case for case in selected if re.search(args.case, case["name"])]
@@ -825,6 +880,8 @@ def main():
             command += ["--camera-tour-time", str(case["tour_time"])]
         if "pose" in case:
             command += ["--camera-pose", ",".join(str(v) for v in case["pose"])]
+        if "pose_to" in case:
+            command += ["--capture-camera-to", ",".join(str(v) for v in case["pose_to"])]
         command += case.get("args", [])
         identity = {"case": case, "command": command, "input_config": config,
                     "binary_sha256": binary_sha, "api": args.api,
@@ -851,6 +908,8 @@ def main():
         if args.api == "opengl":
             env["SDL_VULKAN_LIBRARY"] = "/nonexistent/visual-audit-libvulkan.so"
         start = time.monotonic()
+        if config.get("frame_generation", "off") != "off":
+            print(f"{name}: real application images only; generated images, provider activation and display cadence need separate native diagnostics", flush=True)
         print(f"Capturing {name}", flush=True)
         with log_path.open("w") as log:
             try:

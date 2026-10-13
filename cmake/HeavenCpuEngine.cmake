@@ -41,6 +41,7 @@ set(HEAVEN_CPU_ENGINE_SOURCES
     ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/microprofiler.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/microprofile_report.cpp
 )
+list(APPEND HEAVEN_CPU_ENGINE_SOURCES ${HEAVEN_REPO_ROOT}/benchmark/src/engine/frame_generation.cpp)
 add_library(heaven_cpu_engine STATIC ${HEAVEN_CPU_ENGINE_SOURCES})
 set_target_properties(heaven_cpu_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(heaven_cpu_engine PUBLIC ${HEAVEN_REPO_ROOT}/benchmark/src)

@@ -404,7 +404,8 @@ if [[ "$COMPILE_MATERIALS" -eq 1 ]]; then
                heaven_flame heaven_glow heaven_lens_flare heaven_firefly \
                heaven_rain heaven_splash heaven_glass heaven_volumetric_clouds \
                heaven_ssgi heaven_hdr_encode heaven_depth heaven_depth_masked \
-               heaven_grass_depth heaven_height_sample; do
+               heaven_grass_depth heaven_height_sample heaven_motion heaven_motion_masked \
+               heaven_motion_grass heaven_temporal_extract heaven_fg_composite; do
         src="$MATERIALS_DIR/$mat.mat"
         out="$MATERIALS_DIR/$mat.filamat"
         [[ -f "$src" ]] || continue

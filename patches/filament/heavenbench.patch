@@ -34,10 +34,18 @@ index a95a74765827433f989b1b1125fca6bb39721291..c5f90688c8c0b01c47fbfe62da273610
          add_definitions(-DFILAMENT_SUPPORTS_EGL_ON_LINUX)
          set(FILAMENT_SUPPORTS_X11 FALSE)
 diff --git a/filament/backend/include/backend/DriverEnums.h b/filament/backend/include/backend/DriverEnums.h
-index 7392178b014fb84e817a589cde967c242aae0bbc..4684c22ae1ac7b1ba7fe3c367200a7c2ecda21b0 100644
+index 7392178b014fb84e817a589cde967c242aae0bbc..f9fde6e180501337c51030872c52eb2d9b9e3d32 100644
 --- a/filament/backend/include/backend/DriverEnums.h
 +++ b/filament/backend/include/backend/DriverEnums.h
-@@ -111,6 +111,20 @@ static constexpr uint64_t SWAP_CHAIN_CONFIG_PROTECTED_CONTENT   = 0x40;
+@@ -23,6 +23,7 @@
+ 
+ #include <backend/Platform.h>
+ #include <backend/PresentCallable.h>
++#include <backend/NativeCommand.h>
+ 
+ #include <utils/BitmaskEnum.h>
+ #include <utils/CString.h>
+@@ -111,6 +112,20 @@ static constexpr uint64_t SWAP_CHAIN_CONFIG_PROTECTED_CONTENT   = 0x40;
   */
  static constexpr uint64_t SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES      = 0x80;
  
@@ -58,6 +66,126 @@ index 7392178b014fb84e817a589cde967c242aae0bbc..4684c22ae1ac7b1ba7fe3c367200a7c2
  static constexpr size_t MAX_VERTEX_ATTRIBUTE_COUNT  = 16;   // This is guaranteed by OpenGL ES.
  static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
  static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
+diff --git a/filament/backend/include/backend/NativeCommand.h b/filament/backend/include/backend/NativeCommand.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..256b6f58fa9d3c0d89dc9a28cd1978da9b973cbc
+--- /dev/null
++++ b/filament/backend/include/backend/NativeCommand.h
+@@ -0,0 +1,24 @@
++/*
++ * Copyright (C) 2026 HeavenBench contributors
++ * Licensed under the Apache License, Version 2.0.
++ */
++#ifndef TNT_BACKEND_NATIVE_COMMAND_H
++#define TNT_BACKEND_NATIVE_COMMAND_H
++
++#include <array>
++#include <cstdint>
++
++namespace filament::backend {
++
++// Commands are copied into the ordinary driver stream. The callback runs there,
++// outside a render pass, and must not call frontend Filament APIs. The owner
++// drains the engine before retiring callback data or an external GPU resource.
++struct NativeCommand {
++    using Callback = void (*)(void* user, void const* vulkanContext) noexcept;
++    std::array<uint32_t, 4> textures{UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
++    Callback callback = nullptr;
++    void* user = nullptr;
++};
++
++} // namespace filament::backend
++#endif
+diff --git a/filament/backend/include/backend/VulkanCommandContext.h b/filament/backend/include/backend/VulkanCommandContext.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc29cfb41506da08d84ee19068dd612095e815bc
+--- /dev/null
++++ b/filament/backend/include/backend/VulkanCommandContext.h
+@@ -0,0 +1,47 @@
++/*
++ * Copyright (C) 2026 HeavenBench contributors
++ * Licensed under the Apache License, Version 2.0.
++ */
++#ifndef TNT_BACKEND_VULKAN_COMMAND_CONTEXT_H
++#define TNT_BACKEND_VULKAN_COMMAND_CONTEXT_H
++
++#include <bluevk/BlueVK.h>
++#include <array>
++
++namespace filament::backend {
++
++struct VulkanCommandImage {
++    VkImage image = VK_NULL_HANDLE;
++    VkFormat format = VK_FORMAT_UNDEFINED;
++    VkExtent2D extent{};
++    VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;
++    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
++    VkImageView view = VK_NULL_HANDLE;
++    VkDeviceMemory memory = VK_NULL_HANDLE;
++    VkImageUsageFlags usage = 0;
++    VkImageLayout restoredLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    uint32_t mipLevels = 1;
++    uint32_t arrayLayers = 1;
++};
++
++// Borrowed handles, valid only during NativeCommand::callback. Inputs are in
++// GENERAL with shader reads synchronized for compute. A callback may record
++// commands but must restore that layout and must never submit the shared queue.
++// Filament retains the input resources through completion of this submission.
++// Consumers tagging inputs for later presentation must use restoredLayout and
++// separately retain the owning Texture until their presentation work drains.
++struct VulkanCommandContext {
++    VkInstance instance = VK_NULL_HANDLE;
++    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
++    VkDevice device = VK_NULL_HANDLE;
++    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
++    uint32_t queueFamily = UINT32_MAX;
++    std::array<VulkanCommandImage, 4> images{};
++    // SDK work is isolated in a secondary command buffer. Set this on any
++    // recording failure to discard every native command, including partial
++    // initialization/history writes. A successful history seed still commits.
++    bool* discard = nullptr;
++};
++
++} // namespace filament::backend
++#endif
+diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
+index cf1d04ba3d67c5c5fe3379e9491d52f182c0b0fb..425a516b1696c7f05a24dc6e7b3e47dbc59c7eca 100644
+--- a/filament/backend/include/backend/platforms/VulkanPlatform.h
++++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
+@@ -107,6 +107,8 @@ public:
+         VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+         VkExtent2D extent = {0, 0};
++        // Actual selected surface mode; headless/custom swapchains may be unknown.
++        VkPresentModeKHR presentMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+         uint32_t layerCount = 1;
+         bool isProtected = false;
+     };
+@@ -155,6 +157,10 @@ public:
+          */
+         bool isSRGBSwapChainSupported = true;
+ 
++        // Opt-in compute-provider requirements. Ordinary Filament devices keep
++        // their existing feature set; unsupported features remain disabled.
++        bool enableFrameGenerationStorageImageFeatures = false;
++
+         /**
+          * When the platform window is resized, we will flush and wait on the command queues
+          * before recreating the swapchain. Default is true.
+diff --git a/filament/backend/include/private/backend/DriverAPI.inc b/filament/backend/include/private/backend/DriverAPI.inc
+index 8f1199f27ab56c2ed17702d3c729fffcee242899..13d5cd0a705bb89a284396d4b33d6a689b4a3849 100644
+--- a/filament/backend/include/private/backend/DriverAPI.inc
++++ b/filament/backend/include/private/backend/DriverAPI.inc
+@@ -148,6 +148,8 @@ DECL_DRIVER_API_N(beginFrame,
+         int64_t, refreshIntervalNs,
+         uint32_t, frameId)
+ 
++DECL_DRIVER_API_N(nativeCommand, backend::NativeCommand, command)
++
+ DECL_DRIVER_API_N(setFrameScheduledCallback,
+         backend::SwapChainHandle, sch,
+         backend::CallbackHandler*, handler,
 diff --git a/filament/backend/src/Driver.cpp b/filament/backend/src/Driver.cpp
 index bdab829d960eccaa1fa7ef25857023be9a169ae8..e4dd285c9bc7809285dd2cb1f5ac9a830aafb848 100644
 --- a/filament/backend/src/Driver.cpp
@@ -318,6 +446,36 @@ index 0000000000000000000000000000000000000000..668dee9fb19d1d894baeedde698c44b9
 +};
 +} // namespace filament::backend
 +#endif
+diff --git a/filament/backend/src/metal/MetalDriver.mm b/filament/backend/src/metal/MetalDriver.mm
+index 20af7acb71965f1368f31de7e5c3f6e8fa9ada80..5a8f668686ecf98b06fd18cd3fc138493bb504ac 100644
+--- a/filament/backend/src/metal/MetalDriver.mm
++++ b/filament/backend/src/metal/MetalDriver.mm
+@@ -2603,6 +2603,10 @@ void MetalDriver::draw(PipelineState ps, Handle<HwRenderPrimitive> rph,
+     draw2(indexOffset, indexCount, instanceCount);
+ }
+ 
++void MetalDriver::nativeCommand(NativeCommand command) {
++    if (command.callback) command.callback(command.user, nullptr);
++}
++
+ void MetalDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {
+     FILAMENT_CHECK_PRECONDITION(!isInRenderPass(mContext))
+             << "dispatchCompute must be called outside of a render pass.";
+diff --git a/filament/backend/src/noop/NoopDriver.cpp b/filament/backend/src/noop/NoopDriver.cpp
+index fd8230bcebfc43bca3f0ea2dc910ac70b93b16c3..e83decbc00f4a3cd80292879b3ef796419b20bfb 100644
+--- a/filament/backend/src/noop/NoopDriver.cpp
++++ b/filament/backend/src/noop/NoopDriver.cpp
+@@ -433,6 +433,10 @@ void NoopDriver::draw(PipelineState pipelineState, Handle<HwRenderPrimitive> rph
+         uint32_t indexOffset, uint32_t indexCount, uint32_t instanceCount) {
+ }
+ 
++void NoopDriver::nativeCommand(NativeCommand command) {
++    if (command.callback) command.callback(command.user, nullptr);
++}
++
+ void NoopDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {
+ }
+ 
 diff --git a/filament/backend/src/opengl/OpenGLContext.cpp b/filament/backend/src/opengl/OpenGLContext.cpp
 index ff482ed458ecb663d4e6f0ec94ae6d94bb0737a2..757dcf8bcdeb76030362798d6d9b37a74860c14d 100644
 --- a/filament/backend/src/opengl/OpenGLContext.cpp
@@ -368,7 +526,7 @@ index c5af962ec039bcc344cf1f724976f4a1b2a3834e..e56375745ae01ae7708e5e8832276f4e
          void (FILAMENT_GL_APIENTRYP getQueryObjectuiv)(GLuint id, GLenum pname, GLuint* params);
          void (FILAMENT_GL_APIENTRYP getQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
 diff --git a/filament/backend/src/opengl/OpenGLDriver.cpp b/filament/backend/src/opengl/OpenGLDriver.cpp
-index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..2316dc1c5dcee4029d9c18eb8f5576f5b49c5678 100644
+index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd2731455e671fc 100644
 --- a/filament/backend/src/opengl/OpenGLDriver.cpp
 +++ b/filament/backend/src/opengl/OpenGLDriver.cpp
 @@ -15,6 +15,7 @@
@@ -495,6 +653,17 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..2316dc1c5dcee4029d9c18eb8f5576f5
  
  #if FILAMENT_ENABLE_MATDBG
      CHECK_GL_ERROR_NON_FATAL()
+@@ -5160,6 +5184,10 @@ void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+     }
+ }
+ 
++void OpenGLDriver::nativeCommand(NativeCommand command) {
++    if (command.callback) command.callback(command.user, nullptr);
++}
++
+ void OpenGLDriver::dispatchCompute(Handle<HwProgram> program, uint3 const workGroupCount) {
+     DEBUG_MARKER()
+     getShaderCompilerService().tick();
 diff --git a/filament/backend/src/opengl/OpenGLDriver.h b/filament/backend/src/opengl/OpenGLDriver.h
 index 95beae91000866e72ffd6d37b2bd3fe51f3ec597..c6f7b06f41d3795d4f63277c2f829bbe2dbfd457 100644
 --- a/filament/backend/src/opengl/OpenGLDriver.h
@@ -636,19 +805,135 @@ index 3bc7eff166241f81462e890ff5502ddc9ce80900..9dd674d06fdd6ef0738c98efab859355
  extern PFNGLENDQUERYEXTPROC glEndQueryEXT;
  extern PFNGLGETQUERYOBJECTUIVEXTPROC glGetQueryObjectuivEXT;
  extern PFNGLGETQUERYOBJECTUI64VEXTPROC glGetQueryObjectui64vEXT;
+diff --git a/filament/backend/src/vulkan/VulkanCommands.cpp b/filament/backend/src/vulkan/VulkanCommands.cpp
+index 482c01412f234b4733a16a2273ba7adc75ef13b7..c8dcc5023bd139cabf38ad066270fcd494b178d5 100644
+--- a/filament/backend/src/vulkan/VulkanCommands.cpp
++++ b/filament/backend/src/vulkan/VulkanCommands.cpp
+@@ -102,6 +102,8 @@ VulkanCommandBuffer::VulkanCommandBuffer(VulkanContext const& context,
+       mQueue(queue),
+       mSemaphoreManager(semaphoreManager),
+       mBuffer(createCommandBuffer(device, pool)),
++      mDevice(device),
++      mPool(pool),
+       mSubmission(semaphoreManager->acquire()),
+       mAge(++sAgeCounter) {
+     mFenceStatus = mFencePool.acquireFenceStatus();
+@@ -110,6 +112,7 @@ VulkanCommandBuffer::VulkanCommandBuffer(VulkanContext const& context,
+ void VulkanCommandBuffer::reset() noexcept {
+     mMarkerCount = 0;
+     mResources.clear();
++    mNativeUsed = 0;
+     mWaitSemaphores.clear();
+     mWaitSemaphoreStages.clear();
+     mAge = ++sAgeCounter;
+@@ -123,6 +126,33 @@ void VulkanCommandBuffer::reset() noexcept {
+     mFenceStatus = mFencePool.acquireFenceStatus();
+ }
+ 
++VkCommandBuffer VulkanCommandBuffer::beginNativeCommands() {
++    constexpr size_t MAX_NATIVE_COMMANDS = 16;
++    if (mNativeUsed == MAX_NATIVE_COMMANDS) return VK_NULL_HANDLE;
++    if (mNativeUsed == mNativeCommands.size()) {
++        VkCommandBufferAllocateInfo const allocation{
++            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
++            .commandPool = mPool,
++            .level = VK_COMMAND_BUFFER_LEVEL_SECONDARY,
++            .commandBufferCount = 1,
++        };
++        VkCommandBuffer secondary = VK_NULL_HANDLE;
++        if (vkAllocateCommandBuffers(mDevice, &allocation, &secondary) != VK_SUCCESS)
++            return VK_NULL_HANDLE;
++        mNativeCommands.push_back(secondary);
++    }
++    auto const secondary = mNativeCommands[mNativeUsed++];
++    VkCommandBufferInheritanceInfo const inheritance{
++        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
++    };
++    VkCommandBufferBeginInfo const begin{
++        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
++        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
++        .pInheritanceInfo = &inheritance,
++    };
++    return vkBeginCommandBuffer(secondary, &begin) == VK_SUCCESS ? secondary : VK_NULL_HANDLE;
++}
++
+ void VulkanCommandBuffer::pushMarker(char const* marker) noexcept {
+     if (mContext.isDebugUtilsEnabled()) {
+         VkDebugUtilsLabelEXT labelInfo = {
+diff --git a/filament/backend/src/vulkan/VulkanCommands.h b/filament/backend/src/vulkan/VulkanCommands.h
+index 0e98234b657700c451d75f81010e003f894063b1..500f2cd92cc568916efe573e97cb610b11c6687c 100644
+--- a/filament/backend/src/vulkan/VulkanCommands.h
++++ b/filament/backend/src/vulkan/VulkanCommands.h
+@@ -78,6 +78,9 @@ struct VulkanCommandBuffer {
+     }
+ 
+     void reset() noexcept;
++    // Cached, bounded secondary buffers share this primary's fence/lifetime.
++    // They are reused only after reset() retires the completed primary.
++    VkCommandBuffer beginNativeCommands();
+ 
+     inline void insertWait(VkSemaphore sem, VkPipelineStageFlags waitStage) {
+         mWaitSemaphores.push_back(sem);
+@@ -115,6 +118,10 @@ struct VulkanCommandBuffer {
+         return mAge;
+     }
+ 
++    bool usesProtectedQueue() const {
++        return isProtected;
++    }
++
+ private:
+     using HeldResource = std::variant<fvkmemory::resource_ptr<Resource>,
+                                       fvkmemory::resource_ptr<ThreadSafeResource>>;
+@@ -130,6 +137,10 @@ private:
+     fvkutils::StaticVector<VkSemaphore, 2> mWaitSemaphores;
+     fvkutils::StaticVector<VkPipelineStageFlags, 2> mWaitSemaphoreStages;
+     VkCommandBuffer mBuffer;
++    VkDevice mDevice;
++    VkCommandPool mPool;
++    std::vector<VkCommandBuffer> mNativeCommands;
++    size_t mNativeUsed = 0;
+     fvkmemory::resource_ptr<VulkanSemaphore> mSubmission;
+     std::shared_ptr<VulkanCmdFence> mFenceStatus;
+     std::vector<HeldResource> mResources;
+diff --git a/filament/backend/src/vulkan/VulkanConstants.h b/filament/backend/src/vulkan/VulkanConstants.h
+index 2d4e0be49283fff9de744e8dcd5e7bd381e8acf3..865c915a71205d44fa5105aa3e6146be7f3223b2 100644
+--- a/filament/backend/src/vulkan/VulkanConstants.h
++++ b/filament/backend/src/vulkan/VulkanConstants.h
+@@ -204,16 +204,14 @@ constexpr static const int FVK_REQUIRED_VERSION_MINOR = 1;
+ // Heuristic: Triple Buffering (3) multiplied by maximum number of renderpasses (15).
+ constexpr static const int FVK_MAX_COMMAND_BUFFERS = 3 * 15;
+ 
+-// Number of command buffer submissions that should occur before an unused pipeline is removed
+-// from the cache.
++// Number of garbage collection ticks before an unused pipeline is eligible for eviction.
+ //
+ // If this number is low, VkPipeline construction will occur frequently, which can
+ // be extremely slow. If this number is high, the memory footprint will be large.
+ constexpr static const int FVK_MAX_PIPELINE_AGE = FVK_MAX_COMMAND_BUFFERS;
+ 
+-// VulkanPipelineCache does not track which command buffers contain references to which pipelines,
+-// instead it simply waits for at least FVK_MAX_COMMAND_BUFFERS submissions to occur before
+-// destroying any unused pipeline object.
++// This is only a cache reuse policy: retry ticks can run GC without a new submission. The latest
++// actual use fences on ordinary and protected queues must also complete before eviction.
+ static_assert(FVK_MAX_PIPELINE_AGE >= FVK_MAX_COMMAND_BUFFERS);
+ 
+ #endif
 diff --git a/filament/backend/src/vulkan/VulkanDriver.cpp b/filament/backend/src/vulkan/VulkanDriver.cpp
-index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d346ecc072 100644
+index d804bfce16a22a0fc478d2364dd908a0605c2678..5fe694733e6d632b24441794e3fe22382e138baa 100644
 --- a/filament/backend/src/vulkan/VulkanDriver.cpp
 +++ b/filament/backend/src/vulkan/VulkanDriver.cpp
-@@ -15,6 +15,7 @@
+@@ -15,6 +15,8 @@
   */
  
  #include "VulkanDriver.h"
++#include <backend/VulkanCommandContext.h>
 +#include "VulkanGpuProfiler.h"
  
  #include "CommandStreamDispatcher.h"
  #include "SystraceProfile.h"
-@@ -63,6 +64,10 @@ using namespace bluevk;
+@@ -63,6 +65,10 @@ using namespace bluevk;
  
  namespace filament::backend {
  
@@ -659,7 +944,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  namespace {
  
  static constexpr uint8_t MAX_TICKS_BETWEEN_GC = 3;
-@@ -395,6 +400,7 @@ void VulkanDriver::terminate() {
+@@ -395,6 +401,7 @@ void VulkanDriver::terminate() {
      // Flush and wait here to make sure all queued commands are executed and resources that are tied
      // to those commands are no longer referenced.
      finish(0);
@@ -667,7 +952,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  
      mCurrentSwapChain = {};
      mDefaultRenderTarget = {};
-@@ -456,6 +462,7 @@ void VulkanDriver::terminate() {
+@@ -456,6 +463,7 @@ void VulkanDriver::terminate() {
  
  void VulkanDriver::tick(int) {
      mCommands.updateFences();
@@ -675,7 +960,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  
      // Destroy the resources of the readbacks that completed on the readPixels thread.
      mReadPixels.gc();
-@@ -500,6 +507,11 @@ void VulkanDriver::collectGarbage() {
+@@ -500,6 +508,11 @@ void VulkanDriver::collectGarbage() {
  void VulkanDriver::beginFrame(int64_t monotonic_clock_ns,
          int64_t refreshIntervalNs, uint32_t frameId) {
      FVK_PROFILE_MARKER(PROFILE_NAME_BEGINFRAME);
@@ -687,7 +972,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  
      // if frameId is 0, it means we're not associated to a particular frame, which is the case
      // for standalone views. And in this case we skip the frame info timing collection.
-@@ -614,6 +626,7 @@ void VulkanDriver::finish(int dummy) {
+@@ -614,6 +627,7 @@ void VulkanDriver::finish(int dummy) {
  
      // This wait() is still necessary to update the fence status.
      mCommands.wait();
@@ -695,7 +980,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  
      mReadPixels.runUntilComplete();
  }
-@@ -2779,6 +2792,7 @@ void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
+@@ -2779,6 +2793,7 @@ void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
      auto vbi = resource_ptr<VulkanVertexBufferInfo>::cast(&mResourceManager,
              pipelineState.vertexBufferInfo);
  
@@ -703,7 +988,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
      RasterState const& rasterState = pipelineState.rasterState;
      PolygonOffset const& depthOffset = pipelineState.polygonOffset;
  
-@@ -2965,6 +2979,8 @@ void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t ins
+@@ -2965,6 +2980,8 @@ void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t ins
      VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
  
      vkCmdDrawIndexed(cmdbuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstId);
@@ -712,7 +997,7 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  }
  
  void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
-@@ -2976,6 +2992,8 @@ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
+@@ -2976,6 +2993,8 @@ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
      VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
  
      vkCmdDraw(cmdbuffer, vertexCount, instanceCount, vertexOffset, firstInstId);
@@ -721,6 +1006,78 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..2fb67e39a60ffc1daff7434d194f44d3
  }
  
  void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+@@ -2988,6 +3007,71 @@ void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+     draw2(indexOffset, indexCount, instanceCount);
+ }
+ 
++void VulkanDriver::nativeCommand(NativeCommand command) {
++    FVK_SYSTRACE_SCOPE();
++    if (!command.callback) return;
++    assert_invariant(!mCurrentRenderPass.commandBuffer);
++    auto& commands = mCommands.get();
++    VulkanCommandContext context;
++    context.instance = mPlatform->getInstance();
++    context.physicalDevice = mPlatform->getPhysicalDevice();
++    context.device = mPlatform->getDevice();
++    context.queueFamily = mPlatform->getGraphicsQueueFamilyIndex();
++    context.commandBuffer = commands.buffer();
++    std::array<resource_ptr<VulkanTexture>, 4> textures;
++    std::array<VulkanLayout, 4> layouts{};
++    bool hasTextures = false;
++    for (size_t i = 0; i < textures.size(); ++i) {
++        if (command.textures[i] == HandleBase::nullid) continue;
++        hasTextures = true;
++        textures[i] = resource_ptr<VulkanTexture>::cast(&mResourceManager,
++                TextureHandle(command.textures[i]));
++        auto& texture = textures[i];
++        layouts[i] = texture->getLayout(0, 0);
++        const auto range = texture->getPrimaryViewRange();
++        if (layouts[i] == VulkanLayout::UNDEFINED || texture->samples != 1 ||
++                range.levelCount != 1 || range.layerCount != 1) {
++            command.callback(command.user, nullptr);
++            return;
++        }
++    }
++    bool discard = false;
++    if (hasTextures) {
++        context.commandBuffer = commands.beginNativeCommands();
++        if (!context.commandBuffer) {
++            command.callback(command.user, nullptr);
++            return;
++        }
++        context.discard = &discard;
++    }
++    for (size_t i = 0; i < textures.size(); ++i) {
++        auto& texture = textures[i];
++        if (!texture) continue;
++        texture->transitionLayout(&commands, texture->getPrimaryViewRange(),
++                VulkanLayout::COMPUTE_READ);
++        commands.acquire(texture);
++        context.images[i] = { texture->getVkImage(), texture->getVkFormat(),
++                {texture->width, texture->height}, VK_IMAGE_LAYOUT_GENERAL,
++                texture->getImageAspect() };
++        context.images[i].view = texture->getView(texture->getPrimaryViewRange());
++        context.images[i].memory = texture->getVkMemory();
++        context.images[i].usage = texture->getVkUsage();
++        context.images[i].restoredLayout = fvkutils::getVkLayout(layouts[i]);
++    }
++    command.callback(command.user, &context);
++    if (hasTextures) {
++        auto const result = vkEndCommandBuffer(context.commandBuffer);
++        FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS)
++                << "Native secondary command recording failed: " << result;
++        if (!discard) vkCmdExecuteCommands(commands.buffer(), 1, &context.commandBuffer);
++    }
++    invalidateBoundState();
++    for (size_t i = 0; i < textures.size(); ++i) {
++        auto& texture = textures[i];
++        if (texture) texture->transitionLayout(&commands, texture->getPrimaryViewRange(), layouts[i]);
++    }
++}
++
+ void VulkanDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {
+     // FIXME: implement me
+ }
 diff --git a/filament/backend/src/vulkan/VulkanDriver.h b/filament/backend/src/vulkan/VulkanDriver.h
 index 8b513e4ea8f03f22260d85d1489eeecd0da47c69..15770fef0c5f24bdf8d41471ae3e5b913ba74969 100644
 --- a/filament/backend/src/vulkan/VulkanDriver.h
@@ -843,8 +1200,206 @@ index 0000000000000000000000000000000000000000..701cdc67e90f72e370a0ca728ca741d6
 +};
 +} // namespace filament::backend
 +#endif
+diff --git a/filament/backend/src/vulkan/VulkanPipelineCache.cpp b/filament/backend/src/vulkan/VulkanPipelineCache.cpp
+index 6261b0134d6e55dfd97da1abcd8c1071f8bd84d8..4d89718a07be897ee75d3d0b0c2ebf8e1b939d1d 100644
+--- a/filament/backend/src/vulkan/VulkanPipelineCache.cpp
++++ b/filament/backend/src/vulkan/VulkanPipelineCache.cpp
+@@ -172,7 +172,6 @@ VulkanPipelineCache::PipelineCacheEntry* VulkanPipelineCache::getOrCreatePipelin
+     if (PipelineMap::iterator pipelineIter = mPipelines.find(mStaticPipelineKey);
+             pipelineIter != mPipelines.end()) {
+         auto& pipeline = pipelineIter.value();
+-        pipeline.lastUsed = mCurrentTime;
+         FILAMENT_TRACING_EVENT(FILAMENT_TRACING_CATEGORY_FILAMENT,
+                 "Pipeline(Hit)", "program", mBoundProgram.c_str_safe());
+         return &pipeline;
+@@ -181,7 +180,7 @@ VulkanPipelineCache::PipelineCacheEntry* VulkanPipelineCache::getOrCreatePipelin
+             "Pipeline(Miss)", "program", mBoundProgram.c_str_safe());
+     PipelineCacheEntry cacheEntry {
+         .handle = createPipeline(mStaticPipelineKey),
+-        .lastUsed = mCurrentTime,
++        .lifetime = {},
+     };
+     assert_invariant(cacheEntry.handle != VK_NULL_HANDLE && "Pipeline handle is VK_NULL_HANDLE");
+     return &mPipelines.emplace(mStaticPipelineKey, cacheEntry).first.value();
+@@ -200,9 +199,16 @@ void VulkanPipelineCache::bindPipeline(VulkanCommandBuffer* commands) {
+         PipelineCacheEntry* cacheEntry = getOrCreatePipeline();
+         assert_invariant(cacheEntry != nullptr && "Failed to create/find pipeline");
+         mBoundPipeline = mStaticPipelineKey;
++        mBoundPipelineEntry = cacheEntry;
+         vkCmdBindPipeline(cmdbuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cacheEntry->handle);
+     }
+ 
++    assert_invariant(mBoundPipelineEntry);
++    // Include the same-key fast path: a new command buffer or later use must never lose its
++    // lifetime credit merely because its static pipeline state matches a previous draw.
++    mBoundPipelineEntry->lifetime.used(mCurrentTime, commands->usesProtectedQueue(),
++            commands->getFenceStatus());
++
+     uint16_t const dirtyMask = computeDirtyDynamicState();
+     if (dirtyMask == DIRTY_NONE) {
+         return;
+@@ -656,6 +662,7 @@ void VulkanPipelineCache::resetBoundDynamicState() noexcept {
+ 
+ void VulkanPipelineCache::resetBoundPipeline() {
+     mBoundPipeline = {};
++    mBoundPipelineEntry = nullptr;
+     mBoundDynamicState = {};
+     mForceDirtyDynamicState = true;
+     mBoundVertexHash = 0;
+@@ -675,10 +682,8 @@ void VulkanPipelineCache::terminate() noexcept {
+ }
+ 
+ void VulkanPipelineCache::gc() noexcept {
+-    // The timestamp associated with a given cache entry represents "time" as a count of flush
+-    // events since the cache was constructed. If any cache entry was most recently used over
+-    // FVK_MAX_PIPELINE_AGE flush events in the past, then we can be sure that it is no longer
+-    // being used by the GPU, and is therefore safe to destroy or reclaim.
++    // Retry ticks can collect garbage without any submission. Age alone therefore cannot
++    // prove completion; the latest actual use fence on each queue protects every entry.
+     ++mCurrentTime;
+ 
+     // The Vulkan spec says: "When a command buffer begins recording, all state in that command
+@@ -687,12 +692,12 @@ void VulkanPipelineCache::gc() noexcept {
+ 
+     // NOTE: Due to robin_map restrictions, we cannot use auto or range-based loops.
+ 
+-    // Evict any pipelines that have not been used in a while.
+-    // Any pipeline older than FVK_MAX_COMMAND_BUFFERS can be safely destroyed.
+-   using ConstPipeIterator = decltype(mPipelines)::const_iterator;
+-   for (ConstPipeIterator iter = mPipelines.begin(); iter != mPipelines.end();) {
+-       const PipelineCacheEntry& cacheEntry = iter.value();
+-       if (cacheEntry.lastUsed + FVK_MAX_PIPELINE_AGE < mCurrentTime) {
++    // Evict only old entries whose recorded / submitted work has actually completed.
++   using PipeIterator = decltype(mPipelines)::iterator;
++   for (PipeIterator iter = mPipelines.begin(); iter != mPipelines.end();) {
++       PipelineCacheEntry& cacheEntry = iter.value();
++       if (cacheEntry.lifetime.canEvict(mCurrentTime, FVK_MAX_PIPELINE_AGE,
++                   [](VulkanCmdFence& fence) { return fence.getStatus() == VK_SUCCESS; })) {
+            vkDestroyPipeline(mDevice, iter->second.handle, VKALLOC);
+            iter = mPipelines.erase(iter);
+        } else {
+diff --git a/filament/backend/src/vulkan/VulkanPipelineCache.h b/filament/backend/src/vulkan/VulkanPipelineCache.h
+index 80c84834d2012702bc537b482fa5e944f24e4872..8264788985f138a1bbc4ae6781a986fa5119570a 100644
+--- a/filament/backend/src/vulkan/VulkanPipelineCache.h
++++ b/filament/backend/src/vulkan/VulkanPipelineCache.h
+@@ -20,6 +20,7 @@
+ #include "CallbackManager.h"
+ #include "CompilerThreadPool.h"
+ #include "VulkanCommands.h"
++#include "VulkanPipelineLifetime.h"
+ 
+ #include <backend/DriverEnums.h>
+ #include <backend/TargetBufferInfo.h>
+@@ -223,16 +224,14 @@ private:
+     #pragma clang diagnostic pop
+ #endif
+ 
+-    // The timestamp associated with a given cache entry represents time as a count of flush
+-    // events since the cache was constructed. If any cache entry was most recently used over
+-    // FVK_MAX_PIPELINE_AGE flushes in the past, then we can be sure that it is no longer
+-    // being used by the GPU, and is therefore safe to destroy or reclaim.
++    // Cache time counts GC calls, including calls without a submission. Actual use fences,
++    // rather than this age, determine whether an unused entry can safely be destroyed.
+     using Timestamp = uint64_t;
+     Timestamp mCurrentTime = 0;
+ 
+     struct PipelineCacheEntry {
+         VkPipeline handle;
+-        Timestamp lastUsed;
++        VulkanPipelineLifetime<VulkanCmdFence> lifetime;
+     };
+ 
+     using PipelineMap = tsl::robin_map<PipelineKey, PipelineCacheEntry,
+@@ -272,6 +271,9 @@ private:
+ 
+     // Current bindings for the pipeline.
+     PipelineKey mBoundPipeline = {};
++    // Valid only until the next map mutation. bindPipeline replaces this after every insertion;
++    // gc clears it before erasing entries. Async prewarming does not mutate mPipelines.
++    PipelineCacheEntry* mBoundPipelineEntry = nullptr;
+ 
+     // Dynamic state currently recorded in the active command buffer.
+     PipelineKey mBoundDynamicState = {};
+diff --git a/filament/backend/src/vulkan/VulkanPipelineLifetime.h b/filament/backend/src/vulkan/VulkanPipelineLifetime.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f882225a09f45a96c8a9a1f0aecd24ecb0c39a7f
+--- /dev/null
++++ b/filament/backend/src/vulkan/VulkanPipelineLifetime.h
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef TNT_FILAMENT_BACKEND_VULKANPIPELINELIFETIME_H
++#define TNT_FILAMENT_BACKEND_VULKANPIPELINELIFETIME_H
++
++#include <array>
++#include <cstdint>
++#include <memory>
++#include <utility>
++
++namespace filament::backend {
++
++// Age is an eviction preference, not proof of GPU completion. Each queue is ordered, so its
++// latest use fence also protects all earlier uses on that queue. Protected and ordinary queues
++// must be tracked separately. Fence is generic so this policy can be tested without a GPU.
++template<typename Fence>
++class VulkanPipelineLifetime {
++public:
++    void used(uint64_t time, bool protectedQueue, std::shared_ptr<Fence> fence) noexcept {
++        mLastUsed = time;
++        mFences[protectedQueue ? 1 : 0] = std::move(fence);
++    }
++
++    template<typename IsComplete>
++    bool canEvict(uint64_t time, uint64_t maximumAge, IsComplete const& isComplete) noexcept {
++        bool idle = true;
++        for (auto& fence : mFences) {
++            if (fence && isComplete(*fence)) {
++                // Release completed fences even for young entries, allowing the fence pool to
++                // recycle them instead of retaining one native fence per cached pipeline.
++                fence.reset();
++            }
++            idle = idle && !fence;
++        }
++        return idle && time > mLastUsed && time - mLastUsed > maximumAge;
++    }
++
++private:
++    uint64_t mLastUsed = 0;
++    std::array<std::shared_ptr<Fence>, 2> mFences;
++};
++
++} // namespace filament::backend
++
++#endif // TNT_FILAMENT_BACKEND_VULKANPIPELINELIFETIME_H
+diff --git a/filament/backend/src/vulkan/VulkanTexture.h b/filament/backend/src/vulkan/VulkanTexture.h
+index 611eb2fd085ab1cec3b942802f75e99ed8289919..60c5ab9072b57fced029aded02845d00447bdfa3 100644
+--- a/filament/backend/src/vulkan/VulkanTexture.h
++++ b/filament/backend/src/vulkan/VulkanTexture.h
+@@ -224,6 +224,8 @@ struct VulkanTexture : public HwTexture, fvkmemory::Resource {
+     VkImage getVkImage() const {
+         return mState->mTextureImage;
+     }
++    VkDeviceMemory getVkMemory() const { return mState->mTextureImageMemory; }
++    VkImageUsageFlags getVkUsage() const { return mState->mUsage; }
+ 
+     VulkanLayout getLayout(uint32_t layer, uint32_t level) const;
+ 
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..9af22663cf7315ba73ace0be2d3ac4fd5164bdda 100644
+index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..c04d0c6db44c7ac0a8c3042498ffd2db3de59725 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 @@ -244,7 +244,15 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
@@ -864,6 +1419,18 @@ index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..9af22663cf7315ba73ace0be2d3ac4fd
  #if defined(__APPLE__)
          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
  #endif
+@@ -1252,6 +1260,11 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+         .textureCompressionBC = features.textureCompressionBC,
+         .shaderClipDistance = features.shaderClipDistance,
+     };
++    if (getCustomization().enableFrameGenerationStorageImageFeatures) {
++        enabledFeatures.shaderStorageImageExtendedFormats = features.shaderStorageImageExtendedFormats;
++        enabledFeatures.shaderStorageImageReadWithoutFormat = features.shaderStorageImageReadWithoutFormat;
++        enabledFeatures.shaderStorageImageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat;
++    }
+ 
+     VkPhysicalDeviceFeatures2 enabledFeatures2 = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp
 index 8874e079def3fd55f59b675c1a464242d0768f3c..1aed885a7f5796ec6bd8fdd27430013cc9ee45db 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformLinux.cpp
@@ -1028,7 +1595,7 @@ index 8874e079def3fd55f59b675c1a464242d0768f3c..1aed885a7f5796ec6bd8fdd27430013c
          extent.width = ptrval->width;
          extent.height = ptrval->height;
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
-index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..6565aabcb8dea857ac250c4695477d552bd990d7 100644
+index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..a3aa5b6007824f8b56fdbd585e1a8e3f27db7194 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 @@ -28,7 +28,7 @@
@@ -1181,6 +1748,14 @@ index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..6565aabcb8dea857ac250c4695477d55
      bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
                                              desiredPresentMode) != presentModes.end();
      FILAMENT_CHECK_POSTCONDITION(foundSuitablePresentMode)
+@@ -304,6 +389,7 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+ 
+     mSwapChainBundle.colors = fvkutils::enumerate(vkGetSwapchainImagesKHR, mDevice, mSwapchain);
+     mSwapChainBundle.colorFormat = surfaceFormat.format;
++    mSwapChainBundle.presentMode = desiredPresentMode;
+     mSwapChainBundle.depthFormat =
+             selectDepthFormat(mContext.getAttachmentDepthStencilFormats(), mHasStencil);
+     mSwapChainBundle.depth = createImage(mSwapChainBundle.extent,
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
 index a44c62e75d0cefff11bb288444252286f529842e..267a496c7aa8069eba49cdce75427c358eace14b 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
@@ -1194,6 +1769,76 @@ index a44c62e75d0cefff11bb288444252286f529842e..267a496c7aa8069eba49cdce75427c35
      bool const mHasStencil = false;
      bool const mIsProtected = false;
      bool mSuboptimal;
+diff --git a/filament/backend/src/vulkan/utils/Image.cpp b/filament/backend/src/vulkan/utils/Image.cpp
+index 2b04db7450b894833f4032446e9c19ee94a59a62..ca1d61b4b9693088f5e7fca82e5c8630023507fc 100644
+--- a/filament/backend/src/vulkan/utils/Image.cpp
++++ b/filament/backend/src/vulkan/utils/Image.cpp
+@@ -60,6 +60,10 @@ getVkTransition(const VulkanLayoutTransition& transition) {
+             srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+             srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+             break;
++        case VulkanLayout::COMPUTE_READ:
++            srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
++            srcStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
++            break;
+         case VulkanLayout::VERT_READ:
+             srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+             srcStage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+@@ -104,6 +108,10 @@ getVkTransition(const VulkanLayoutTransition& transition) {
+             dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+             dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+             break;
++        case VulkanLayout::COMPUTE_READ:
++            dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
++            dstStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
++            break;
+         case VulkanLayout::VERT_READ:
+             dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+             dstStage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+@@ -288,6 +296,7 @@ utils::io::ostream& operator<<(utils::io::ostream& out,
+         CASE(FRAG_READ)
+         CASE(VERT_READ)
+         CASE(STAGING)
++        CASE(COMPUTE_READ)
+         CASE(TRANSFER_SRC)
+         CASE(TRANSFER_DST)
+         CASE(DEPTH_STENCIL_ATTACHMENT)
+diff --git a/filament/backend/src/vulkan/utils/Image.h b/filament/backend/src/vulkan/utils/Image.h
+index 7d95a6b43fcf0f70a761d217ab1195f14f5ab6d6..b167bbf138ce478ad0a91600784ddba714d7e73d 100644
+--- a/filament/backend/src/vulkan/utils/Image.h
++++ b/filament/backend/src/vulkan/utils/Image.h
+@@ -34,6 +34,8 @@ enum class VulkanLayout : uint8_t {
+     UNDEFINED,
+     // Fragment/vertex shader accessible layout for reading and writing.
+     STAGING,
++    // Native compute readers use GENERAL without requiring storage-image usage.
++    COMPUTE_READ,
+     // Fragment shader accessible layout for reading only.
+     FRAG_READ,
+     // Vertex shader accessible layout for reading only.
+@@ -69,6 +71,7 @@ constexpr inline VkImageLayout getVkLayout(VulkanLayout layout) {
+         case VulkanLayout::UNDEFINED:
+             return VK_IMAGE_LAYOUT_UNDEFINED;
+         case VulkanLayout::STAGING:
++        case VulkanLayout::COMPUTE_READ:
+             return VK_IMAGE_LAYOUT_GENERAL;
+         case VulkanLayout::FRAG_READ:
+         case VulkanLayout::VERT_READ:
+diff --git a/filament/backend/src/webgpu/WebGPUDriver.cpp b/filament/backend/src/webgpu/WebGPUDriver.cpp
+index ad409d397066494e1bd9ae1e9cd9075c55c1f7fd..386e12b68ebdfab1c67aa093f30bc156059c6b3b 100644
+--- a/filament/backend/src/webgpu/WebGPUDriver.cpp
++++ b/filament/backend/src/webgpu/WebGPUDriver.cpp
+@@ -2145,6 +2145,10 @@ void WebGPUDriver::draw(PipelineState pipelineState,
+     draw2(indexOffset, indexCount, instanceCount);
+ }
+ 
++void WebGPUDriver::nativeCommand(NativeCommand command) {
++    if (command.callback) command.callback(command.user, nullptr);
++}
++
+ void WebGPUDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {
+     //todo
+ }
 diff --git a/filament/backend/test/test_ProfilerTrace.cpp b/filament/backend/test/test_ProfilerTrace.cpp
 new file mode 100644
 index 0000000000000000000000000000000000000000..ed6fc416814e623c9c7fac9e54585d417e053adb
@@ -1438,11 +2083,130 @@ index 0000000000000000000000000000000000000000..ed6fc416814e623c9c7fac9e54585d41
 +        std::fprintf(stderr, "ProfilerTrace contracts: FAIL: %s\n", e.what()); return 1;
 +    }
 +}
+diff --git a/filament/backend/test/test_VulkanPipelineLifetime.cpp b/filament/backend/test/test_VulkanPipelineLifetime.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..188a6a36a43451da59a1bc3cdb658eff7b29402f
+--- /dev/null
++++ b/filament/backend/test/test_VulkanPipelineLifetime.cpp
+@@ -0,0 +1,109 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++// Standalone production-policy fixture. No Vulkan loader or graphics device is needed.
++#include "vulkan/VulkanPipelineLifetime.h"
++
++#include <cstdio>
++#include <memory>
++#include <stdexcept>
++
++namespace {
++
++enum class Status { RECORDING, PENDING, COMPLETED, ERROR };
++struct Fence { Status status = Status::RECORDING; };
++using Lifetime = filament::backend::VulkanPipelineLifetime<Fence>;
++constexpr uint64_t MAXIMUM_AGE = 45;
++
++bool completed(Fence const& fence) { return fence.status == Status::COMPLETED; }
++void require(bool condition, char const* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++void stalledSubmission() {
++    Lifetime lifetime;
++    auto fence = std::make_shared<Fence>();
++    lifetime.used(2, false, fence);
++    for (uint64_t time = 3; time < 1000; ++time) {
++        require(!lifetime.canEvict(time, MAXIMUM_AGE, completed),
++                "GC ticks must not retire a still-recording command buffer's pipeline");
++    }
++    fence->status = Status::PENDING;
++    require(!lifetime.canEvict(1000, MAXIMUM_AGE, completed),
++            "Expired age must not retire a pending GPU submission");
++    fence->status = Status::ERROR;
++    require(!lifetime.canEvict(1001, MAXIMUM_AGE, completed),
++            "An unavailable / failed completion is not successful retirement");
++    fence->status = Status::COMPLETED;
++    require(lifetime.canEvict(1002, MAXIMUM_AGE, completed),
++            "An old completed entry must remain evictable");
++}
++
++void sameQueueAndRepeatedBind() {
++    Lifetime lifetime;
++    auto first = std::make_shared<Fence>();
++    first->status = Status::COMPLETED;
++    lifetime.used(1, false, first);
++    auto latest = std::make_shared<Fence>();
++    lifetime.used(100, false, latest);
++    require(!lifetime.canEvict(1000, MAXIMUM_AGE, completed),
++            "Later use on the same queue must supersede a completed older fence");
++    // The equal-static-key bind path uses this same operation, so it renews age and fence credit.
++    lifetime.used(1001, false, latest);
++    latest->status = Status::COMPLETED;
++    require(!lifetime.canEvict(1046, MAXIMUM_AGE, completed),
++            "A repeated pipeline bind must renew the cache age, including its boundary");
++    require(lifetime.canEvict(1047, MAXIMUM_AGE, completed),
++            "Completion must preserve the ordinary age-based reuse policy");
++}
++
++void independentQueuesAndFenceRelease() {
++    Lifetime lifetime;
++    auto ordinary = std::make_shared<Fence>();
++    ordinary->status = Status::COMPLETED;
++    auto protectedUse = std::make_shared<Fence>();
++    protectedUse->status = Status::PENDING;
++    std::weak_ptr<Fence> ordinaryWeak = ordinary;
++    lifetime.used(1, false, ordinary);
++    lifetime.used(2, true, protectedUse);
++    ordinary.reset();
++    require(!lifetime.canEvict(3, MAXIMUM_AGE, completed), "Young entries are retained");
++    require(ordinaryWeak.expired(),
++            "Completed native fences must be released even before pipeline age expires");
++    require(!lifetime.canEvict(1000, MAXIMUM_AGE, completed),
++            "Ordinary queue completion must not retire protected queue use");
++    protectedUse->status = Status::COMPLETED;
++    std::weak_ptr<Fence> protectedWeak = protectedUse;
++    protectedUse.reset();
++    require(lifetime.canEvict(1001, MAXIMUM_AGE, completed),
++            "Both queues complete permits old entry retirement");
++    require(protectedWeak.expired(), "Completion must release the final fence holder");
++}
++
++} // namespace
++
++int main() {
++    try {
++        stalledSubmission();
++        sameQueueAndRepeatedBind();
++        independentQueuesAndFenceRelease();
++        std::puts("Vulkan pipeline lifetime policy: PASS (recording, pending, errors, repeated binds, both queues, fence recycling)");
++        return 0;
++    } catch (std::exception const& error) {
++        std::fprintf(stderr, "Vulkan pipeline lifetime policy: FAIL: %s\n", error.what());
++        return 1;
++    }
++}
 diff --git a/filament/include/filament/Renderer.h b/filament/include/filament/Renderer.h
-index 5e1ba11de269899818a8a124bdc8e25b3bddca12..d93311c785b8d7468c5e7341edc096ddad02f44d 100644
+index 5e1ba11de269899818a8a124bdc8e25b3bddca12..9292d938e8267f356918583a84ba495e248bac9a 100644
 --- a/filament/include/filament/Renderer.h
 +++ b/filament/include/filament/Renderer.h
-@@ -23,6 +23,7 @@
+@@ -20,9 +20,11 @@
+ #define TNT_FILAMENT_RENDERER_H
+ 
+ #include <filament/FilamentAPI.h>
++#include <backend/NativeCommand.h>
  
  #include <utils/compiler.h>
  #include <utils/FixedCapacityVector.h>
@@ -1450,7 +2214,15 @@ index 5e1ba11de269899818a8a124bdc8e25b3bddca12..d93311c785b8d7468c5e7341edc096dd
  
  #include <math/vec4.h>
  
-@@ -130,6 +131,13 @@ public:
+@@ -38,6 +40,7 @@ class RenderTarget;
+ class SwapChain;
+ class View;
+ class Viewport;
++class Texture;
+ 
+ namespace backend {
+ class PixelBufferDescriptor;
+@@ -130,6 +133,13 @@ public:
       */
      size_t getMaxFrameHistorySize() const noexcept;
  
@@ -1464,6 +2236,20 @@ index 5e1ba11de269899818a8a124bdc8e25b3bddca12..d93311c785b8d7468c5e7341edc096dd
      /**
       * Use FrameRateOptions to set the desired frame rate and control how quickly the system
       * reacts to GPU load changes.
+@@ -439,6 +449,13 @@ public:
+      */
+     void setRenderingDeadline(std::chrono::steady_clock::time_point monotonic_clock);
+ 
++    // Queue an optional Vulkan compute integration after preceding view draws.
++    // Other backends invoke the callback with a null context. No resources or
++    // commands are allocated when this method is not called.
++    void nativeCommand(Texture const* UTILS_NULLABLE color, Texture const* UTILS_NULLABLE depth,
++            Texture const* UTILS_NULLABLE motion, Texture const* UTILS_NULLABLE ui,
++            backend::NativeCommand::Callback UTILS_NONNULL callback, void* UTILS_NULLABLE user);
++
+     /**
+      * Render a View into this renderer's window.
+      *
 diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/SwapChain.h
 index d1bf83894765f165566bb7feb47e63c5dc871072..ba02724dd1c9618c6afef61d40b32e4780c12615 100644
 --- a/filament/include/filament/SwapChain.h
@@ -1487,6 +2273,83 @@ index d1bf83894765f165566bb7feb47e63c5dc871072..ba02724dd1c9618c6afef61d40b32e47
      /**
       * Return whether createSwapChain supports the CONFIG_PROTECTED_CONTENT flag.
       * The default implementation returns false.
+diff --git a/filament/src/Froxelizer.cpp b/filament/src/Froxelizer.cpp
+index 01baa1e48c206648c82bb6231d8437df615a7405..0dfe0a295811cc6717f6f04c519290ea8903d57e 100644
+--- a/filament/src/Froxelizer.cpp
++++ b/filament/src/Froxelizer.cpp
+@@ -235,18 +235,19 @@ bool Froxelizer::prepare(
+     }
+ 
+     /*
+-     * Allocations that need to persist until the driver consumes them are done from
+-     * the command stream.
++     * Worker outputs remain in the renderer arena until commit. Shadow-pass
++     * command-stream flushes may retire inline allocations before the lighting
++     * pass queues their upload commands.
+      */
+ 
+     // froxel buffer (16 KiB with 4096 froxels)
+     mFroxelBufferUser.set(
+-            driverApi.allocatePod<FroxelEntry>(mFroxelBufferEntryCount),
++            arena.alloc<FroxelEntry>(mFroxelBufferEntryCount, CACHELINE_SIZE),
+             mFroxelBufferEntryCount);
+ 
+     // record buffer (64 KiB max)
+     mRecordBufferUser.set(
+-            driverApi.allocatePod<RecordBufferType>(mFroxelRecordBufferEntryCount),
++            arena.alloc<RecordBufferType>(mFroxelRecordBufferEntryCount, CACHELINE_SIZE),
+             mFroxelRecordBufferEntryCount);
+ 
+     /*
+@@ -612,12 +613,20 @@ std::pair<size_t, size_t> Froxelizer::clipToIndices(float2 const& clip) const no
+ 
+ 
+ void Froxelizer::commit(DriverApi& driverApi, LinearAllocatorArena& arena) {
+-    // send data to GPU
++    // The froxelization job is complete. Copy into command-stream storage only
++    // immediately before each consumer command, after any shadow-pass flushes.
++    auto* froxels = driverApi.allocatePod<FroxelEntry>(mFroxelBufferEntryCount);
++    memcpy(froxels, mFroxelBufferUser.data(), mFroxelBufferUser.sizeInBytes());
+     driverApi.updateBufferObject(mFroxelsBuffer,
+-            { mFroxelBufferUser.data(), mFroxelBufferEntryCount * sizeof(FroxelEntry) }, 0);
++            { froxels, mFroxelBufferUser.sizeInBytes() }, 0);
+ 
++    auto* records = driverApi.allocatePod<RecordBufferType>(mFroxelRecordBufferEntryCount);
++    memcpy(records, mRecordBufferUser.data(), mRecordBufferUser.sizeInBytes());
+     driverApi.updateBufferObject(mRecordsBuffer,
+-            { mRecordBufferUser.data(), mFroxelRecordBufferEntryCount }, 0);
++            { records, mRecordBufferUser.sizeInBytes() }, 0);
++
++    arena.free(mFroxelBufferUser.data(), mFroxelBufferUser.sizeInBytes());
++    arena.free(mRecordBufferUser.data(), mRecordBufferUser.sizeInBytes());
+ 
+     arena.free(mLightRecords.data(), mLightRecords.sizeInBytes());
+ 
+diff --git a/filament/src/MaterialDefinition.cpp b/filament/src/MaterialDefinition.cpp
+index f163d3a7988ea93a68abbbb2c822d4eb3708b7af..5a5e5990795938ef22a3d072d2dc3672d1e3620b 100644
+--- a/filament/src/MaterialDefinition.cpp
++++ b/filament/src/MaterialDefinition.cpp
+@@ -182,8 +182,9 @@ void releaseProgramsImpl(FEngine& engine, Slice<Handle<HwProgram>> programCache,
+         }
+     }
+ 
+-    // Only destroy the "shared variants" if this is the default material (i.e. the programs in
+-    // question that are shared) or if this material has custom depth shaders.
++    // Ordinary depth/picking programs are shared unless this is the default material or
++    // custom depth is present. Moment programs are always owned by this material because
++    // the default material filters VSM; keep this aligned with FMaterial::isSharedVariant.
+     const bool destroySharedVariants = isDefaultMaterial || definition.hasCustomDepthShader;
+ 
+     for (auto variant: definition.getDepthVariants()) {
+@@ -200,7 +201,7 @@ void releaseProgramsImpl(FEngine& engine, Slice<Handle<HwProgram>> programCache,
+                         [&engine](MaterialCache::ProgramCacheEntry& entry) {
+                             engine.getDriverApi().destroyProgram(entry.program);
+                         });
+-            } else if (destroySharedVariants && program) {
++            } else if ((destroySharedVariants || Variant::isDepthMomentsVariant(variant)) && program) {
+                 engine.getDriverApi().destroyProgram(program);
+             }
+             program.clear();
 diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManager.cpp
 index b654755d9bb1f78a7dad01e206000b1c5f47eafc..063156cfd12149d179b3cb95e71e6b6d9b4c468b 100644
 --- a/filament/src/PostProcessManager.cpp
@@ -1629,10 +2492,23 @@ index a778b612364feac390ee00eeae8ea6e6b67484fe..4d0a1ef419d44a3030a3cba5c8f3f8cc
      friend class RenderPassBuilder;
      friend class RenderPassBuilder;
 diff --git a/filament/src/Renderer.cpp b/filament/src/Renderer.cpp
-index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..241d5549bc8a6feb0ab0001f477a322dbc9ee41c 100644
+index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..3dad67b57f8dc9ab38ae2976e5d5e54b9faa3cff 100644
 --- a/filament/src/Renderer.cpp
 +++ b/filament/src/Renderer.cpp
-@@ -32,6 +32,10 @@
+@@ -20,10 +20,12 @@
+ 
+ #include "details/Engine.h"
+ #include "details/View.h"
++#include "details/Texture.h"
+ 
+ #include <filament/Renderer.h>
+ 
+ #include <utils/FixedCapacityVector.h>
++#include <private/utils/ProfilerTrace.h>
+ 
+ #include <utility>
+ 
+@@ -32,6 +34,10 @@
  
  namespace filament {
  
@@ -1643,6 +2519,35 @@ index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..241d5549bc8a6feb0ab0001f477a322d
  using namespace math;
  using namespace backend;
  
+@@ -43,6 +49,28 @@ void Renderer::render(View const* view) {
+     downcast(this)->render(downcast(view));
+ }
+ 
++void Renderer::nativeCommand(Texture const* color, Texture const* depth,
++        Texture const* motion, Texture const* ui,
++        backend::NativeCommand::Callback callback, void* user) {
++    backend::NativeCommand command;
++    Texture const* const textures[] = { color, depth, motion, ui };
++    for (size_t i = 0; i < command.textures.size(); ++i) {
++        if (textures[i]) command.textures[i] = downcast(textures[i])->getHwHandle().getId();
++    }
++    command.callback = callback;
++    command.user = user;
++    auto& driver = downcast(this)->getEngine().getDriverApi();
++    const uint64_t pass = color && utils::profiling::isEnabled() ? utils::profiling::nextId() : 0;
++    if (pass) {
++        const auto context = utils::profiling::getContext();
++        driver.queueCommand([context, pass] {
++            utils::profiling::gpuBeginPass(context, pass, "Frame generation compute and UI");
++        });
++    }
++    driver.nativeCommand(command);
++    if (pass) driver.queueCommand([pass] { utils::profiling::gpuEndPass(pass); });
++}
++
+ void Renderer::setPresentationTime(int64_t const monotonic_clock_ns) {
+     downcast(this)->setPresentationTime(monotonic_clock_ns);
+ }
 diff --git a/filament/src/ShadowMapManager.cpp b/filament/src/ShadowMapManager.cpp
 index a3c1f07259504e23de185b7ad1bfc8516e386ee5..88f2d35bbc6934b64a9ecc2ffd88e0ff4b60648a 100644
 --- a/filament/src/ShadowMapManager.cpp
@@ -2305,6 +3210,78 @@ index 43d3696f14d92ce962e0f60bfcd7a934cf3da537..a147148d67aadeffc26dac3d952919d5
 -#endif // FILAMENT_MATERIALS_SSAO_UTILS
  
 +#endif // FILAMENT_MATERIALS_SSAO_UTILS
+diff --git a/libs/filabridge/include/private/filament/Variant.h b/libs/filabridge/include/private/filament/Variant.h
+index c59099299cf7133c3f8cd390c208031e758573a1..8d34ad4fff02d7862b4bc5fb1a6f99181a611064 100644
+--- a/libs/filabridge/include/private/filament/Variant.h
++++ b/libs/filabridge/include/private/filament/Variant.h
+@@ -72,7 +72,7 @@ struct Variant {
+     //
+     // SSR variant:
+     //                      +-----+-----+-----+-----+-----+-----+-----+
+-    //                      | MNT | PCK | DEP |  0  |  0  |  0  |  0  |  1
++    //                      | MNT | PCK | DEP | SKN |  0  | STE |  0  |  4
+     //                      +-----+-----+-----+-----+-----+-----+-----+
+     //       Fragment SSR      1     1     1     0     0     0     0
+     //
+@@ -83,10 +83,10 @@ struct Variant {
+     //       Vertex depth      X     0     1     X     0     X     0
+     //     Fragment depth      0     X     1     0     0     0     0
+     //     Fragment depth      1     0     1     0     0     0     0
+-    //       Fragment SSR      1     1     1     0     0     0     0     [  -1]
+-    //           Reserved      1     1     1     X     0     X     0     [  -3] (exclude SSR)
++    //       Fragment SSR      1     1     1     0     0     0     0
++    //       Combined SSR      1     1     1     X     0     X     0     [  -4] (exclude SSR)
+     //
+-    // 61 variants used (48 standard + 1 SSR + 12 depth), 67 reserved
++    // 64 variants used (48 standard + 4 SSR + 12 depth), 64 reserved
+     //
+     // note: a valid variant can be neither a valid vertex nor a valid fragment variant
+     //       (e.g.: FOG|SKN variants), the proper bits are filtered appropriately,
+@@ -110,8 +110,8 @@ struct Variant {
+ 
+     // special variants (variants that use the reserved space)
+     static constexpr type_t SPECIAL_SSR_VARIANT= MNT | PCK | DEP;
+-    static constexpr type_t SPECIAL_SSR_MASK =
+-        STE | MNT | PCK | DEP | SKN | SRE | DIR;
++    // Skinning and stereo affect SSR geometry, but do not change the fragment pass.
++    static constexpr type_t SPECIAL_SSR_MASK = MNT | PCK | DEP | SRE | DIR;
+ 
+     static constexpr type_t STANDARD_MASK      = DEP;
+     static constexpr type_t STANDARD_VARIANT   = 0u;
+@@ -145,8 +145,7 @@ struct Variant {
+     }
+ 
+     static constexpr bool isValidDepthVariant(Variant variant) noexcept {
+-        // (MNT | PCK | DEP) is SSR variant.
+-        // (MNT | PCK | DEP) + (STE | SKN)/(STE)/(SKN) are reserved.
++        // (MNT | PCK | DEP), with optional skinning/stereo, is an SSR color variant.
+         constexpr type_t RESERVED_MASK  = MNT | PCK | DEP | SRE | DIR;
+         constexpr type_t RESERVED_VALUE = MNT | PCK | DEP;
+         return ((variant.key & DEPTH_MASK) == DEPTH_VARIANT) &&
+@@ -230,7 +229,7 @@ struct Variant {
+         // filter out fragment variants that are not needed. For e.g. skinning doesn't
+         // affect the fragment shader.
+         if (isSSRVariant(variant)) {
+-            return variant;
++            return Variant(SPECIAL_SSR_VARIANT);
+         }
+         if ((variant.key & STANDARD_MASK) == STANDARD_VARIANT) {
+             return variant & (S2D | FOG | SRE | DIR);
+diff --git a/libs/filabridge/src/Variant.cpp b/libs/filabridge/src/Variant.cpp
+index 0a1d92e8bd8187582470c4c2c3cd11f133259c86..6ccfd67f34e6f416461008837b3f8fdff6555237 100644
+--- a/libs/filabridge/src/Variant.cpp
++++ b/libs/filabridge/src/Variant.cpp
+@@ -212,8 +212,8 @@ static auto const gDepthVariants{ details::get_depth_variants() };
+ static auto const gPostProcessVariants{ details::get_post_process_variants() };
+ 
+ static_assert(reserved_is_not_valid());
+-static_assert(reserved_variant_count() == 67);
+-static_assert(valid_variant_count() == 61);
++static_assert(reserved_variant_count() == 64);
++static_assert(valid_variant_count() == 64);
+ static_assert(vertex_variant_count() == 16 + 8);              // 24
+ static_assert(fragment_variant_count() == 16 + 3 + 1 - 4);    // 16
+ 
 diff --git a/libs/utils/include/private/utils/ProfilerTrace.h b/libs/utils/include/private/utils/ProfilerTrace.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..fdcba27c4afad7318c13a3ad2067946b6fb6a341
@@ -3078,6 +4055,41 @@ index 54acfd0f8b3f2d2ed716d0447c67661c9e76346e..d4a28aff3fac675560147fa798c7c2c5
          // Combine the specular AO from the texture with screen space specular AO
          specularAO = min(specularAO, ssSpecularAO);
  
+diff --git a/shaders/src/surface_getters.vs b/shaders/src/surface_getters.vs
+index 5eb08579d4ceb26df583a41f2a791804c57629f9..8db5662c53148fa9d198ab4a467c6567d1ea45b7 100644
+--- a/shaders/src/surface_getters.vs
++++ b/shaders/src/surface_getters.vs
+@@ -337,3 +337,30 @@ vec4 computeWorldPosition() {
+ #error Unknown Vertex Domain
+ #endif
+ }
++
++// Optional temporal-input materials evaluate the prior deformation themselves.
++// These getters add no attributes or work to previously compiled materials.
++vec3 getRawPosition() { return mesh_position.xyz; }
++vec3 getRawNormal() {
++#if defined(HAS_ATTRIBUTE_TANGENTS)
++    vec3 normal;
++    toTangentFrame(mesh_tangents, normal);
++    return normal;
++#else
++    return vec3(0.0, 0.0, 1.0);
++#endif
++}
++uvec4 getBoneIndices() {
++#if defined(VARIANT_HAS_SKINNING_OR_MORPHING)
++    return mesh_bone_indices;
++#else
++    return uvec4(0);
++#endif
++}
++vec4 getBoneWeights() {
++#if defined(VARIANT_HAS_SKINNING_OR_MORPHING)
++    return mesh_bone_weights;
++#else
++    return vec4(1.0, 0.0, 0.0, 0.0);
++#endif
++}
 diff --git a/shaders/src/surface_light_directional.fs b/shaders/src/surface_light_directional.fs
 index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..59e1626a000e8ae12732cdcf281afe6568387233 100644
 --- a/shaders/src/surface_light_directional.fs

@@ -9,6 +9,7 @@
  * floating island. No per-frame geometry regeneration (AGENTS.md).
  */
 #include "rhi/features/massive_foliage_feature.h"
+#include "rhi/frame_generation/temporal_grass.h"
 #include "rhi/render_test_scene_assets.h"
 #include "rhi/filament_bounds.h"
 #include "rhi/filament_util.h"
@@ -73,7 +74,7 @@ constexpr std::uint32_t k_flower_root_seed = 0xF10A3u;
 // Bind the selected diffuse atlas plus the shared variation texture. The UV
 // transform lets grass use its full texture while flower cards address one
 // authored plant inside grass_variation_d.dds without changing wind height.
-void bind_grass_textures(RenderContext& ctx, filament::MaterialInstance& mi,
+const filament::Texture* bind_grass_textures(RenderContext& ctx, filament::MaterialInstance& mi,
                          FeatureAsset diffuse_asset,
                          const render_tuning::Float4& diffuse_uv) {
     const filament::Texture* diffuse_tex = resolve_feature_texture(
@@ -98,6 +99,7 @@ void bind_grass_textures(RenderContext& ctx, filament::MaterialInstance& mi,
         filament::math::float4{
             diffuse_uv.x, diffuse_uv.y, diffuse_uv.z, diffuse_uv.w});
     mi.setParameter("time", 0.0f);
+    return diffuse_tex;
 }
 } // namespace
 
@@ -256,7 +258,7 @@ void MassiveFoliageFeature::build_grass(RenderContext& ctx, const FrameContext& 
         grass_mi_ = material_->createInstance();
         if (!grass_mi_) return;
         material_tuning::bind_grass_visible(*grass_mi_);
-        bind_grass_textures(
+        grass_diffuse_texture_ = bind_grass_textures(
             ctx, *grass_mi_, FeatureAsset::GrassDiffuse,
             render_tuning::grass.grass_diffuse_uv);
     }
@@ -325,7 +327,7 @@ void MassiveFoliageFeature::build_flowers(RenderContext& ctx, const FrameContext
         flower_mi_ = material_->createInstance();
         if (!flower_mi_) return;
         material_tuning::bind_grass_visible(*flower_mi_);
-        bind_grass_textures(
+        flower_diffuse_texture_ = bind_grass_textures(
             ctx, *flower_mi_, FeatureAsset::GrassClutter,
             render_tuning::grass.flower_diffuse_uv);
         // A warm tint nudges the flower clutter away from the grass green so
@@ -562,6 +564,22 @@ void MassiveFoliageFeature::update(RenderContext& ctx, const FrameContext& frame
     }
 }
 
+void MassiveFoliageFeature::append_temporal_patches(std::vector<TemporalGrassPatch>& output) const {
+    for (const auto& patch : patches_) {
+        const auto* mi = patch.category == Category::Grass ? grass_mi_ : flower_mi_;
+        if (!mi || patch.instance_index < 0) continue;
+        const auto uv = mi->getParameter<filament::math::float4>("grassDiffuseUv");
+        const auto wind = mi->getParameter<filament::math::float4>("grassWindTuning");
+        const auto* diffuse = patch.category == Category::Grass
+            ? grass_diffuse_texture_ : flower_diffuse_texture_;
+        output.push_back({patch.entity, patch.vb, patch.ib, diffuse,
+            static_cast<size_t>(patch.instance_index), patch.index_offset,
+            static_cast<uint32_t>(patch.vertex_count), patch.bounds.box(),
+            {uv.x, uv.y, uv.z, uv.w}, {wind.x, wind.y, wind.z, wind.w},
+            patch.bounds.local.has_value(), enabled_ && patch.lod_visible});
+    }
+}
+
 void MassiveFoliageFeature::destroy(RenderContext& ctx) {
     auto* engine_ = ctx.engine;
     // Depth proxies first (they live in the depth pre-pass scene, torn down
@@ -583,6 +601,8 @@ void MassiveFoliageFeature::destroy(RenderContext& ctx) {
 
     if (grass_mi_)    { engine_->destroy(grass_mi_);    grass_mi_ = nullptr; }
     if (flower_mi_)   { engine_->destroy(flower_mi_);   flower_mi_ = nullptr; }
+    grass_diffuse_texture_ = nullptr;
+    flower_diffuse_texture_ = nullptr;
     if (material_)    { engine_->destroy(material_);    material_ = nullptr; }
 }
 

@@ -53,6 +53,24 @@ def write_capture(image, config, frames=3):
     Path(str(image) + ".config.json").write_text(json.dumps(config))
 
 
+def write_motion_capture(image, config, case, source_index, pose, total_sources):
+    """Write an independently chosen pose; do not use the audit's interpolator."""
+    write_capture(image, config, frames=source_index)
+    path = Path(str(image) + ".json")
+    metadata = json.loads(path.read_text())
+    fov = AUDIT.capture_fov(case) or 60
+    metadata.update(camera_position=pose[:3], camera_yaw=pose[3], camera_pitch=pose[4], camera_fov=fov,
+                    sequence_index=source_index - case.get("frames", 3), sequence_count=case.get("count", 1),
+                    capture_camera_motion={
+                        "schema": 1, "start_pose": case["pose"], "end_pose": case["pose_to"],
+                        "current_pose": pose, "source_index": source_index, "total_sources": total_sources,
+                        "fraction": (source_index - 1) / (total_sources - 1), "vertical_fov": fov,
+                        "interpolation": "linear world position and pitch; shortest-arc yaw; exact endpoints",
+                        "clock": "accepted application capture submissions; rejected attempts retain the same pose"})
+    path.write_text(json.dumps(metadata))
+    return metadata
+
+
 class VisualAuditTest(unittest.TestCase):
     def test_procedural_manifest_covers_every_feature_with_isolated_pairs(self):
         cases = json.loads((ROOT / "tests/visual/render_test_scenes.json").read_text())
@@ -554,6 +572,107 @@ class VisualAuditTest(unittest.TestCase):
                           ["--camera-fov", "171"], ["--camera-fov", "invalid"]):
             with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, "camera FOV"):
                 AUDIT.validate_case({"name": "bad-fov", "args": arguments})
+
+    def test_camera_endpoint_manifest_is_structured_and_rejects_invalid_combinations(self):
+        valid = {"name": "move", "pose": [0, 0, 0, 359, 0], "pose_to": [1, 2, 3, 1, 1]}
+        AUDIT.validate_case(valid)
+        AUDIT.validate_case({**valid, "frames": 1, "count": 2})
+        for replacement in ({"pose": None}, {"pose_to": [0, 0, 0, 0, 90]},
+                            {"pose_to": [0, 0, 0, float("nan"), 0]},
+                            {"pose_to": [0, 0, 0, float("inf"), 0]},
+                            {"pose_to": [0, 0, 0, True, 0]},
+                            {"tour_time": 0}, {"realtime": True}, {"frames": 1},
+                            {"args": ["--capture-camera-to", "1,2,3,1,1"]}):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                AUDIT.validate_case({**valid, **replacement})
+        with self.assertRaises(ValueError):
+            AUDIT.validate_case({key: value for key, value in valid.items() if key != "pose"})
+        # A CLI-level frame default must be validated before starting a child.
+        with self.assertRaises(ValueError):
+            AUDIT.validate_case(valid, default_frames=1)
+        with self.assertRaisesRegex(ValueError, "controlled startup action"):
+            AUDIT.validate_case({"name": "raw-endpoint", "args": ["--capture-camera-to", "1,2,3,4,5"]})
+
+    def test_camera_motion_accepts_endpoints_midpoint_and_every_sequence_tail_pose(self):
+        case = {"name": "move", "pose": [0, 10, 30, 359, -2], "pose_to": [8, 2, 34, 1, 6],
+                "frames": 2, "count": 4, "fps": 60, "args": ["--camera-fov", "36"]}
+        expected = [[0, 10, 30, 359, -2], [2, 8, 31, 359.5, 0], [4, 6, 32, 360, 2],
+                    [6, 4, 33, 360.5, 4], [8, 2, 34, 1, 6]]
+        for source_index, pose in enumerate(expected, 1):
+            with self.subTest(source_index=source_index):
+                write_motion_capture(self.image, self.config, case, source_index, pose, 5)
+                AUDIT.verify_capture(self.image, self.config, "vulkan", source_index, case=case)
+        for index, pose in enumerate(expected[1:]):
+            image = self.image if index == 0 else self.image.with_name(f"{self.image.stem}.{index:06d}{self.image.suffix}")
+            write_motion_capture(image, self.config, case, index + 2, pose, 5)
+        products = AUDIT.verify_sequence(self.image, self.config, "vulkan", 2, case)
+        self.assertEqual(len(products["sequence"]), 4)
+        self.assertEqual(products["capture"]["capture_camera_motion"]["source_index"], 2)
+
+    def test_camera_motion_rejects_wrong_pose_fraction_source_and_malformed_metadata(self):
+        case = {"name": "move", "pose": [0, 10, 30, 359, -2], "pose_to": [8, 2, 34, 1, 6],
+                "frames": 2, "count": 4}
+        valid = write_motion_capture(self.image, self.config, case, 3, [4, 6, 32, 360, 2], 5)
+        path = Path(str(self.image) + ".json")
+        for key, wrong in (("schema", True), ("source_index", 2), ("source_index", True),
+                           ("total_sources", 4), ("fraction", 0.6), ("fraction", float("nan")),
+                           ("start_pose", [1, 10, 30, 359, -2]), ("end_pose", [8, 2, 34, 2, 6]),
+                           ("current_pose", [4, 6, 32, 180, 2]), ("current_pose", [4, 6, 32, True, 2]),
+                           ("vertical_fov", 36), ("clock", "render attempts"),
+                           ("interpolation", "linear yaw")):
+            with self.subTest(key=key, wrong=wrong):
+                changed = {**valid, "capture_camera_motion": {**valid["capture_camera_motion"], key: wrong}}
+                path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, "camera motion"):
+                    AUDIT.verify_capture(self.image, self.config, "vulkan", 3, case=case)
+        for field, wrong in (("camera_position", [0, 10, 30]), ("camera_yaw", 359),
+                             ("camera_pitch", -2), ("capture_camera_motion", None)):
+            with self.subTest(field=field):
+                path.write_text(json.dumps({**valid, field: wrong}))
+                with self.assertRaises(ValueError):
+                    AUDIT.verify_capture(self.image, self.config, "vulkan", 3, case=case)
+        path.write_text(json.dumps(valid))
+        with self.assertRaisesRegex(ValueError, "unexpectedly used camera endpoint motion"):
+            AUDIT.verify_capture(self.image, self.config, "vulkan", 3, case={"name": "static"})
+
+    def test_orchestration_camera_motion_controls_flag_and_resolves_global_frame_default(self):
+        case = {"name": "move", "pose": [0, 10, 30, 359, -2], "pose_to": [8, 2, 34, 1, 6], "count": 3}
+
+        def render(command, _env, log, _timeout):
+            self.assertEqual(command[command.index("--camera-pose") + 1], "0,10,30,359,-2")
+            self.assertEqual(command[command.index("--capture-camera-to") + 1], "8,2,34,1,6")
+            image = Path(command[command.index("--capture") + 1])
+            config = json.loads(Path(command[command.index("--config") + 1]).read_text())
+            for index, pose in enumerate(([4, 6, 32, 360, 2], [6, 4, 33, 360.5, 4], [8, 2, 34, 1, 6])):
+                output = image if index == 0 else image.with_name(f"{image.stem}.{index:06d}{image.suffix}")
+                write_motion_capture(output, config, case, index + 3, pose, 5)
+            log.write("synthetic endpoint capture\n")
+            return 0
+
+        self.assertEqual(self.run_audit(render, case=case), (0, 1))
+        self.assertEqual(self.run_audit(render, resume=True, case=case), (0, 0))
+
+    def test_frame_generation_motion_manifest_is_data_free_real_image_only(self):
+        cases = json.loads((ROOT / "tests/visual/frame_generation_motion.json").read_text())
+        self.assertEqual(len(cases), 4)
+        self.assertEqual(len({case["comparison"]["shot"] for case in cases}), 4)
+        for case in cases:
+            AUDIT.validate_case(case)
+            self.assertEqual(case["comparison"]["state"], "off")
+            self.assertEqual(case["settings"]["frame_generation"], "off")
+            self.assertEqual(case["capture_scope"], "real application images only; no generated-image or display-cadence acceptance")
+            self.assertEqual(case["fps"], 60)
+            self.assertEqual(case["frames"] + case["count"] - 1, 120)
+            self.assertEqual((case["settings"]["width"], case["settings"]["height"]), (960, 540))
+            self.assertEqual(case["settings"]["texture_quality"], "original")
+            self.assertNotIn("data_dir", case["settings"])
+            self.assertNotIn("tessellation.cache_file", case["settings"])
+            self.assertNotIn("/mnt/", json.dumps(case))
+            self.assertNotIn("HEAVEN_FG_CAPTURE", json.dumps(case))
+            self.assertIn("--no-dynamic-resolution", case["args"])
+            self.assertEqual((case["frames"], case["count"]), (89, 32))
+        self.assertEqual(sum("pose_to" in case for case in cases), 3)
+        self.assertEqual(sum("tour_time" in case for case in cases), 1)
 
     def test_hdr_hash_covers_raw_bytes_in_both_byte_orders(self):
         write_capture(self.image, self.config)

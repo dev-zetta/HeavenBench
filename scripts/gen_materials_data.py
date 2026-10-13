@@ -47,6 +47,11 @@ MATERIALS = [
     "heaven_depth_masked",
     "heaven_grass_depth",
     "heaven_height_sample",
+    "heaven_motion",
+    "heaven_motion_masked",
+    "heaven_motion_grass",
+    "heaven_temporal_extract",
+    "heaven_fg_composite",
 ]
 
 

@@ -174,7 +174,7 @@ const std::set<std::string_view>& startup_action_value_flags() {
         // Transient capture sidechannel is exercised by
         // unit_visual_capture_cli.cpp, including finite/range checks,
         // missing values, conflicts, repeated flags and seen-key isolation.
-        "--camera-pose", "--camera-tour-time", "--camera-fov",
+        "--camera-pose", "--capture-camera-to", "--camera-tour-time", "--camera-fov",
         "--capture", "--capture-frames", "--capture-count", "--capture-fps", "--profile", "--profile-seconds",
         // Transient trace controls have finite/path/combination tests in unit_microprofiler_cli.cpp.
         "--microprofile", "--microprofile-seconds"};
@@ -290,6 +290,9 @@ bool run_value_flag_coverage_guard() {
         if (music_value_flags().contains(n)) continue;
         // Scene defaults and ordered overrides are checked independently.
         if (n == "--test-scene") continue;
+        // Provider identities, invalid-value retention, precedence and the
+        // diagnostic scoring contract are covered by unit_frame_generation.
+        if (n == "--frame-generation") continue;
         if (!modelled.contains(n)) {
             std::printf("[prop_cli_value_flags] table value flag '%.*s' is not "
                         "modelled by any property\n",

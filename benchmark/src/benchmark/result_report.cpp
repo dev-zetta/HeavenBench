@@ -151,6 +151,7 @@ Json configuration_json(const BenchConfig& c) {
     return {
         {"data_dir", c.data_dir},
         {"texture_quality", texture_quality_id(c.texture_quality)},
+        {"frame_generation", frame_generation_mode_id(c.frame_generation)},
         {"node_file", c.node_file},
         {"shader_dir", c.shader_dir},
         {"width", c.width},
@@ -480,8 +481,34 @@ Json report_json(const RunResult& result, const BenchConfig& config,
     if (result.diagnostic) {
         root["run"]["diagnostic"] = true;
         root["run"]["scored"] = false;
-        root["run"]["diagnostic_reason"] = "microprofiler recording";
+        root["run"]["diagnostic_reason"] = result.diagnostic_reason.empty() ?
+            "microprofiler recording" : result.diagnostic_reason;
         for (const char* key : {"overall", "cpu", "gpu"}) root["scores"][key] = nullptr;
+    }
+    if (result.frame_generation_requested) {
+        const auto& fg = result.frame_generation;
+        const auto& counters = fg.counters;
+        root["frame_generation"] = {
+            {"requested_during_tour", true},
+            {"requested_at_completion", frame_generation_mode_id(fg.requested)},
+            {"effective_at_completion", frame_generation_mode_id(fg.effective)},
+            {"capability_reason", fg.reason},
+            {"counter_scope", "current renderer frame-generation runtime through tour completion; resets on renderer reload"},
+            {"real_frames", counters.real_frames},
+            {"rejected_real_frames", counters.rejected_real_frames},
+            {"generated_frames_available", counters.generated_frames_available},
+            {"generated_frames", counters.generated_frames_available ? Json(counters.generated_frames) : Json(nullptr)},
+            {"presentation_submissions_available", counters.presentation_submissions_available},
+            {"presentation_submissions", counters.presentation_submissions_available ? Json(counters.presented_frames) : Json(nullptr)},
+            {"real_presentation_submissions", counters.presentation_submissions_available ? Json(counters.real_presented_frames) : Json(nullptr)},
+            {"generated_presentation_submissions", counters.presentation_submissions_available ? Json(counters.generated_presented_frames) : Json(nullptr)},
+            {"failed_presentations", counters.presentation_submissions_available ? Json(counters.failed_presentations) : Json(nullptr)},
+            {"sdk_presentation_submissions", fg.sdk_presented_frames ? Json(*fg.sdk_presented_frames) : Json(nullptr)},
+            {"sdk_counter_scope", "SDK provider lifetime through tour completion; combined real and generated native submissions"},
+            {"presentation_feedback_available", counters.presentation_feedback_available},
+            {"confirmed_displayed_frames", counters.presentation_feedback_available ?
+                Json(counters.confirmed_displayed_frames) : Json(nullptr)},
+        };
     }
     return root;
 }
@@ -549,8 +576,29 @@ footer { margin:42px 10px 10px; text-align:center; }
         << " &middot; score version " << scores.at("version").get<int>()
         << "</p>\n";
 
-    if (diagnostic) out << "<p class=\"meta\">Microprofiler recording occurred during this tour. "
-        "Frame statistics are diagnostic; no benchmark score is awarded.</p>\n";
+    if (diagnostic) out << "<p class=\"meta\">Diagnostic reason: "
+        << html_escape(run.at("diagnostic_reason").get<std::string>())
+        << ". Frame statistics describe accepted real renders; no benchmark score is awarded.</p>\n";
+    if (root.contains("frame_generation")) {
+        const auto& fg = root.at("frame_generation");
+        out << "<h2>Frame generation</h2><table class=\"detail\">\n";
+        append_detail_row(out, "Requested at completion", fg.at("requested_at_completion").get<std::string>());
+        append_detail_row(out, "Effective at completion", fg.at("effective_at_completion").get<std::string>());
+        append_detail_row(out, "Capability", fg.at("capability_reason").get<std::string>());
+        append_detail_row(out, "Counter scope", fg.at("counter_scope").get<std::string>());
+        for (const auto& [label, key] : {std::pair{"Real renders", "real_frames"},
+              std::pair{"Generated frames", "generated_frames"},
+              std::pair{"Native presentation submissions", "presentation_submissions"},
+              std::pair{"Real native submissions", "real_presentation_submissions"},
+              std::pair{"Generated native submissions", "generated_presentation_submissions"},
+              std::pair{"SDK native submissions (combined)", "sdk_presentation_submissions"}})
+            append_detail_row(out, label, fg.at(key).is_null() ? "Unavailable" : std::to_string(fg.at(key).get<uint64_t>()));
+        if (!fg.at("sdk_presentation_submissions").is_null())
+            append_detail_row(out, "SDK counter scope", fg.at("sdk_counter_scope").get<std::string>());
+        append_detail_row(out, "Display confirmations", fg.at("confirmed_displayed_frames").is_null() ?
+            "Unavailable (no presentation feedback)" : std::to_string(fg.at("confirmed_displayed_frames").get<uint64_t>()));
+        out << "</table>\n";
+    }
     out << "<h2>Overall</h2><table class=\"detail\">\n";
     append_detail_row(out, "Average FPS",
         display_number(results.at("average_fps").get<double>(), 2));

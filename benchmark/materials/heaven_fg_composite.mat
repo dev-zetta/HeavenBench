@@ -1,0 +1,27 @@
+// Match ordinary SDR UI blending in the display's encoded sRGB domain.
+material {
+    name : heaven_fg_composite,
+    shadingModel : unlit,
+    vertexDomain : device,
+    blending : opaque,
+    doubleSided : true,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : sampler2d, name : sceneTexture },
+        { type : sampler2d, name : uiTexture },
+        { type : bool, name : hasUi }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float2 uv = uvToRenderTargetUV(getNormalizedViewportCoord().xy);
+        float3 color = texture(materialParams_sceneTexture, uv).rgb;
+        if (materialParams.hasUi) {
+            float4 layer = texture(materialParams_uiTexture, uv);
+            color = layer.rgb + color * (1.0 - clamp(layer.a, 0.0, 1.0));
+        }
+        material.baseColor = float4(color, 1.0);
+    }
+}

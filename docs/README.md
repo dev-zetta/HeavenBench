@@ -30,6 +30,7 @@ Start with [Getting started](GETTING_STARTED.md) for asset preparation, platform
 - [Rendering test scenes](RENDER_TEST_SCENES.md): procedural and real-mesh fixtures, feature pairs and capture replay.
 - [Visual audit](VISUAL_AUDIT.md): full-scene findings, evidence and acceptance limits.
 - [Microprofiler](MICROPROFILER.md): live controls, trace schema, clock domains and offline analysis.
+- [Experimental frame generation](FRAME_GENERATION.md): optional FSR/DLSS builds, temporal input contracts, presentation counters and native acceptance limits.
 - [Performance optimizations](PERFORMANCE_OPTIMIZATIONS.md): measured changes and feature costs.
 - [Instancing and culling audit](CULLING_AUDIT.md): batching, bounds, draw-command oracles and optimization limits.
 - [Release readiness](RELEASE_READINESS.md): platform qualification, outstanding checks and release procedure.

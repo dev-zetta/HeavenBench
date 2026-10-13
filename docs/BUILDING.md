@@ -79,6 +79,8 @@ The setup helper also accepts `--archive /path/to/aocc-compiler-5.2.0.tar` for a
 
 ## Dependencies and materials
 
+Optional native Vulkan frame generation is documented separately in [Frame generation](FRAME_GENERATION.md). FSR requires an explicitly fetched, verified SDK source tree and `HEAVEN_ENABLE_FSR3=ON`; Windows DLSS requires verified Streamline headers, `HEAVEN_ENABLE_DLSS=ON` and user-supplied signed runtime plugins. Both options default off and are outside the published 1.0.1 packages; native execution and visual acceptance limits are recorded in that guide.
+
 Filament is based on public upstream v1.77.2 with the reviewed [HeavenBench rendering patch](../patches/filament/README.md). `scripts/fetch_dependencies.sh` verifies the upstream revision, patch checksum and final source tree, preserving existing local edits. The same bootstrap runs inside Docker and the Windows pipeline.
 
 Committed `.filamat` files use matching material package version 77. Ordinary builds embed those packages without recompiling them. After editing a material source, use the incremental Linux host path:

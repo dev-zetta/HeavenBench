@@ -8,6 +8,24 @@ param(
     [string]$OutputDir = '',
     [string]$Version = ''
 )
+
+function Get-HeavenOptionalSdkNoticeArguments {
+    param([Parameter(Mandatory)][string]$Cache)
+    $flag = [regex]::Match($Cache, '(?im)^HEAVEN_ENABLE_DLSS:BOOL=([^\r\n]*)')
+    if (-not $flag.Success) { return @() }
+    $value = $flag.Groups[1].Value.Trim()
+    if (-not $value -or $value -match '^(0|OFF|NO|FALSE|N|IGNORE|NOTFOUND|.*-NOTFOUND)$') { return @() }
+    $source = [regex]::Match($Cache, '(?im)^HEAVEN_STREAMLINE_HEADERS:(PATH|STRING|UNINITIALIZED)=([^\r\n]+)')
+    if (-not $source.Success) {
+        throw 'Enabled HEAVEN_ENABLE_DLSS requires configured HEAVEN_STREAMLINE_HEADERS for its notice.'
+    }
+    $path = Join-Path $source.Groups[2].Value.Trim() 'license.txt'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Missing required Streamline notice for enabled HEAVEN_ENABLE_DLSS: $path"
+    }
+    return @('--notice-file', "Streamline=$path")
+}
+
 . "$PSScriptRoot/windows_common.ps1"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Import-HeavenMsvcEnvironment
@@ -23,6 +41,7 @@ $cache = Get-Content -Raw "$BuildDir/CMakeCache.txt"
 if ($cache -notmatch '(?m)^CMAKE_BUILD_TYPE:STRING=Release\r?$') { throw 'Only Release builds can be packaged.' }
 if ($cache -notmatch '(?m)^HEAVEN_SDL_SOURCE_DIR:PATH=(.+)\r?$') { throw 'Missing configured SDL source directory.' }
 $sdlSource = $Matches[1].Trim()
+$optionalSdkNotices = @(Get-HeavenOptionalSdkNoticeArguments -Cache $cache)
 $triplet = Join-Path $BuildDir 'vcpkg_installed/x64-windows-static'
 $runtimeDir = Join-Path $triplet 'bin'
 $packageName = "HeavenBench-$Version-windows-x64"
@@ -80,8 +99,10 @@ New-Item -ItemType Directory "$stage/docs" | Out-Null
 Copy-Item -LiteralPath "$repoRoot/docs/ZIP_ASSET_STORAGE.md" -Destination "$stage/docs"
 New-Item -ItemType Directory "$stage/assets" | Out-Null
 Copy-Item -LiteralPath "$repoRoot/packaging/windows/ASSETS.txt" -Destination "$stage/assets/README.txt"
-Invoke-Checked python.exe @("$PSScriptRoot/collect_licenses.py", '--output', "$stage/licenses",
-    '--dependency-dir', "vcpkg=$triplet/share", '--dependency-dir', "SDL2=$sdlSource")
+# FSR notices already live in packaging/licenses. Only enabled DLSS adds its
+# verified header framework notice; runtime plugin folders are never inputs.
+Invoke-Checked python.exe (@("$PSScriptRoot/collect_licenses.py", '--output', "$stage/licenses",
+    '--dependency-dir', "vcpkg=$triplet/share", '--dependency-dir', "SDL2=$sdlSource") + $optionalSdkNotices)
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
     @{ path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/');
        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }

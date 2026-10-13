@@ -14,6 +14,7 @@
  * "  <name> <value_label>   <help>\n", one line per entry in table order.
  */
 #include "engine/cli_parser.h"
+#include "engine/capture_camera_motion.h"
 #include "engine/config_file.h"
 #include "engine/render_presets.h"
 #include "engine/tessellation_levels.h"
@@ -74,7 +75,7 @@ std::vector<float> parse_csv_floats(std::string_view value) {
 }
 
 bool is_capture_flag(std::string_view flag) {
-    return flag == "--camera-pose" || flag == "--camera-tour-time" ||
+    return flag == "--camera-pose" || flag == "--capture-camera-to" || flag == "--camera-tour-time" ||
            flag == "--camera-fov" || flag == "--capture" ||
            flag == "--capture-frames" || flag == "--capture-count" ||
            flag == "--capture-fps" || flag == "--profile" || flag == "--profile-seconds";
@@ -91,15 +92,15 @@ std::optional<std::array<float, 5>> parse_camera_pose(std::string_view value) {
         pose[component] = *number;
         if (!last) value.remove_prefix(separator + 1);
     }
-    if (pose[4] < -89.0f || pose[4] > 89.0f) return std::nullopt;
+    if (!valid_capture_camera_pose(pose)) return std::nullopt;
     return pose;
 }
 
 void apply_capture_value(VisualCaptureOptions& capture, std::string_view flag,
                          std::string_view value, Diagnostics& diag) {
-    if (flag == "--camera-pose") {
+    if (flag == "--camera-pose" || flag == "--capture-camera-to") {
         if (const auto pose = parse_camera_pose(value)) {
-            capture.camera_pose = pose;
+            (flag == "--camera-pose" ? capture.camera_pose : capture.camera_to) = pose;
             return;
         }
     } else if (flag == "--camera-tour-time") {
@@ -178,6 +179,7 @@ const std::unordered_map<std::string_view, std::string_view>& flag_schema_keys()
     static const std::unordered_map<std::string_view, std::string_view> m = {
         // Boolean toggles.
         {"--fullscreen",          "fullscreen"},
+        {"--frame-generation",    "frame_generation"},
         {"--no-tessellation",     "tessellation.enabled"},
         {"--no-heat-haze",        "heat_haze_enabled"},
         {"--no-grass",            "features.grass"},
@@ -342,6 +344,13 @@ const std::vector<FlagSpec>& flag_table() {
         // ── Boolean toggles (Arity::None) ──────────────────────
         t.push_back({"--fullscreen", Arity::None, "", "Fullscreen mode",
             [](BenchConfig& c, std::string_view, Diagnostics&) { c.fullscreen = true; }});
+        t.push_back({"--frame-generation", Arity::Value, "off|fsr3|dlss",
+            "Request frame generation (default: off); requested tours are diagnostic/unscored",
+            [](BenchConfig& c, std::string_view v, Diagnostics& d) {
+                if (const auto mode = parse_frame_generation_mode(v)) c.frame_generation = *mode;
+                else d.warn(std::format("WARN: --frame-generation '{}' is unknown; retaining {}",
+                                        v, frame_generation_mode_id(c.frame_generation)));
+            }});
         t.push_back({"--no-tessellation", Arity::None, "", "Disable CPU tessellation entirely",
             [](BenchConfig& c, std::string_view, Diagnostics&) { c.tessellation.enabled = false; }});
         t.push_back({"--no-heat-haze", Arity::None, "",
@@ -1074,6 +1083,9 @@ const std::vector<FlagSpec>& flag_table() {
         t.push_back({"--camera-pose", Arity::Value, "X,Y,Z,YAW,PITCH",
             "Set a finite world-space camera pose; angles in degrees, pitch -89..89; excludes --camera-tour-time",
             [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
+        t.push_back({"--capture-camera-to", Arity::Value, "X,Y,Z,YAW,PITCH",
+            "Move from --camera-pose across all accepted capture frames; linear position/pitch and shortest-arc yaw; requires fixed-step --capture and at least two frames",
+            [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
         t.push_back({"--camera-tour-time", Arity::Value, "SECONDS",
             "Hold the authored camera tour at a nonnegative time; excludes --camera-pose",
             [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
@@ -1380,6 +1392,12 @@ ParseResult parse_cli(std::span<const std::string_view> args) {
     if (result.capture.camera_pose && result.capture.tour_time) {
         result.capture.invalid = true;
         diag.warn("--camera-pose and --camera-tour-time cannot be used together");
+    }
+    if (result.capture.camera_to &&
+        (!result.capture.output || !result.capture.camera_pose || result.capture.tour_time ||
+         result.capture.realtime || result.capture.frames + result.capture.count - 1 < 2)) {
+        result.capture.invalid = true;
+        diag.warn("--capture-camera-to requires --capture and --camera-pose, at least two total accepted frames, and excludes --camera-tour-time and --capture-realtime");
     }
     if (result.capture.output && cfg.benchmark_mode) {
         result.capture.invalid = true;

@@ -116,7 +116,8 @@ public:
     // Draw the collapsible diagnostics sidebar pinned to the left work area.
     // It consolidates the former FPS, GPU-name, and geometry overlays and adds
     // backend/driver telemetry. Unsupported live metrics remain visibly N/A.
-    void draw_debug_sidebar(const DebugSidebarInfo& info);
+    void draw_debug_sidebar(const DebugSidebarInfo& info,
+                            const FrameGenerationStatus& frame_generation = {});
     void set_microprofiler_snapshot(std::shared_ptr<const profile::Snapshot> snapshot,
                                     std::string feedback = {}) {
         microprofiler_.set_snapshot(std::move(snapshot), std::move(feedback));

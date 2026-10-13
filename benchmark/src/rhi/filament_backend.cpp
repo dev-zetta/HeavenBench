@@ -30,6 +30,13 @@
 #include "rhi/render_test_scene_assets.h"
 #include "engine/render_test_scene_catalog.h"
 #include "rhi/frame_timing.h"
+#include "rhi/frame_generation/frame_generation_runtime.h"
+#if HEAVEN_HAS_FSR3
+#include "rhi/frame_generation/frame_generation_platform.h"
+#endif
+#if HEAVEN_HAS_DLSS
+#include "rhi/frame_generation/dlss_platform.h"
+#endif
 #include "rhi/profile_bridge.h"
 #include "engine/render_presets.h"
 #include "engine/startup_timer.h"
@@ -441,8 +448,26 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
 #endif
     const bool vulkan_window = (SDL_GetWindowFlags(window) & vulkan_window_flags) != 0;
     if (vulkan_window) {
+        filament::backend::Platform* presentation_platform = nullptr;
+#if HEAVEN_HAS_FSR3
+        frame_generation_platform_ = std::make_unique<FrameGenerationPlatform>();
+        presentation_platform = frame_generation_platform_.get();
+#endif
+#if HEAVEN_HAS_DLSS
+        if (config_.frame_generation == FrameGenerationMode::Dlss) {
+            DlssBootstrapOptions options;
+            if (const char* directory = std::getenv("HEAVEN_DLSS_PLUGIN_DIR"))
+                options.plugin_directory = directory;
+            if (const char* project = std::getenv("HEAVEN_DLSS_PROJECT_ID"))
+                options.project_id = project;
+            options.engine_version = HEAVENBENCH_VERSION;
+            dlss_platform_ = std::make_unique<DlssPlatform>(options);
+            presentation_platform = dlss_platform_.get();
+        }
+#endif
         engine_ = filament::Engine::Builder()
             .backend(filament::Engine::Backend::VULKAN)
+            .platform(presentation_platform)
             .config(&engine_config)
             .build();
     }
@@ -603,6 +628,8 @@ TraceCapabilities FilamentBackend::trace_capabilities() const {
 
 FilamentBackend::~FilamentBackend() {
     if (!engine_) return;
+    engine_->flushAndWait();
+    destroy_frame_generation();
 
     // Usually finish_screenshot already drained the readback. A skipped frame
     // may still own an unused capture target; detach it before HDR teardown.
@@ -704,6 +731,12 @@ FilamentBackend::~FilamentBackend() {
     engine_->destroy(swapchain_);
 
     filament::Engine::destroy(&engine_);
+#if HEAVEN_HAS_FSR3
+    frame_generation_platform_.reset();
+#endif
+#if HEAVEN_HAS_DLSS
+    dlss_platform_.reset();
+#endif
     profile_bridge_.reset();
 #ifdef __APPLE__
     // The Vulkan surface borrows the layer. Drop SDL's owning view only after
@@ -1321,6 +1354,8 @@ Result<void> FilamentBackend::reconfigure_for_reload(
             Error("Filament pipelines are unavailable for reload"));
     }
 
+    engine_->flushAndWait();
+    destroy_frame_generation();
     // Features may own material instances and may borrow TextureStore entries
     // (notably the hi-res sky). Destroy those before invalidating textures.
     destroy_features();
@@ -1358,6 +1393,7 @@ Result<void> FilamentBackend::reconfigure_for_reload(
         render_ctx_.test_scene_assets = render_test_assets_.get();
     }
     init_features(config_);
+    request_frame_generation(config_.frame_generation);
     // Reloaded post-process features / quality also need their cached View
     // settings reapplied, even if weather and time of day did not change.
     lighting_initialized_ = false;
@@ -1529,6 +1565,7 @@ void FilamentBackend::build_render_context() {
     scene_builder_ = std::make_unique<SceneBuilder>();
     light_spawner_ = std::make_unique<SceneLightSpawner>();
     lighting_      = std::make_unique<LightingSystem>(core_);
+    request_frame_generation(config_.frame_generation);
 }
 
 void FilamentBackend::init_features(const AppConfig& config) {
@@ -2151,6 +2188,18 @@ FrameResult FilamentBackend::render_frame(
             viewport_w, viewport_h);
     }
     result.timings.feature_ms = elapsed_ms(stage_start);
+    if(frame_generation_) {
+        view_->setRenderTarget(nullptr);
+        if(overlay_view_) overlay_view_->setRenderTarget(nullptr);
+        if(frame_generation_->prepare(*mesh_store_,*texture_store_,instances,meshes,
+                resolve_material,config_,camera,viewport_w,viewport_h,
+                overlay_enabled_ && imgui_helper_ && overlay_draw_)) {
+            std::vector<TemporalGrassPatch> patches;
+            if(grass_feature_) grass_feature_->append_temporal_patches(patches);
+            if(massive_foliage_feature_) massive_foliage_feature_->append_temporal_patches(patches);
+            frame_generation_->prepare_grass(patches,instances,camera,render_time_);
+        }
+    }
 
     // Depth pre-pass → main view → composite, inside one begin/endFrame.
     stage_start = FrameClock::now();
@@ -2522,8 +2571,8 @@ bool FilamentBackend::render_views(const Camera& camera,
             throw std::runtime_error("HDR output encoding could not be initialized");
         }
     }
-    filament::RenderTarget* const final_rt =
-        hdr_active_ ? hdr_output_->scene_rt() : nullptr;
+    filament::RenderTarget* const final_rt = hdr_active_ ? hdr_output_->scene_rt() :
+        (frame_generation_ ? frame_generation_->scene_target() : nullptr);
     render_ctx_.output_target = final_rt;
 
     IRenderFeature* capture_feature = nullptr;
@@ -2580,6 +2629,8 @@ bool FilamentBackend::render_views(const Camera& camera,
     const bool overlay_ready = prepare_overlay(viewport_w, viewport_h);
     const auto overlay_blend_mode = overlay_ready
         ? overlay_view_->getBlendMode() : filament::View::BlendMode::TRANSLUCENT;
+    const bool generating = frame_generation_ && frame_generation_->scene_target();
+    if(generating && overlay_ready) frame_generation_->bind_ui(*overlay_view_);
     if (hdr_active_) {
         if (overlay_ready) {
             hdr_output_->bind_sdr_layer(*overlay_view_);
@@ -2594,6 +2645,7 @@ bool FilamentBackend::render_views(const Camera& camera,
     bool presented = false;
     prepare_screenshot_target(viewport_w, viewport_h);
     if (renderer_->beginFrame(swapchain_, capture_frame_timestamp())) {
+        if(generating) frame_generation_->render_temporal();
         if (need_depth_pass) {
             // Render the depth pre-pass while the post-effect quads are
             // removed from the scene.
@@ -2639,12 +2691,19 @@ bool FilamentBackend::render_views(const Camera& camera,
             { profile::Scope submit_scope("HDR encode submission", "Rendering"); hdr_output_->encode(); }
         }
 
+        if(generating) {
+            frame_generation_->render_composite();
+            frame_generation_->submit(true,camera);
+        }
+        else if(frame_generation_) frame_generation_->submit(true,camera);
         submit_screenshot(viewport_w, viewport_h);
         { profile::Scope submit_scope("End frame submission", "Rendering"); renderer_->endFrame(); }
         finish_screenshot();
         presented = true;
 
     }
+    if(!presented && frame_generation_) frame_generation_->submit(false,camera);
+    if(generating && overlay_ready) frame_generation_->unbind_ui();
     if (hdr_active_ && overlay_ready) {
         overlay_view_->setRenderTarget(nullptr);
         overlay_view_->setBlendMode(overlay_blend_mode);
@@ -2668,10 +2727,74 @@ void FilamentBackend::present() {
     // Nothing to do here for the OpenGL backend
 }
 
+void FilamentBackend::request_frame_generation(FrameGenerationMode mode) {
+    config_.frame_generation=mode;
+    if(!core_.engine) return;
+    if(!frame_generation_ && mode!=FrameGenerationMode::Off) {
+        FrameGenerationPlatform* platform=nullptr;
+#if HEAVEN_HAS_FSR3
+        if(engine_->getBackend()==filament::Engine::Backend::VULKAN)
+            platform=frame_generation_platform_.get();
+#endif
+        DlssPlatform* dlss = nullptr;
+#if HEAVEN_HAS_DLSS
+        if (engine_->getBackend() == filament::Engine::Backend::VULKAN)
+            dlss = dlss_platform_.get();
+#endif
+        // A Streamline-created device is tied to that provider until backend
+        // recreation. Never also interpose the FSR swap chain on its resources.
+        if (dlss) platform = nullptr;
+        frame_generation_=std::make_unique<FrameGenerationRuntime>(core_,platform,dlss);
+    }
+    if(frame_generation_) frame_generation_->request(mode);
+}
+
+void FilamentBackend::destroy_frame_generation() {
+    if(!frame_generation_) return;
+    frame_generation_->drain();
+    frame_generation_->unbind_ui();
+    if(view_) view_->setRenderTarget(nullptr);
+    if(overlay_view_) overlay_view_->setRenderTarget(nullptr);
+    if(scene_color_capture_) scene_color_capture_->set_output_target(nullptr);
+    for(auto& feature:render_features_) feature->release_shared_targets(render_ctx_);
+    render_ctx_.output_target=nullptr;
+    frame_generation_.reset();
+}
+
+void FilamentBackend::begin_application_frame(uint64_t application_frame) {
+    if (frame_generation_) frame_generation_->begin_application_frame(application_frame);
+}
+void FilamentBackend::end_application_simulation() {
+    if (frame_generation_) frame_generation_->end_simulation();
+}
+void FilamentBackend::native_window_message(uint32_t message) {
+    if (frame_generation_) frame_generation_->native_window_message(message);
+}
+
+FrameGenerationStatus FilamentBackend::frame_generation_status() const {
+    return frame_generation_ ? frame_generation_->status() : FrameGenerationStatus{};
+}
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+bool FilamentBackend::debug_frame_generation_out_of_date_once() {
+#if HEAVEN_HAS_FSR3
+    if (frame_generation_platform_ && frame_generation_) {
+        frame_generation_platform_->debug_out_of_date_once();
+        return true;
+    }
+#endif
+    return false;
+}
+#endif
+
 Result<void> FilamentBackend::update_mesh_vertices(uint64_t surface_handle,
                                            const Vertex* vertices,
                                            uint32_t vertex_count) {
-    return mesh_store_->update_vertices(surface_handle, vertices, vertex_count);
+    auto result = mesh_store_->update_vertices(surface_handle, vertices, vertex_count);
+    if (frame_generation_) {
+        if (result) frame_generation_->set_positions(surface_handle,{vertices,vertex_count});
+        else frame_generation_->invalidate_history();
+    }
+    return result;
 }
 
 // ── Per-frame GPU skinning bone update ──────────────────────────
@@ -2686,6 +2809,7 @@ Result<void> FilamentBackend::update_mesh_vertices(uint64_t surface_handle,
 // a safe no-op.
 Result<void> FilamentBackend::update_skinned_bones(
         int mesh_index, std::span<const glm::mat4> bone_matrices) {
+    if(frame_generation_) frame_generation_->set_bones(mesh_index,bone_matrices);
     if (!engine_) {
         return std::unexpected(Error("Filament engine not initialized"));
     }
@@ -3218,6 +3342,10 @@ void FilamentBackend::resize([[maybe_unused]] int width,
     // frame still references it, then rebuild with the same HDR flag the
     // constructor used. (width/height come from the native window; the
     // arguments are accepted for interface symmetry / logging.)
+    if(frame_generation_) {
+        frame_generation_->drain();
+        frame_generation_->invalidate_history();
+    }
     engine_->flushAndWait();
     if (swapchain_) {
         engine_->destroy(swapchain_);

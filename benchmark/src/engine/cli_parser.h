@@ -72,6 +72,7 @@ struct FlagSpec {
 // benchmark settings. Captures default to a fixed 1/60-second simulation step.
 struct VisualCaptureOptions {
     std::optional<std::array<float, 5>> camera_pose;
+    std::optional<std::array<float, 5>> camera_to;
     std::optional<float> tour_time;
     bool tour_motion = false;
     float fov = 60.0f;

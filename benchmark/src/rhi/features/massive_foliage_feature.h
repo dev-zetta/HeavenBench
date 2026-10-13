@@ -51,6 +51,7 @@
 #include <vector>
 
 namespace heaven {
+struct TemporalGrassPatch;
 
 class MassiveFoliageFeature : public IRenderFeature {
 public:
@@ -91,6 +92,7 @@ public:
         bool shared_bindings_valid = true;
     };
     [[nodiscard]] GeometryStats geometry_stats() const;
+    void append_temporal_patches(std::vector<TemporalGrassPatch>& output) const;
 
 private:
     // A renderable category. Grass and flowers share the heaven_grass vertex
@@ -156,6 +158,8 @@ private:
     filament::Material*         material_       = nullptr;  // heaven_grass
     filament::MaterialInstance* grass_mi_       = nullptr;  // shared by grass patches
     filament::MaterialInstance* flower_mi_      = nullptr;  // shared by flower patches
+    const filament::Texture*    grass_diffuse_texture_ = nullptr; // borrowed
+    const filament::Texture*    flower_diffuse_texture_ = nullptr; // borrowed
     std::vector<FoliagePatch>   patches_;
     std::vector<FoliageGeometry> geometries_;
 

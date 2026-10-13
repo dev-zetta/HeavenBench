@@ -211,6 +211,7 @@ using heaven::SettingValue;
         case SettingId::Width:             return cfg.width;
         case SettingId::Height:            return cfg.height;
         case SettingId::Fullscreen:        return cfg.fullscreen;
+        case SettingId::FrameGeneration:   return cfg.frame_generation;
         case SettingId::Hdr:               return cfg.hdr;
         case SettingId::HdrPeakNits:       return cfg.hdr_peak_nits;
         case SettingId::HdrPaperWhiteNits: return cfg.hdr_paper_white_nits;

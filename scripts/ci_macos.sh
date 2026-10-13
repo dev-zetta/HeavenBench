@@ -35,7 +35,7 @@ python3 "$SCRIPT_DIR/bundle_macos.py" tools --build-dir "$BUILD_DIR" --jobs "$JO
 # Discard caller asset overrides; these tests exercise their own fixtures.
 unset HEAVEN_RESOURCE_DIR HEAVEN_DATA HEAVEN_DEFAULT_DATA HEAVEN_USER_DIR
 RC_PARAMS='seed=20260930' ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error \
-    --timeout 300 --tests-regex '^heaven_(benchmark_tests|profiler_trace_tests|microprofile_analysis|runtime_paths_cli|asset_packer_cli|gtao_bent_normal_contract|specular_occluded_moment_contract|surface_color_contract)$'
+    --timeout 300 --exclude-regex '^heaven_benchmark_smoke$'
 ctest --test-dir "$BUILD_DIR/tools" --output-on-failure --no-tests=error --timeout 120
 # Default CI does not establish MoltenVK GPU/display acceptance on hosted runners.
 HEAVEN_SMOKE=0 ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error \

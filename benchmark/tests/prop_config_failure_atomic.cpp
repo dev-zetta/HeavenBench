@@ -108,6 +108,7 @@ bool configs_equal(const BenchConfig& a, const BenchConfig& b) {
     if (a.node_file != b.node_file) return false;
     if (a.quality_preset_label != b.quality_preset_label) return false;
     if (a.texture_quality != b.texture_quality) return false;
+    if (a.frame_generation != b.frame_generation) return false;
 
     // Ints
     if (a.width != b.width) return false;
@@ -187,6 +188,7 @@ BenchConfig gen_base() {
     c.hdr            = *rc::gen::arbitrary<bool>();
     c.wind_debug     = *rc::gen::arbitrary<bool>();
     c.benchmark_mode = *rc::gen::arbitrary<bool>();
+    c.frame_generation = static_cast<heaven::FrameGenerationMode>(*rc::gen::inRange(0, 3));
 
     c.time_of_day  = static_cast<float>(*rc::gen::inRange(0, 240)) / 10.0f;   // [0,24)
     c.cloth_sim_hz = static_cast<float>(*rc::gen::inRange(1, 240));

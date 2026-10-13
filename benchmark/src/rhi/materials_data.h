@@ -107,4 +107,19 @@ inline constexpr std::size_t k_heaven_grass_depth_filamat_size = sizeof(k_heaven
 extern const std::uint8_t k_heaven_height_sample_filamat[90523];
 inline constexpr std::size_t k_heaven_height_sample_filamat_size = sizeof(k_heaven_height_sample_filamat);
 
+extern const std::uint8_t k_heaven_motion_filamat[243116];
+inline constexpr std::size_t k_heaven_motion_filamat_size = sizeof(k_heaven_motion_filamat);
+
+extern const std::uint8_t k_heaven_motion_masked_filamat[251228];
+inline constexpr std::size_t k_heaven_motion_masked_filamat_size = sizeof(k_heaven_motion_masked_filamat);
+
+extern const std::uint8_t k_heaven_motion_grass_filamat[134390];
+inline constexpr std::size_t k_heaven_motion_grass_filamat_size = sizeof(k_heaven_motion_grass_filamat);
+
+extern const std::uint8_t k_heaven_temporal_extract_filamat[109646];
+inline constexpr std::size_t k_heaven_temporal_extract_filamat_size = sizeof(k_heaven_temporal_extract_filamat);
+
+extern const std::uint8_t k_heaven_fg_composite_filamat[110366];
+inline constexpr std::size_t k_heaven_fg_composite_filamat_size = sizeof(k_heaven_fg_composite_filamat);
+
 #endif // HEAVENBENCH_RHI_MATERIALS_DATA_H

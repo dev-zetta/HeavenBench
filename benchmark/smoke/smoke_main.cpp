@@ -104,10 +104,12 @@ const CaseEntry kCases[] = {
     {"feature_registration",
                             &heaven::smoke::run_feature_registration_case},
     {"gpu_skinning",        &heaven::smoke::run_gpu_skinning_case},
+    {"gpu_skinning_ssr",    &heaven::smoke::run_gpu_skinning_ssr_case},
     {"bloom_strength",      &heaven::smoke::run_bloom_strength_case},
     {"gpu_instancing",      &heaven::smoke::run_gpu_instancing_case},
     {"culling",             &heaven::smoke::run_culling_case},
     {"microprofiler",       &heaven::smoke::run_microprofiler_case},
+    {"frame_generation",    &heaven::smoke::run_frame_generation_case},
     {"rain_toggle_roundtrip",
                             &heaven::smoke::run_rain_toggle_roundtrip_case},
     {"fps_bar",             &heaven::smoke::run_fps_bar_case},
@@ -208,7 +210,7 @@ int main() try {
 
     // The drawable extent may differ from the requested size on HiDPI/scaled
     // displays — create_window() already queried it into the window handle.
-    CaseContext ctx{**backend, config, win->width, win->height};
+    CaseContext ctx{**backend, config, win->width, win->height, &*win};
 
     if (const char* height_batch = std::getenv("HEAVEN_SMOKE_HEIGHT_BATCH_ONLY");
         height_batch && std::strcmp(height_batch, "1") == 0) {

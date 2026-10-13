@@ -111,7 +111,10 @@ ConfigOpLog apply_config_intents(BenchConfig&          working,
             // Settings remain accessible during playback. Retire the current
             // score before changing its effective workload; rejected/no-op
             // edits and pending reload settings do not interrupt the run.
-            if (entry.read(active) != stored) cancel_before_change();
+            // Frame-generation requests retain playback and instead latch a
+            // diagnostic result in BenchmarkSystem through apply_live().
+            if (entry.read(active) != stored && edit.id != SettingId::FrameGeneration)
+                cancel_before_change();
             // Write the same value into Active so the two configs stay in lockstep
             // for this Live_Setting, then drive the renderer.
             entry.apply_to(active, edit.value);

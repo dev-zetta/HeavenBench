@@ -34,6 +34,7 @@
 #include <vector>
 
 namespace heaven {
+struct TemporalGrassPatch;
 
 class GrassFeature final : public IRenderFeature {
 public:
@@ -78,10 +79,13 @@ public:
     // debug_build_counters() to prove the per-frame path never regenerates
     // grass geometry.
     [[nodiscard]] uint64_t generation_count() const { return generation_count_; }
+    // Append exact current range bindings without transferring ownership.
+    void append_temporal_patches(std::vector<TemporalGrassPatch>& output) const;
 
 private:
     filament::Material*         material_ = nullptr;
     filament::MaterialInstance* mi_       = nullptr;   // shared across patches
+    const filament::Texture*    diffuse_texture_ = nullptr; // borrowed
     std::vector<GrassPatch>     patches_;
     std::vector<GrassGeometry>  geometries_;
     bool                        generated_ = false;

@@ -68,6 +68,7 @@ struct CaseContext {
     const AppConfig& config;
     int              width  = 0;
     int              height = 0;
+    WindowHandle*    window = nullptr; // Optional harness owner for OS-resize cases.
 };
 
 // Production-material readback against an independent world-space blocker oracle.
@@ -79,6 +80,8 @@ struct CaseContext {
 // Production loading UI readback: progress fill and stage text remain visible.
 [[nodiscard]] CaseResult run_loading_progress_case(const CaseContext& ctx);
 [[nodiscard]] CaseResult run_microprofiler_case(const CaseContext& ctx);
+// Separately opted-in actual FSR SDK/UI/toggle/resize/reload lifecycle.
+[[nodiscard]] CaseResult run_frame_generation_case(const CaseContext& ctx);
 
 // Offscreen readback of the actual HDR encode material. Checks numerical PQ,
 // color conversion, premultiplied UI composition and transparent-layer clearing.
@@ -179,6 +182,8 @@ struct CaseContext {
 // property tests; on-device skinned motion and pixel parity require separate
 // full-scene captures and comparison. Defined in smoke_gpu_skinning.cpp.
 [[nodiscard]] CaseResult run_gpu_skinning_case(const CaseContext& ctx);
+// Actual SSR GPU-skinned opaque/masked pixels, MSAA, bone motion and cleanup.
+[[nodiscard]] CaseResult run_gpu_skinning_ssr_case(const CaseContext& ctx);
 
 // GPU-instancing smoke case
 // repeated static meshes are drawn as Filament

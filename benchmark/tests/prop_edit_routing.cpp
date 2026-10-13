@@ -15,9 +15,9 @@
  *       Active_Configuration  and the edit triggers NO
  *       Benchmark_Reload (— a live change takes effect without a
  *       rebuild);
- *     • a Live edit cancels the active run exactly once iff its validated
- *       stored value changes Active; no-op/rejected Live edits and pending
- *       Reload edits do not cancel it;
+ *     • an ordinary Live edit cancels the active run exactly once iff its
+ *       validated stored value changes Active; frame generation retains the
+ *       tour as diagnostic. No-op/rejected and pending Reload edits retain it;
  *     • if the entry is Apply::Reload the value is NOT written into the
  *       Active_Configuration (— a reload setting only lands in
  *       Active on a Benchmark_Reload);
@@ -80,6 +80,7 @@ using heaven::ConfigOpLog;
 using heaven::ConfigUiState;
 using heaven::OverlayIntents;
 using heaven::MaterialWorkflow;
+using heaven::FrameGenerationMode;
 using heaven::QualityLevel;
 using heaven::RenderPreset;
 using heaven::SettingValue;
@@ -128,6 +129,9 @@ using heaven::testing::gen_ranged_int;
                     *rc::gen::inRange(0, 2))};
             } else if constexpr (std::is_same_v<T, TextureQuality>) {
                 return SettingValue{static_cast<TextureQuality>(
+                    *rc::gen::inRange(0, 3))};
+            } else if constexpr (std::is_same_v<T, FrameGenerationMode>) {
+                return SettingValue{static_cast<FrameGenerationMode>(
                     *rc::gen::inRange(0, 3))};
             } else {
                 return SettingValue{*rc::gen::arbitrary<std::string>()};
@@ -178,13 +182,13 @@ bool run_p5_edit_routing_property() {
             // (1) Working always reflects the committed (post-clamp) value.
             RC_ASSERT(entry.read(working) == expected_stored);
 
-            // (2) A plain edit never rebuilds. Only an effective Live change
-            //     cancels the run; no-op/rejected edits and pending Reload edits
-            //     retain it.
+            // (2) A plain edit never rebuilds. Only an effective ordinary Live
+            // change cancels; frame generation retains diagnostic playback.
             RC_ASSERT(std::find(log.begin(), log.end(), ConfigOp::Reload) ==
                       log.end());
             RC_ASSERT(fx.rebuild_count == 0);
             const bool live_changed = entry.apply == Apply::Live &&
+                                      entry.id != heaven::SettingId::FrameGeneration &&
                                       expected_stored != active_field_before;
             RC_ASSERT(fx.cancel_count == (live_changed ? 1 : 0));
 

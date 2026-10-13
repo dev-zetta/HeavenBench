@@ -1,0 +1,41 @@
+// Full-resolution temporal inputs, used only while frame generation is requested.
+material {
+    name : heaven_motion,
+    requires : [ uv0, tangents, custom0, custom1, custom2, custom3, custom4, custom5, custom6, custom7 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : true,
+    depthCulling : true,
+    parameters : [
+        { type : sampler2d, name : geometryHeightMap, stages : [ vertex ] },
+        { type : bool, name : geometryDisplacement },
+        { type : float4, name : baseTransform },
+        { type : float4, name : displacementParams },
+        { type : float4x4, name : previousModel },
+        { type : float4x4, name : previousClipFromUserWorld },
+        { type : float4x4, name : currentClipFromUserWorld },
+        { type : float3, name : previousCamera },
+        { type : bool, name : historyValid },
+        { type : bool, name : hasPreviousBones },
+        { type : sampler2d, name : previousBones, stages : [ vertex ] },
+        { type : bool, name : hasPreviousPositions },
+        { type : sampler2d, name : previousPositions, stages : [ vertex ] },
+        { type : int, name : previousPositionWidth }
+    ],
+    variables : [ currentClip, previousClip ]
+}
+vertex {
+    #include "includes/temporal_motion.glsl"
+    void materialVertex(inout MaterialVertexInputs material) {
+        temporalMotionVertex(material);
+    }
+}
+fragment {
+    #include "includes/temporal_motion_fragment.glsl"
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = temporalMotionFragment();
+    }
+}

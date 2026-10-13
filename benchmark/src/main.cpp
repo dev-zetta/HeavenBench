@@ -26,6 +26,7 @@
 #include "engine/loading_benchmark.h"
 #include "engine/staged_scene_load.h"
 #include "engine/camera.h"
+#include "engine/capture_camera_motion.h"
 #include "engine/scene_rhi.h"
 #include "engine/material_rhi.h"
 #include "engine/path_resolver.h"
@@ -967,6 +968,21 @@ private:
             {"driver", active_gpu_info_.driver_name}, {"driver_version", active_gpu_info_.driver_version},
             {"format", config_.hdr ? "P6 diagnostic HDR preview: PQ decoded to nits, Rec.2020 to sRGB, divided by paper white, per-channel Reinhard, sRGB OETF" : "P6 RGB8 SDR, top row first"}, {"benchmark_score", false}
         };
+        if (capture_.camera_to && capture_camera_sample_) {
+            const auto& sample = *capture_camera_sample_;
+            metadata["camera_position"] = {sample.pose[0], sample.pose[1], sample.pose[2]};
+            metadata["camera_yaw"] = sample.pose[3];
+            metadata["camera_pitch"] = sample.pose[4];
+            metadata["camera_fov"] = capture_.fov;
+            metadata["capture_camera_motion"] = {
+                {"schema", 1}, {"start_pose", *capture_.camera_pose},
+                {"end_pose", *capture_.camera_to}, {"current_pose", sample.pose},
+                {"interpolation", "linear world position and pitch; shortest-arc yaw; exact endpoints"},
+                {"clock", "accepted application capture submissions; rejected attempts retain the same pose"},
+                {"source_index", sample.source_index}, {"total_sources", sample.total_sources},
+                {"fraction", sample.fraction}, {"vertical_fov", capture_.fov}
+            };
+        }
         if (config_.hdr) {
             auto raw_path = std::filesystem::path(image_path);
             raw_path.replace_extension(".pq.pfm");
@@ -1420,6 +1436,7 @@ private:
         // Seeded here, once config_ is final, so the first overlay
         // frame seeds its controls from the same values the renderer started with.
         working_config_ = config_;
+        bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         overlay_ui_.set_application_build_info(kApplicationBuildInfo);
         active_gpu_telemetry_ = backend_->gpu_telemetry();
 
@@ -1438,7 +1455,7 @@ private:
                     last_intents_ = overlay_ui_.build_microprofiler();
                 return;
             }
-            overlay_ui_.draw_debug_sidebar(debug_sidebar_info());
+            overlay_ui_.draw_debug_sidebar(debug_sidebar_info(), config_ui_.frame_generation);
             last_intents_ = overlay_ui_.build(bench_->status(), working_config_,
                                               config_ui_);
         });
@@ -1547,6 +1564,10 @@ private:
 #endif
             task_scope.reset();
             task_scope.emplace("Frame clock and input", "Input");
+            backend_->begin_application_frame(trace_context.attempt_id);
+#if defined(_WIN32) && HEAVEN_HAS_DLSS
+            SDL_EventState(SDL_SYSWMEVENT, config_.frame_generation==FrameGenerationMode::Dlss ? SDL_ENABLE : SDL_DISABLE);
+#endif
             float dt = stats_.begin_frame();
             if (capture_.output && !capture_.realtime) {
                 dt = advance_capture ? 1.0f / capture_.fps : 0.0f;
@@ -1564,6 +1585,11 @@ private:
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) running = false;
+#if defined(_WIN32) && HEAVEN_HAS_DLSS
+                if(ev.type==SDL_SYSWMEVENT && ev.syswm.msg &&
+                   ev.syswm.msg->subsystem==SDL_SYSWM_WINDOWS)
+                    backend_->native_window_message(ev.syswm.msg->msg.win.msg);
+#endif
 
 #ifdef __ANDROID__
                 // SDL delivers the pause events before its default Android
@@ -1787,6 +1813,17 @@ private:
                 camera_path_.apply_clamped(time, camera_);
                 config_.time_of_day = camera_path_.time_of_day_clamped(time, config_.time_of_day);
                 if (capture_.fov_explicit) camera_.fov = capture_.fov;
+            }
+            if (capture_.camera_to) {
+                const auto sample = sample_capture_camera_motion(*capture_.camera_pose, *capture_.camera_to,
+                    static_cast<std::uint64_t>(capture_presented_frames_),
+                    static_cast<std::uint64_t>(capture_.frames + capture_.count - 1));
+                if (!sample) throw std::logic_error("Invalid diagnostic camera motion after CLI validation");
+                const auto& pose = sample->pose;
+                camera_.position = {pose[0], pose[1], pose[2]};
+                camera_.yaw = pose[3];
+                camera_.pitch = pose[4];
+                camera_.fov = capture_.fov;
             }
 
             // Animate floating islands (sine wave bobbing).
@@ -2152,6 +2189,11 @@ private:
                 auto requested = backend_->request_screenshot(capture_path());
                 if (!requested) throw std::runtime_error(requested.error().message);
                 capture_requested_ = true;
+                if (capture_.camera_to) {
+                    capture_camera_sample_ = sample_capture_camera_motion(*capture_.camera_pose, *capture_.camera_to,
+                        static_cast<std::uint64_t>(capture_presented_frames_),
+                        static_cast<std::uint64_t>(capture_.frames + capture_.count - 1));
+                }
             }
 
             // Drive the frame with the one persistent weather state: overcast
@@ -2160,6 +2202,7 @@ private:
             tonemap_.bloom_strength = config_.bloom_strength;
             task_scope.reset();
             task_scope.emplace("Rendering", "Rendering");
+            backend_->end_application_simulation();
             auto submission_context = trace_context;
             submission_context.submission_id = microprofile_submission_id_ + 1;
             backend_->set_trace_frame_context(submission_context);
@@ -2192,6 +2235,8 @@ private:
             const float presented_interval = frame_result.presented
                 ? stats_.record_presented_frame()
                 : 0.0f;
+            config_ui_.frame_generation = backend_->frame_generation_status();
+            bench_->set_frame_generation_status(config_ui_.frame_generation);
             // Keep hardware polling far out of the hot path: the accepted-frame
             // statistics tick at most once per second, which is also a useful
             // cadence for DRM sensors and Vulkan heap-budget estimates.
@@ -2217,6 +2262,7 @@ private:
                     if (bench_->will_complete_on_present()) {
                         bench_->set_gpu_benchmark_times(
                             backend_->finalize_benchmark_gpu_times());
+                        bench_->set_frame_generation_status(backend_->frame_generation_status());
                     }
                     bench_->record_presented_frame(
                         presented_interval);
@@ -2352,6 +2398,11 @@ private:
         // startup configuration copy.
         void apply_live(SettingId id, const BenchConfig& active) override {
             switch (id) {
+                case SettingId::FrameGeneration:
+                    if (app.backend_) app.backend_->request_frame_generation(active.frame_generation);
+                    if (app.bench_) app.bench_->set_frame_generation_requested(
+                        active.frame_generation != FrameGenerationMode::Off);
+                    break;
                 case SettingId::PhysicalCameraEnabled:
                 case SettingId::CameraAperture:
                 case SettingId::CameraShutter:
@@ -2768,6 +2819,7 @@ private:
                 cpu_stress_metrics_.aggregate_updates_per_second,
                 cpu_stress_metrics_.duration_seconds);
         }
+        bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         if (!bench_->request_start()) {
             return false;
         }
@@ -3036,6 +3088,7 @@ private:
     std::string                   microprofile_export_error_message_;
     std::string                   microprofile_feedback_;
     int                           capture_presented_frames_ = 0;
+    std::optional<CaptureCameraSample> capture_camera_sample_;
     int                           capture_index_ = 0;
     bool                          capture_requested_ = false;
     bool                          capture_finished_ = false;

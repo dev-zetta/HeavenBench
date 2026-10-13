@@ -151,6 +151,17 @@ const std::vector<FieldSpec>& config_schema() {
         // ── Top-level scalars / strings (no validation) ────────
         s.push_back(string_field("data_dir", [](auto& c) -> auto& { return c.data_dir; }));
         s.push_back(FieldSpec{
+            "frame_generation", FieldType::String,
+            [](const JsonValue& v, BenchConfig& c, Diagnostics& d) {
+                const std::string value = v.node.get<std::string>();
+                if (const auto mode = parse_frame_generation_mode(value)) c.frame_generation = *mode;
+                else d.warn(std::format("WARN: frame_generation '{}' is unknown; retaining {}",
+                                        value, frame_generation_mode_id(c.frame_generation)));
+            },
+            [](const BenchConfig& c, JsonObject& o) {
+                o.node["frame_generation"] = frame_generation_mode_id(c.frame_generation);
+            }});
+        s.push_back(FieldSpec{
             "texture_quality", FieldType::String,
             [](const JsonValue& v, BenchConfig& c, Diagnostics& d) {
                 const std::string value = v.node.get<std::string>();

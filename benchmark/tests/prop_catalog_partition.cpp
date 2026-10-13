@@ -80,7 +80,7 @@ const std::vector<SettingId>& all_setting_ids() {
         SettingId::TessEnabled, SettingId::TessScale, SettingId::TessFactor,
         SettingId::TessDistance,
         // Settings
-        SettingId::Width, SettingId::Height, SettingId::Fullscreen, SettingId::Hdr,
+        SettingId::Width, SettingId::Height, SettingId::Fullscreen, SettingId::FrameGeneration, SettingId::Hdr,
         SettingId::HdrPeakNits, SettingId::HdrPaperWhiteNits, SettingId::ClothSimHz,
         // Quality
         SettingId::TextureQuality, SettingId::FeatureGrass, SettingId::FeatureParticles,

@@ -1,0 +1,217 @@
+name: Optional Windows frame generation contracts
+
+# The dedicated experimental branch and explicit dispatch leave release builds
+# unchanged. Neither path publishes packages or proprietary runtime libraries.
+on:
+  push:
+    branches: [codex/frame-generation]
+    paths:
+      - '.github/workflows/frame-generation.yml'
+      - 'benchmark/**'
+      - 'cmake/**'
+      - 'patches/filament/**'
+      - 'packaging/windows/vcpkg.json'
+      - 'scripts/build_windows.ps1'
+      - 'scripts/windows_common.ps1'
+      - 'scripts/fetch_dependencies.sh'
+      - 'scripts/fetch_fsr31.py'
+      - 'scripts/package_windows.ps1'
+      - 'scripts/collect_licenses.py'
+      - 'tests/collect_licenses_test.py'
+      - 'tests/windows_optional_sdk_licenses_test.ps1'
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: Optional SDK code to compile; no GPU or vendor runtime DLLs
+        type: choice
+        options: [both, fsr3, dlss]
+        default: both
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-frame-generation-${{ github.ref }}-${{ inputs.providers || 'both' }}
+  cancel-in-progress: true
+
+jobs:
+  windows-frame-generation:
+    name: Windows x64 / MSVC / optional SDK host contracts
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      FRAME_GENERATION_PROVIDERS: ${{ inputs.providers || 'both' }}
+      HEAVEN_SMOKE: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Prepare native baseline and verified SDK inputs
+        run: |
+          . ./scripts/windows_common.ps1
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/frame-generation/windows-msvc'
+          $evidence = Join-Path $repo 'build/frame-generation/windows-ci'
+          $logs = Join-Path $evidence 'logs'
+          $metadata = Join-Path $evidence 'metadata'
+          New-Item -ItemType Directory -Force $logs, $metadata | Out-Null
+          Start-Transcript -Path (Join-Path $logs 'prepare.log')
+          try {
+            if ($env:FRAME_GENERATION_PROVIDERS -notin @('both', 'fsr3', 'dlss')) { throw 'Invalid optional SDK provider choice.' }
+            Invoke-Checked python.exe @('benchmark/src/rhi/frame_generation/verify_fsr31_source_test.py')
+            # Reuse the native helper's compiler, static CRT, SDL and pinned
+            # vcpkg configuration. Optional reconfiguration retains that cache.
+            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2
+            Import-HeavenMsvcEnvironment
+            Invoke-Checked python.exe @('tests/collect_licenses_test.py')
+            Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+              'tests/windows_optional_sdk_licenses_test.ps1')
+            $cache = Get-Content -Raw (Join-Path $build 'CMakeCache.txt')
+            foreach ($option in @('HEAVEN_ENABLE_FSR3', 'HEAVEN_ENABLE_DLSS')) {
+              if ($cache -notmatch "(?m)^${option}:BOOL=OFF\r?`$") {
+                throw "Expected SDK-off native baseline: $option"
+              }
+            }
+            Copy-Item (Join-Path $build 'CMakeCache.txt') (Join-Path $metadata 'baseline-CMakeCache.txt')
+            $dependencies = Get-Content -Raw 'packaging/windows/vcpkg.json' | ConvertFrom-Json
+            $environment = @{
+              head = (& git.exe rev-parse HEAD).Trim()
+              providers = $env:FRAME_GENERATION_PROVIDERS
+              vcpkg_revision = $dependencies.'builtin-baseline'
+              msvc = (Get-Item (Get-Command cl.exe).Source).VersionInfo.FileVersion
+              scope = 'Native compilation and GPU-free host contracts only'
+              vendor_runtime_dlls = 'Verified official SDK archives downloaded; no vendor runtime DLLs loaded, packaged or uploaded; Streamline extracts headers/license only'
+            }
+            $environment | ConvertTo-Json | Set-Content (Join-Path $metadata 'environment.json')
+            Invoke-Checked cmake.exe @('--version')
+            Invoke-Checked ninja.exe @('--version')
+            Invoke-Checked python.exe @('--version')
+            if ($env:FRAME_GENERATION_PROVIDERS -in @('both', 'fsr3')) {
+              $source = Join-Path $repo 'build/frame-generation/windows-ci/fidelityfx-sdk-1.1.4'
+              Invoke-Checked python.exe @('scripts/fetch_fsr31.py', '--output', $source)
+              Copy-Item (Join-Path $source 'heavenbench-source.json') (Join-Path $metadata 'fidelityfx-source.json')
+              Copy-Item (Join-Path $source 'LICENSE.txt') (Join-Path $metadata 'FidelityFX-SDK-LICENSE.txt')
+              Copy-Item (Join-Path $source 'sdk/tools/ffx_shader_compiler/libs/SPIRV-Reflect/LICENSE') (Join-Path $metadata 'SPIRV-Reflect-LICENSE.txt')
+              # Build tools use the existing vcpkg revision in a separate,
+              # ignored manifest/install tree; release dependencies stay intact.
+              $toolManifest = Join-Path $evidence 'tools-manifest'
+              $toolInstall = Join-Path $evidence 'tools-installed'
+              New-Item -ItemType Directory -Force $toolManifest | Out-Null
+              @{
+                name = 'heaven-frame-generation-build-tools'
+                'version-string' = '0.0.0'
+                'builtin-baseline' = $dependencies.'builtin-baseline'
+                dependencies = @(
+                  @{ name = 'glslang'; features = @('opt', 'tools') }
+                  @{ name = 'spirv-tools'; features = @('tools') }
+                )
+              } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $toolManifest 'vcpkg.json')
+              $vcpkg = Join-Path $build 'toolchains/vcpkg/vcpkg.exe'
+              Invoke-Checked $vcpkg @('install', "--x-manifest-root=$toolManifest",
+                "--x-install-root=$toolInstall", '--triplet=x64-windows-static', '--host-triplet=x64-windows')
+              Copy-Item (Join-Path $toolManifest 'vcpkg.json') (Join-Path $metadata 'build-tools-vcpkg.json')
+            }
+            if ($env:FRAME_GENERATION_PROVIDERS -in @('both', 'dlss')) {
+              $headers = Join-Path $evidence 'streamline-2.14.1-headers'
+              Invoke-Checked python.exe @('benchmark/src/rhi/frame_generation/dlss_fetch_sdk.py', '--output', $headers)
+              Copy-Item (Join-Path $headers 'heavenbench-source.json') (Join-Path $metadata 'streamline-source.json')
+              Copy-Item (Join-Path $headers 'license.txt') (Join-Path $metadata 'Streamline-LICENSE.txt')
+              if (Get-ChildItem -LiteralPath $headers -Recurse -File -Filter '*.dll') {
+                throw 'Header-only Streamline input unexpectedly contains a runtime DLL.'
+              }
+            }
+          } finally { Stop-Transcript }
+      - name: Compile optional native paths and run host contracts
+        run: |
+          . ./scripts/windows_common.ps1
+          Import-HeavenMsvcEnvironment
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/frame-generation/windows-msvc'
+          $evidence = Join-Path $repo 'build/frame-generation/windows-ci'
+          $logs = Join-Path $evidence 'logs'
+          $metadata = Join-Path $evidence 'metadata'
+          Start-Transcript -Path (Join-Path $logs 'optional-sdk-build-and-host-tests.log')
+          try {
+            $fsr = $env:FRAME_GENERATION_PROVIDERS -in @('both', 'fsr3')
+            $dlss = $env:FRAME_GENERATION_PROVIDERS -in @('both', 'dlss')
+            $fsrOption = if ($fsr) { 'ON' } else { 'OFF' }
+            $dlssOption = if ($dlss) { 'ON' } else { 'OFF' }
+            $configure = @('-S', (Join-Path $repo 'benchmark'), '-B', $build,
+              "-DHEAVEN_ENABLE_FSR3=$fsrOption", "-DHEAVEN_ENABLE_DLSS=$dlssOption",
+              '-DHEAVEN_FSR31_NATIVE_TEST=OFF')
+            if ($fsr) {
+              $toolRoot = Join-Path $evidence 'tools-installed/x64-windows-static'
+              $glslang = Join-Path $toolRoot 'tools/glslang/glslangValidator.exe'
+              $validator = Join-Path $toolRoot 'tools/spirv-tools/spirv-val.exe'
+              foreach ($tool in @($glslang, $validator)) {
+                if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw "Missing pinned build tool: $tool" }
+              }
+              $env:PATH = "$(Split-Path $validator -Parent);$(Split-Path $glslang -Parent);$env:PATH"
+              Invoke-Checked $glslang @('--version')
+              Invoke-Checked $validator @('--version')
+              $configure += @("-DHEAVEN_FSR31_SOURCE=$(Join-Path $evidence 'fidelityfx-sdk-1.1.4')",
+                "-DHEAVEN_FSR_GLSLANG=$glslang")
+              Get-FileHash -Algorithm SHA256 $glslang, $validator |
+                Select-Object Path, Hash | ConvertTo-Json | Set-Content (Join-Path $metadata 'build-tool-hashes.json')
+            }
+            if ($dlss) {
+              $configure += "-DHEAVEN_STREAMLINE_HEADERS=$(Join-Path $evidence 'streamline-2.14.1-headers')"
+            }
+            Invoke-Checked cmake.exe $configure
+            $targets = @('heaven_benchmark', 'heaven_asset_packer', 'heaven_benchmark_smoke',
+              'heaven_benchmark_tests', 'heaven_profiler_trace_tests',
+              'heaven_capture_camera_motion_tests',
+              'heaven_frame_generation_history_tests', 'heaven_filament_ssr_variant_tests',
+              'heaven_vulkan_pipeline_lifetime_tests', 'heaven_dlss_contract_tests',
+              'heaven_dlss_runtime_bridge_tests')
+            if ($fsr) {
+              $targets += @('heaven_frame_generation_capture_contract_tests',
+                'heaven_fsr31_pipeline_lifetime_test', 'heaven_fsr31_view_retirement_test')
+            }
+            Invoke-Checked cmake.exe (@('--build', $build, '--parallel', '2', '--target') + $targets)
+            if ($fsr) {
+              $shaderReceipt = Join-Path $build 'src/rhi/frame_generation/fsr31_shader_blobs.json'
+              $shaderMetadata = Get-Content -Raw $shaderReceipt | ConvertFrom-Json
+              if (-not $shaderMetadata.spirv_validated -or $shaderMetadata.shaders.Count -ne 102) {
+                throw 'Expected all 102 pinned shader permutations to pass SPIR-V validation.'
+              }
+              Copy-Item $shaderReceipt (Join-Path $metadata 'fsr31_shader_blobs.json')
+            }
+            # Host tests may link the Vulkan loader without creating a device.
+            # Proprietary plugins remain absent; the opt-in GPU test reports skip.
+            $env:PATH = "$(Join-Path $build 'vcpkg_installed/x64-windows-static/bin');$env:PATH"
+            $env:HEAVEN_SMOKE = '0'
+            $env:HEAVEN_DLSS_PLUGIN_DIR = $null
+            $env:HEAVEN_DLSS_PROJECT_ID = $null
+            Invoke-Checked ctest.exe @('--test-dir', $build, '--output-on-failure',
+              '--no-tests=error', '--timeout', '300', '--output-junit', (Join-Path $logs 'host-tests.xml'))
+            Invoke-Checked (Join-Path $build 'heaven_benchmark.exe') @('--help')
+            @{
+              providers = $env:FRAME_GENERATION_PROVIDERS
+              fsr3_built = $fsr
+              dlss_built = $dlss
+              host_tests = 'passed; opt-in GPU smoke remains skipped'
+              native_gpu_runtime = 'not exercised'
+              package = 'not produced; no runtime DLL redistribution'
+            } | ConvertTo-Json | Set-Content (Join-Path $metadata 'acceptance-scope.json')
+            "Optional Windows $env:FRAME_GENERATION_PROVIDERS compilation and host contracts passed. No GPU, signed DLSS runtime, display cadence or package qualification is claimed." |
+              Add-Content $env:GITHUB_STEP_SUMMARY
+          } finally { Stop-Transcript }
+      - name: Upload compile and host-test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: HeavenBench-windows-frame-generation-${{ inputs.providers || 'both' }}-evidence
+          path: |
+            build/frame-generation/windows-ci/logs/
+            build/frame-generation/windows-ci/metadata/
+            build/frame-generation/windows-msvc/CMakeCache.txt
+            build/frame-generation/windows-msvc/CMakeFiles/CMakeConfigureLog.yaml
+            build/frame-generation/windows-msvc/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

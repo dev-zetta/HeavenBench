@@ -124,6 +124,7 @@ constexpr std::array kCatalogUiOrder = {
     SettingId::Width,
     SettingId::Height,
     SettingId::Fullscreen,
+    SettingId::FrameGeneration,
     SettingId::Hdr,
     SettingId::HdrPaperWhiteNits,
     SettingId::HdrPeakNits,
@@ -240,6 +241,8 @@ constexpr std::array kCatalogUiOrder = {
         case SettingId::Height:
         case SettingId::Fullscreen:
             return "Display";
+        case SettingId::FrameGeneration:
+            return "Frame generation";
         case SettingId::Hdr:
         case SettingId::HdrPaperWhiteNits:
         case SettingId::HdrPeakNits:
@@ -483,6 +486,17 @@ const std::vector<CatalogEntry>& build_catalog() {
             [](BenchConfig& cfg, const SettingValue& v) -> SettingValue {
                 cfg.fullscreen = as_bool(v);
                 return cfg.fullscreen;
+            }});
+        c.push_back(CatalogEntry{
+            SettingId::FrameGeneration, Panel::Settings, Apply::Live,
+            Widget::Combo, "Frame generation", 0.0f, 2.0f,
+            [](const BenchConfig& cfg) -> SettingValue { return cfg.frame_generation; },
+            [](BenchConfig& cfg, const SettingValue& v) -> SettingValue {
+                if (const auto* mode = std::get_if<FrameGenerationMode>(&v)) {
+                    if (*mode == FrameGenerationMode::Off || *mode == FrameGenerationMode::Fsr3 ||
+                        *mode == FrameGenerationMode::Dlss) cfg.frame_generation = *mode;
+                }
+                return cfg.frame_generation;
             }});
         c.push_back(CatalogEntry{
             SettingId::Hdr, Panel::Settings, Apply::Reload,
@@ -1070,6 +1084,8 @@ std::optional<PerformanceImpact> catalog_performance_impact(SettingId id) noexce
             return PerformanceImpact{"GPU / VRAM: High as resolution rises", "More output pixels increase shading, screen-space effects and render-target memory. Doubling both dimensions creates four times as many pixels."};
         case SettingId::Fullscreen:
             return PerformanceImpact{"GPU: Depends on pixel resolution", "The actual drawable resolution determines the rendering workload; fullscreen alone has no fixed cost."};
+        case SettingId::FrameGeneration:
+            return PerformanceImpact{"GPU / VRAM: Provider dependent", "Interpolation adds GPU work and presentation latency. It does not accelerate simulation or real rendering. Requested benchmark tours are diagnostic and unscored."};
         case SettingId::Hdr:
             return PerformanceImpact{"GPU: Low to medium | VRAM: Medium", "HDR uses floating-point scene/UI targets and a final output conversion. Supported display output is required."};
         case SettingId::HdrPeakNits:

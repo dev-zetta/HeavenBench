@@ -73,6 +73,9 @@ class WindArrowsFeature;
 class RainFeature;
 class WetReflectionsFeature;
 class ProfileBridge;
+class FrameGenerationRuntime;
+class FrameGenerationPlatform;
+class DlssPlatform;
 #ifdef __APPLE__
 class MacOsSurface;
 #endif
@@ -178,6 +181,14 @@ public:
                                 const QualityKnobs& quality) override;
 
     void set_benchmark_measurement(bool enabled) override;
+    void request_frame_generation(FrameGenerationMode mode) override;
+    void begin_application_frame(uint64_t application_frame) override;
+    void end_application_simulation() override;
+    void native_window_message(uint32_t message) override;
+    [[nodiscard]] FrameGenerationStatus frame_generation_status() const override;
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+    [[nodiscard]] bool debug_frame_generation_out_of_date_once();
+#endif
     [[nodiscard]] std::vector<double>
     finalize_benchmark_gpu_times() override;
 
@@ -464,6 +475,14 @@ private:
     // depth pre-pass infrastructure is owned by the DepthPrePass
     // subsystem below because volfog and heat haze also consume it.
     std::unique_ptr<DepthPrePass> depth_prepass_;
+    std::unique_ptr<FrameGenerationRuntime> frame_generation_;
+    void destroy_frame_generation();
+#if HEAVEN_HAS_FSR3
+    std::unique_ptr<FrameGenerationPlatform> frame_generation_platform_;
+#endif
+#if HEAVEN_HAS_DLSS
+    std::unique_ptr<DlssPlatform> dlss_platform_;
+#endif
 
     // ── Depth proxy renderables (scene-depth source) ────────────
     // The DepthPrePass renders a parallel set of lightweight "proxy"

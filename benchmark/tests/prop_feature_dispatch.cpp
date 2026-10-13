@@ -21,9 +21,11 @@
  *   smoke tests; here we assert the controller's dispatch contract — it only
  *   ever calls set_feature_enabled with the EXACT live_feature_name(id) string,
  *   never a bogus one.
- *   Both kinds of known Live setting cancel an active run exactly once when
- *   the stored Active value changes, and never cancel it for a no-op/rejected
- *   edit. A null feature-name mapping is not an unknown configuration key.
+ *   Ordinary known Live settings cancel an active run exactly once when the
+ *   stored Active value changes. Frame generation instead keeps playback and
+ *   permanently marks the tour diagnostic (unit_frame_generation covers that
+ *   latch). No-op/rejected edits never cancel. A null feature-name mapping is
+ *   not an unknown configuration key.
  *
  *   The controller (rhi/overlay/config_controller.{h,cpp}) drives all renderer
  *   side effects through the abstract heaven::RendererEffects interface, so the
@@ -157,7 +159,8 @@ bool run_p6_feature_dispatch_property() {
                 // No reload was triggered by a Live edit.
                 RC_ASSERT(fx.rebuild_count == 0);
                 RC_ASSERT(fx.cancel_count ==
-                          (entry.read(active) != active_before ? 1 : 0));
+                          (id != SettingId::FrameGeneration &&
+                           entry.read(active) != active_before ? 1 : 0));
             }
 
             // ── PART B: a live NON-feature setting routes through apply_live and
@@ -202,7 +205,8 @@ bool run_p6_feature_dispatch_property() {
                 // Still no reload for a Live edit.
                 RC_ASSERT(fx.rebuild_count == 0);
                 RC_ASSERT(fx.cancel_count ==
-                          (entry.read(active) != active_before ? 1 : 0));
+                          (id != SettingId::FrameGeneration &&
+                           entry.read(active) != active_before ? 1 : 0));
             }
         });
 }

@@ -1,0 +1,65 @@
+// Temporal inputs for the exact persistent grass/flower geometry and wind.
+material {
+    name : heaven_motion_grass,
+    requires : [ uv0, color ],
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    flipUV : false,
+    depthWrite : true,
+    depthCulling : true,
+    parameters : [
+        { type : sampler2d, name : grassDiffuse },
+        { type : float4, name : grassDiffuseUv },
+        { type : float4, name : grassWindTuning },
+        { type : float, name : time },
+        { type : float, name : previousTime },
+        { type : float3x3, name : currentWindToUser },
+        { type : float3x3, name : previousWindToUser },
+        { type : float4x4, name : previousModel },
+        { type : float4x4, name : previousClipFromUserWorld },
+        { type : float4x4, name : currentClipFromUserWorld },
+        { type : bool, name : historyValid }
+    ],
+    variables : [ currentClip, previousClip ]
+}
+vertex {
+    float3 temporalGrassWind(float3 local, float height, float time) {
+        // Same local-position phase and world-space displacement as
+        // heaven_grass.mat, including the quadratic height and absolute droop.
+        float strength = height * height;
+        float phase = local.x * 0.5 + local.y * 0.3;
+        float wind = sin(time * materialParams.grassWindTuning.x + phase)
+                * materialParams.grassWindTuning.z
+            + sin(time * materialParams.grassWindTuning.y + phase * 2.0)
+                * materialParams.grassWindTuning.w;
+        return float3(wind * strength * 0.8, wind * strength * 0.3,
+                      -strength * abs(wind) * 0.2);
+    }
+    void materialVertex(inout MaterialVertexInputs material) {
+        float3 local = getPosition().xyz;
+        float4x4 userFromWorld = getUserWorldFromWorldMatrix();
+        float3 currentWind = materialParams.currentWindToUser *
+                temporalGrassWind(local, material.uv0.y, materialParams.time);
+        material.worldPosition.xyz += inverse(float3x3(userFromWorld)) * currentWind;
+        float4 currentWorld = userFromWorld * material.worldPosition;
+        float4 previousWorld = materialParams.previousModel * getPosition();
+        previousWorld.xyz += materialParams.previousWindToUser * temporalGrassWind(local, material.uv0.y,
+                materialParams.previousTime);
+        material.currentClip = materialParams.currentClipFromUserWorld * currentWorld;
+        material.previousClip = materialParams.previousClipFromUserWorld * previousWorld;
+    }
+}
+fragment {
+    #include "includes/temporal_motion_fragment.glsl"
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float2 uv = getUV0() * materialParams.grassDiffuseUv.xy + materialParams.grassDiffuseUv.zw;
+        float alpha = texture(materialParams_grassDiffuse, uv).a * getColor().a;
+        // Match Filament's masked cutoff at single-sample resolution while
+        // retaining the independent history-valid bit in the output alpha.
+        float coverageAlpha = (alpha - 0.15) / max(fwidth(alpha), 1e-3) + 0.5;
+        if (coverageAlpha <= 0.15) discard;
+        material.baseColor = temporalMotionFragment();
+    }
+}

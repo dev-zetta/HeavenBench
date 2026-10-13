@@ -72,7 +72,9 @@ bool BenchmarkSystem::request_start() {
     scene_index_ = 0;
     result_      = RunResult{};
     has_result_  = false;
-    diagnostic_  = microprofile_recording_;
+    diagnostic_microprofile_ = microprofile_recording_;
+    diagnostic_frame_generation_ = frame_generation_requested_;
+    diagnostic_  = diagnostic_microprofile_ || diagnostic_frame_generation_;
     state_       = BenchmarkState::Running;
     return true;
 }
@@ -172,6 +174,13 @@ void BenchmarkSystem::enter_complete() {
         frame_intervals_, segment_frame_intervals_,
         cpu_metrics_, gpu_times_ms_);
     result_.diagnostic = diagnostic_;
+    result_.frame_generation_requested = diagnostic_frame_generation_;
+    result_.frame_generation = frame_generation_status_;
+    if (diagnostic_microprofile_) result_.diagnostic_reason = "microprofiler recording";
+    if (diagnostic_frame_generation_) {
+        if (!result_.diagnostic_reason.empty()) result_.diagnostic_reason += "; ";
+        result_.diagnostic_reason += "frame generation requested";
+    }
     if (diagnostic_) result_.performance.scores = {};
     result_.average_fps = result_.performance.metrics.average_fps;
     result_.min_fps     = stats_.min_fps();
@@ -209,8 +218,9 @@ void BenchmarkSystem::enter_complete() {
     // supplied).
     if (diagnostic_) {
         std::fprintf(stderr,
-                     "[benchmark] Diagnostic run complete: unscored (microprofiler recording) | "
+                     "[benchmark] Diagnostic run complete: unscored (%s) | "
                      "average %.2f FPS | frames %llu | time %.3f s\n",
+                     result_.diagnostic_reason.c_str(),
                      result_.average_fps,
                      static_cast<unsigned long long>(result_.frames), result_.total_time);
     } else std::fprintf(stderr,

@@ -9,6 +9,30 @@ function Assert-That {
     if (-not $Condition) { throw $Message }
 }
 
+function Assert-HostCTestGate {
+    param([string[]]$Arguments)
+    foreach ($option in @('-R', '--tests-regex')) {
+        Assert-That ($Arguments -notcontains $option) 'Host test gate has a restrictive include regex.'
+    }
+    Assert-That (@($Arguments | Where-Object { $_ -eq '-E' }).Count -eq 1) 'Host test gate must contain one exclusion.'
+    Assert-That ($Arguments -notcontains '--exclude-regex') 'Host test gate contains a second exclusion spelling.'
+    $pattern = $Arguments[[Array]::IndexOf($Arguments, '-E') + 1]
+    Assert-That ($pattern -ceq '^heaven_benchmark_smoke$') 'Host test gate must exclude only graphical smoke.'
+    foreach ($hostTest in @('heaven_benchmark_tests', 'heaven_profiler_trace_tests',
+                           'heaven_microprofile_analysis', 'heaven_runtime_paths_cli',
+                           'heaven_asset_packer_cli', 'heaven_gtao_bent_normal_contract',
+                           'heaven_specular_occluded_moment_contract', 'heaven_surface_color_contract',
+                           'heaven_capture_camera_motion_tests', 'heaven_frame_generation_history_tests',
+                           'heaven_filament_ssr_variant_tests', 'heaven_vulkan_pipeline_lifetime_tests',
+                           'heaven_dlss_contract_tests', 'heaven_dlss_runtime_bridge_tests',
+                           'heaven_fsr31_source_contract', 'heaven_temporal_input_contract',
+                           'heaven_filament_depth_program_lifetime', 'heaven_filament_froxel_stream_lifetime',
+                           'heaven_future_cpu_contract', 'heaven_benchmark_smoke_cpu_contract')) {
+        Assert-That ($hostTest -notmatch $pattern) "Host test gate omits $hostTest."
+    }
+    Assert-That ('heaven_benchmark_smoke' -match $pattern) 'Host test gate absorbs the separately controlled graphical smoke gate.'
+}
+
 $nativeShell = Join-Path $PSHOME $(if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' })
 Invoke-Checked $nativeShell @('-NoLogo', '-NoProfile', '-Command', 'exit 7') -ExpectedExitCode 7
 $failed = $false
@@ -44,8 +68,28 @@ function Invoke-Checked {
         [IO.Path]::GetFileName($Arguments[0]) -eq 'dependency_bootstrap_test.py') {
         throw 'fixture native script preflight failure'
     }
-    if ($name -eq 'ctest.exe' -and $global:HeavenPipelineFailure -eq 'tests') {
-        throw 'fixture host test failure'
+    if ($name -eq 'ctest.exe' -and
+        $global:HeavenPipelineFailure -in @('tests', 'future-tests', 'smoke-tests') -and
+        [IO.Path]::GetFileName($Arguments[[Array]::IndexOf($Arguments, '--test-dir') + 1]) -ne 'tools') {
+        $failingTest = switch ($global:HeavenPipelineFailure) {
+            'tests' { 'heaven_profiler_trace_tests' }
+            'future-tests' { 'heaven_future_cpu_contract' }
+            'smoke-tests' { 'heaven_benchmark_smoke' }
+        }
+        $selected = $true
+        foreach ($option in @('-R', '--tests-regex')) {
+            if ($Arguments -contains $option -and
+                $failingTest -notmatch $Arguments[[Array]::IndexOf($Arguments, $option) + 1]) {
+                $selected = $false
+            }
+        }
+        foreach ($option in @('-E', '--exclude-regex')) {
+            if ($Arguments -contains $option -and
+                $failingTest -match $Arguments[[Array]::IndexOf($Arguments, $option) + 1]) {
+                $selected = $false
+            }
+        }
+        if ($selected) { throw "fixture selected test failure: $failingTest" }
     }
     if ($name -eq 'heaven_asset_packer.exe' -and $Arguments -contains '--pack-assets') {
         if ($ExpectedExitCode -ne 2) { throw 'Missing-asset failure must explicitly require exit 2.' }
@@ -97,7 +141,8 @@ Remove-Item -LiteralPath $stage -Recurse -Force
         $callerEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     }
     $initialLocation = (Get-Location).Path
-    foreach ($case in @('success', 'defaults', 'preflight', 'build', 'tests', 'packer-output', 'launcher-data')) {
+    foreach ($case in @('success', 'defaults', 'preflight', 'build', 'tests', 'future-tests',
+                        'smoke-tests', 'packer-output', 'launcher-data')) {
         $failure = if ($case -in @('success', 'defaults')) { '' } else { $case }
         $global:HeavenPipelineFailure = $failure
         $global:HeavenPipelineEvents = [Collections.Generic.List[object]]::new()
@@ -134,27 +179,37 @@ Remove-Item -LiteralPath $stage -Recurse -Force
         Assert-That ([Array]::IndexOf($events, $pythonEvents[-1]) -lt [Array]::IndexOf($events, $buildEvent[0])) 'Script preflights ran after native compilation.'
         Assert-That ($buildEvent[0].directory -eq $build -and $buildEvent[0].jobs -eq $jobs -and $buildEvent[0].configuration -eq 'Release') 'Build arguments were lost.'
         $packages = @($events | Where-Object { $_.name -eq 'package' })
-        if ($failure -in @('build', 'tests')) {
+        if ($failure -eq 'build') {
             Assert-That ($packages.Count -eq 0) 'A failed build/test reached packaging.'
             continue
         }
-        Assert-That ($packages.Count -eq 1 -and $packages[0].output -eq $output -and $packages[0].directory -eq $build) 'Package paths were lost.'
         $tests = @($events | Where-Object { $_.name -eq 'ctest.exe' })
-        Assert-That ($tests.Count -eq 3) 'Host, extraction and smoke gate tests must all run.'
-        Assert-That ($tests[0].arguments[1] -eq $build -and $tests[1].arguments[1] -eq (Join-Path $build 'tools')) 'Tests used another build directory.'
-        $hostPattern = $tests[0].arguments[[Array]::IndexOf($tests[0].arguments, '-R') + 1]
-        foreach ($hostTest in @('heaven_benchmark_tests', 'heaven_profiler_trace_tests',
-                               'heaven_microprofile_analysis', 'heaven_runtime_paths_cli',
-                               'heaven_asset_packer_cli', 'heaven_gtao_bent_normal_contract',
-                               'heaven_specular_occluded_moment_contract', 'heaven_surface_color_contract')) {
-            Assert-That ($hostTest -match $hostPattern) "Host test gate omits $hostTest."
+        Assert-That ($tests[0].arguments[1] -eq $build) 'Host tests used another build directory.'
+        Assert-HostCTestGate $tests[0].arguments
+        if ($failure -in @('tests', 'future-tests')) {
+            Assert-That ($packages.Count -eq 0) 'A failed host test reached packaging.'
+            Assert-That ($tests.Count -eq 1) 'Host failure did not stop before extraction and graphical smoke gates.'
+            continue
         }
-        Assert-That ('heaven_benchmark_smoke' -notmatch $hostPattern) 'Host test gate absorbs the separately controlled graphical smoke gate.'
+        Assert-That ($tests.Count -eq 3) 'Host, extraction and smoke gate tests must all run.'
+        Assert-That ($tests[1].arguments[1] -eq (Join-Path $build 'tools') -and
+                     $tests[2].arguments[1] -eq $build) 'Extraction or graphical smoke tests used another build directory.'
+        Assert-That (@($tests[2].arguments | Where-Object { $_ -eq '-R' }).Count -eq 1) 'Graphical smoke needs one dedicated include gate.'
+        $smokePattern = $tests[2].arguments[[Array]::IndexOf($tests[2].arguments, '-R') + 1]
+        Assert-That ($smokePattern -ceq '^heaven_benchmark_smoke$') 'Graphical smoke gate includes other test suites.'
+        foreach ($option in @('--tests-regex', '-E', '--exclude-regex')) {
+            Assert-That ($tests[2].arguments -notcontains $option) 'Graphical smoke contains an additional filter.'
+        }
         Assert-That ($tests[2].smoke -eq '0') 'Smoke gate inherited GPU opt-in.'
         foreach ($event in $tests) {
             Assert-That ($event.arguments -contains '--no-tests=error') 'Missing test discovery would silently pass.'
             Assert-That (-not $event.resource) 'Native tests retained a source-resource override.'
         }
+        if ($failure -eq 'smoke-tests') {
+            Assert-That ($packages.Count -eq 0) 'A failed graphical smoke gate reached packaging.'
+            continue
+        }
+        Assert-That ($packages.Count -eq 1 -and $packages[0].output -eq $output -and $packages[0].directory -eq $build) 'Package paths were lost.'
         $relocated = @($events | Where-Object { $_.name -eq 'heaven_benchmark.exe' })[0]
         Assert-That ($relocated.path -eq "$env:SystemRoot/System32;$env:SystemRoot") 'Relocation check retained toolchain DLL search paths.'
         Assert-That (-not $relocated.resource) 'Relocation check retained source-resource override.'
@@ -166,7 +221,14 @@ Remove-Item -LiteralPath $stage -Recurse -Force
             Assert-That (@($events | Where-Object { $_.name -eq 'Launch-HeavenBench.cmd' }).Count -eq 4) 'Launcher help and all data-precedence checks did not run.'
         }
     }
-    Write-Host 'Windows pipeline fixtures passed: native exit handling and seven orchestration cases.'
+    $legacyRejected = $false
+    try { Assert-HostCTestGate @('--test-dir', 'fixture', '-R', '^heaven_(benchmark_tests|profiler_trace_tests)$') }
+    catch {
+        Assert-That ($_.Exception.Message -like '*restrictive include regex*') 'Legacy gate failed for an unrelated reason.'
+        $legacyRejected = $true
+    }
+    Assert-That $legacyRejected 'Legacy restrictive host whitelist passed the field oracle.'
+    Write-Host 'Windows pipeline fixtures passed: native exit handling, nine orchestration cases and restrictive-whitelist negative control.'
 } finally {
     foreach ($entry in $originalEnvironment.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')

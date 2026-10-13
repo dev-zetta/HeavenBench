@@ -47,7 +47,7 @@ if [[ "$CPU_ARCH" == portable ]]; then
     fi
     RC_PARAMS='seed=20260930' ctest --test-dir "$HEAVEN_BUILD_ROOT/renderer" \
         --output-on-failure --timeout 300 \
-        --tests-regex '^heaven_(benchmark_tests|profiler_trace_tests|microprofile_analysis|runtime_paths_cli|asset_packer_cli|gtao_bent_normal_contract|specular_occluded_moment_contract|surface_color_contract)$'
+        --exclude-regex '^heaven_benchmark_smoke$'
     ctest --test-dir "$HEAVEN_BUILD_ROOT/renderer" --output-on-failure --timeout 30 \
         --tests-regex '^heaven_benchmark_smoke$'
 fi

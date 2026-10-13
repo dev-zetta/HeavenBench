@@ -106,6 +106,53 @@ class LicenseCollectorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate license destination"):
             COLLECTOR.collect(self.output, [f"external={external}"])
 
+    def test_explicit_streamline_notice_copies_only_exact_text_and_hash(self):
+        sdk = self.root / "SDK with spaces"
+        inputs = []
+        expected = {}
+        for label, relative in (("Streamline", "headers/license.txt"),):
+            source = sdk / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            content = f"Exact {label} framework/source notice\n".encode()
+            source.write_bytes(content)
+            inputs.append(f"{label}={source}")
+            expected[f"dependencies/{label}/{source.name}"] = content
+        (sdk / "sl.interposer.dll").write_bytes(b"must never be collected")
+        (sdk / "headers/nvngx_dlssg.dll").write_bytes(b"must never be collected")
+        (sdk / "NOTICE-unselected.txt").write_bytes(b"not an explicitly selected input")
+        COLLECTOR.collect(self.output, [], inputs)
+        manifest = json.loads((self.output / "MANIFEST.json").read_text())["files"]
+        hashes = {entry["path"]: entry["sha256"] for entry in manifest}
+        sdk_paths = {name for name in hashes if name.startswith("dependencies/")}
+        self.assertEqual(sdk_paths, set(expected))
+        self.assertFalse(any(name.endswith(".dll") for name in hashes))
+        for name, content in expected.items():
+            self.assertEqual((self.output / name).read_bytes(), content)
+            self.assertEqual(hashes[name], hashlib.sha256(content).hexdigest())
+
+    def test_disabled_sdk_collection_keeps_default_manifest_bytes(self):
+        COLLECTOR.collect(self.output, [])
+        explicit_empty = self.root / "explicit-empty"
+        COLLECTOR.collect(explicit_empty, [], [])
+        self.assertEqual((self.output / "MANIFEST.json").read_bytes(),
+                         (explicit_empty / "MANIFEST.json").read_bytes())
+
+    def test_explicit_missing_notice_and_runtime_dll_fail(self):
+        with self.assertRaisesRegex(FileNotFoundError, "Missing required Streamline notice"):
+            COLLECTOR.collect(self.output, [], [f"Streamline={self.root / 'missing/license.txt'}"])
+        runtime = self.root / "sl.interposer.dll"
+        runtime.write_bytes(b"not a notice")
+        with self.assertRaisesRegex(ValueError, "Expected a license or notice text"):
+            COLLECTOR.collect(self.root / "runtime-output", [], [f"Streamline={runtime}"])
+
+    def test_explicit_notice_label_cannot_escape_or_collide(self):
+        source = self.write("source/LICENSE", "notice\n")
+        with self.assertRaisesRegex(ValueError, "Invalid or duplicate dependency label"):
+            COLLECTOR.collect(self.output, [], [f"../outside={source}"])
+        with self.assertRaisesRegex(ValueError, "Invalid or duplicate dependency label"):
+            COLLECTOR.collect(self.root / "duplicate-output", [],
+                              [f"Streamline={source}", f"Streamline={source}"])
+
 
 if __name__ == "__main__":
     unittest.main()

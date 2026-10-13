@@ -545,6 +545,16 @@ public:
     virtual void set_live_render_config(const FeatureToggles& /*features*/,
                                         const QualityKnobs& /*quality*/) {}
 
+    virtual void request_frame_generation(FrameGenerationMode /*mode*/) {}
+    // Optional latency-provider ticket and sleep precede input sampling. The
+    // same ticket follows simulation and submission; rejected attempts retire it.
+    virtual void begin_application_frame(uint64_t /*application_frame*/) {}
+    virtual void end_application_simulation() {}
+    virtual void native_window_message(uint32_t /*message*/) {}
+    [[nodiscard]] virtual FrameGenerationStatus frame_generation_status() const {
+        return {};
+    }
+
     // A scored benchmark must render a stable amount of GPU work. Backends use
     // this signal to disable adaptive resolution for the measurement interval,
     // then restore the configured runtime behavior when the interval ends.

@@ -25,7 +25,7 @@ heaven::ParseResult parse(std::initializer_list<std::string_view> arguments) {
 
 bool unit_visual_capture_cli_valid() {
     const auto defaults = parse({"heaven"});
-    if (defaults.capture.invalid || defaults.capture.camera_pose || defaults.capture.tour_time ||
+    if (defaults.capture.invalid || defaults.capture.camera_pose || defaults.capture.camera_to || defaults.capture.tour_time ||
         defaults.capture.tour_motion ||
         defaults.capture.output || defaults.capture.fov != 60.0f || defaults.capture.frames != 90) return false;
 
@@ -94,7 +94,7 @@ bool unit_visual_capture_cli_invalid() {
             return false;
         }
     }
-    constexpr std::array flags{"--camera-pose", "--camera-tour-time", "--camera-fov", "--capture", "--capture-frames", "--capture-count", "--capture-fps", "--profile", "--profile-seconds"};
+    constexpr std::array flags{"--camera-pose", "--capture-camera-to", "--camera-tour-time", "--camera-fov", "--capture", "--capture-frames", "--capture-count", "--capture-fps", "--profile", "--profile-seconds"};
     const std::string help = heaven::generate_help();
     for (const std::string_view flag : flags) {
         if (!help.contains(flag)) return false;
@@ -165,6 +165,40 @@ bool unit_visual_capture_tour_motion() {
         heaven::generate_help().contains("--capture-tour-motion");
 }
 
+bool unit_visual_capture_camera_to() {
+    const auto valid = parse({"heaven", "--capture", "motion.ppm", "--camera-pose", "1,2,3,359,-89",
+        "--capture-camera-to", "4,5,6,1,89", "--capture-frames", "89", "--capture-count", "32"});
+    if (valid.capture.invalid || !valid.diagnostics.empty() || !valid.capture.camera_to ||
+        *valid.capture.camera_to != std::array<float, 5>{4,5,6,1,89} || !valid.seen_keys.empty() ||
+        !valid.config_operations.empty()) return false;
+    const auto tail = parse({"heaven", "--capture", "motion.ppm", "--camera-pose", "0,0,0,0,0",
+        "--capture-camera-to", "1,1,1,1,1", "--capture-frames", "1", "--capture-count", "2"});
+    if (tail.capture.invalid) return false;
+    for (const auto bad : {"0,0,0,0,90", "0,0,0,0,-90", "nan,0,0,0,0", "0,inf,0,0,0",
+            "0,0,1e99,0,0", "0,0,0,0", "0,0,0,0,0,0", "0,0,0,0,"}) {
+        const auto result = parse({"heaven", "--capture", "motion.ppm", "--camera-pose", "0,0,0,0,0",
+            "--capture-camera-to", bad});
+        if (!result.capture.invalid || result.capture.camera_to) return false;
+    }
+    for (int mask = 0; mask < 16; ++mask) {
+        const bool output = (mask & 1) != 0, start = (mask & 2) != 0;
+        const bool tour = (mask & 4) != 0, realtime = (mask & 8) != 0;
+        std::vector<std::string_view> arguments{"heaven", "--capture-camera-to", "1,1,1,1,1"};
+        if (output) arguments.insert(arguments.end(), {"--capture", "motion.ppm"});
+        if (start) arguments.insert(arguments.end(), {"--camera-pose", "0,0,0,0,0"});
+        if (tour) arguments.insert(arguments.end(), {"--camera-tour-time", "0"});
+        if (realtime) arguments.emplace_back("--capture-realtime");
+        const auto result = heaven::parse_cli(arguments);
+        if (result.capture.invalid != (!output || !start || tour || realtime) || !result.seen_keys.empty()) return false;
+    }
+    const auto short_run = parse({"heaven", "--capture", "motion.ppm", "--camera-pose", "0,0,0,0,0",
+        "--capture-camera-to", "1,1,1,1,1", "--capture-frames", "1"});
+    const auto sticky = parse({"heaven", "--capture", "motion.ppm", "--camera-pose", "0,0,0,0,0",
+        "--capture-camera-to", "nan,0,0,0,0", "--capture-camera-to", "1,1,1,1,1"});
+    return short_run.capture.invalid && sticky.capture.invalid && sticky.capture.camera_to &&
+        heaven::generate_help().contains("--capture-camera-to");
+}
+
 bool unit_postprocess_cli_toggles() {
     struct Toggle {
         std::string_view enable;
@@ -224,6 +258,7 @@ const heaven::testing::Register register_capture_valid(unit_visual_capture_cli_v
 const heaven::testing::Register register_capture_invalid(unit_visual_capture_cli_invalid);
 const heaven::testing::Register register_capture_fov(unit_visual_capture_explicit_fov);
 const heaven::testing::Register register_capture_motion(unit_visual_capture_tour_motion);
+const heaven::testing::Register register_capture_camera_to(unit_visual_capture_camera_to);
 const heaven::testing::Register register_postprocess_toggles(unit_postprocess_cli_toggles);
 
 } // namespace

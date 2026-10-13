@@ -55,6 +55,7 @@ enum class SettingId {
     Width,
     Height,
     Fullscreen,
+    FrameGeneration,
     Hdr,
     HdrPeakNits,
     HdrPaperWhiteNits,
@@ -126,7 +127,7 @@ enum class SettingId {
 using SettingValue =
     std::variant<bool, int, float, heaven::QualityLevel,
                  heaven::RenderPreset, heaven::MaterialWorkflow,
-                 heaven::TextureQuality, std::string>;
+                 heaven::TextureQuality, heaven::FrameGenerationMode, std::string>;
 
 // A single committed change surfaced by OverlayUI this frame:
 // exactly which setting changed and the new value the user committed.
@@ -180,6 +181,7 @@ struct ConfigUiState {
     uint64_t texture_original_gpu_bytes = 0;
     uint64_t texture_2k_gpu_bytes = 0;
     uint64_t texture_4k_gpu_bytes = 0;
+    FrameGenerationStatus frame_generation;
 };
 
 // Append exactly one ConfigurationEdit carrying `id` and `value` to `intents`.

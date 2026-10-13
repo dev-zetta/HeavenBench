@@ -1,0 +1,11 @@
+#version 450
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0,binding=0,rgba8) uniform image2D generated;
+layout(set=0,binding=1) uniform sampler2D ui;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p,imageSize(generated)))) return;
+    vec4 scene = imageLoad(generated,p);
+    vec4 hud = texelFetch(ui,p,0);
+    imageStore(generated,p,vec4(hud.rgb+scene.rgb*(1.0-hud.a),1.0));
+}

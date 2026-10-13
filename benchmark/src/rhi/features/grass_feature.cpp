@@ -9,6 +9,7 @@
  * regeneration.
  */
 #include "rhi/features/grass_feature.h"
+#include "rhi/frame_generation/temporal_grass.h"
 #include "rhi/render_test_scene_assets.h"
 #include "rhi/filament_bounds.h"
 #include "rhi/filament_util.h"
@@ -129,6 +130,7 @@ void GrassFeature::generate(RenderContext& ctx, const FrameContext& frame) {
             filament::TextureSampler::WrapMode::REPEAT);
 
         mi_->setParameter("grassDiffuse",   diffuse_tex,   diffuse_sampler);
+        diffuse_texture_ = diffuse_tex;
         mi_->setParameter("grassVariation", variation_tex, variation_sampler);
 
         // Tuned values: variation noise tiles roughly every 20m
@@ -398,6 +400,18 @@ void GrassFeature::update(RenderContext& ctx, const FrameContext& frame) {
     }
 }
 
+void GrassFeature::append_temporal_patches(std::vector<TemporalGrassPatch>& output) const {
+    if (!mi_) return;
+    const auto uv = mi_->getParameter<filament::math::float4>("grassDiffuseUv");
+    const auto wind = mi_->getParameter<filament::math::float4>("grassWindTuning");
+    for (const auto& patch : patches_) {
+        output.push_back({patch.entity, patch.vb, patch.ib, diffuse_texture_, patch.instance_index,
+            patch.index_offset, patch.vertex_count, patch.bounds.box(),
+            {uv.x, uv.y, uv.z, uv.w}, {wind.x, wind.y, wind.z, wind.w},
+            patch.bounds.local.has_value(), enabled_ && patch.lod_visible});
+    }
+}
+
 void GrassFeature::destroy(RenderContext& ctx) {
     auto* engine_ = ctx.engine;
     // Depth proxies first (they live in the depth pre-pass scene, which is torn
@@ -417,6 +431,7 @@ void GrassFeature::destroy(RenderContext& ctx) {
     }
     geometries_.clear();
     if (mi_) { engine_->destroy(mi_); mi_ = nullptr; }
+    diffuse_texture_ = nullptr;
     if (material_) { engine_->destroy(material_); material_ = nullptr; }
 }
 

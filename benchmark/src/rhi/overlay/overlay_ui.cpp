@@ -162,7 +162,8 @@ void draw_metric_table(const char* id, const Rows& rows) {
 
 } // namespace
 
-void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info) {
+void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info,
+                                   const FrameGenerationStatus& frame_generation) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     if (!viewport) return;
 
@@ -213,7 +214,7 @@ void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info) {
             const double cpu_work_ms = info.camera_ms + info.scene_sync_ms +
                 info.feature_ms + info.render_submit_ms;
             const std::array performance_rows{
-                std::pair{"FPS", std::format("{:.1f}", info.fps)},
+                std::pair{frame_generation.requested==FrameGenerationMode::Off?"FPS":"Real FPS", std::format("{:.1f}", info.fps)},
                 std::pair{"Frame time", std::format("{:.2f} ms", info.frame_time_ms)},
                 std::pair{"1% low", std::format("{:.1f} FPS", info.one_percent_low_fps)},
                 std::pair{"GPU frame", optional_metric(info.gpu_frame_ms, "ms", 2)},
@@ -224,6 +225,32 @@ void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info) {
                 std::pair{"Submit", std::format("{:.2f} ms", info.render_submit_ms)},
             };
             draw_metric_table("##performance", performance_rows);
+
+            ImGui::SeparatorText("Frame generation");
+            const auto& fg = frame_generation;
+            const auto& counts = fg.counters;
+            const std::array generation_rows{
+                std::pair{"Requested", std::string(frame_generation_mode_id(fg.requested))},
+                std::pair{"Effective", std::string(frame_generation_mode_id(fg.effective))},
+                std::pair{"Real rendered", grouped_count(counts.real_frames)},
+                std::pair{"Generated", counts.generated_frames_available
+                    ? grouped_count(counts.generated_frames) : std::string{"Unavailable"}},
+                std::pair{"Real submitted", counts.presentation_submissions_available
+                    ? grouped_count(counts.real_presented_frames) : std::string{"Unavailable"}},
+                std::pair{"Gen. submitted", counts.presentation_submissions_available
+                    ? grouped_count(counts.generated_presented_frames) : std::string{"Unavailable"}},
+                std::pair{"SDK submitted", fg.sdk_presented_frames
+                    ? grouped_count(*fg.sdk_presented_frames) : std::string{"Unavailable"}},
+                std::pair{"Display confirmed", counts.presentation_feedback_available
+                    ? grouped_count(counts.confirmed_displayed_frames) : std::string{"Unavailable"}},
+            };
+            draw_metric_table("##frame_generation", generation_rows);
+            ImGui::TextWrapped("%s", fg.reason.c_str());
+            ImGui::TextDisabled("Counters: current frame-generation runtime; reload resets them");
+            if (fg.sdk_presented_frames)
+                ImGui::TextWrapped("SDK submissions combine real and generated images since provider initialization.");
+            if (!counts.presentation_feedback_available)
+                ImGui::TextWrapped("Display feedback unavailable; native presentation submissions are not displayed frames.");
 
             ImGui::SeparatorText("GPU");
             const std::string driver = info.gpu_driver.empty()
@@ -667,6 +694,13 @@ void render_control(const CatalogEntry& entry,
                     emit_edit(intents, entry.id,
                               SettingValue{kWorkflows[idx]});
                 }
+            } else if (std::holds_alternative<FrameGenerationMode>(cur)) {
+                constexpr std::array kFrameGenerationItems = {"Off", "FSR 3", "DLSS"};
+                int idx = std::clamp(static_cast<int>(std::get<FrameGenerationMode>(cur)), 0, 2);
+                if (ImGui::Combo(ui_label.c_str(), &idx, kFrameGenerationItems.data(),
+                                 static_cast<int>(kFrameGenerationItems.size()))) {
+                    emit_edit(intents, entry.id, SettingValue{static_cast<FrameGenerationMode>(idx)});
+                }
             } else if (std::holds_alternative<TextureQuality>(cur)) {
                 constexpr std::array kTextureItems = {
                     "Original (authored)", "High 2K", "Ultra 4K"};
@@ -806,6 +840,30 @@ void render_panel_body(Panel                panel,
 #endif
         if (e.id == SettingId::TessEnabled) render_tessellation_level(working, intents);
         render_control(e, working, intents);
+        if (e.id == SettingId::FrameGeneration) {
+            const auto& fg = ui_state.frame_generation;
+            ImGui::Text("Effective: %s", std::string(frame_generation_mode_id(fg.effective)).c_str());
+            ImGui::TextWrapped("%s", fg.reason.c_str());
+            ImGui::TextWrapped("Requesting frame generation during a tour makes the complete tour diagnostic and unscored.");
+            ImGui::Text("Real renders: %llu", static_cast<unsigned long long>(fg.counters.real_frames));
+            if (fg.counters.generated_frames_available)
+                ImGui::Text("Generated frames: %llu", static_cast<unsigned long long>(fg.counters.generated_frames));
+            else ImGui::TextDisabled("Generated frame count: unavailable");
+            if (fg.counters.presentation_submissions_available) {
+                ImGui::Text("Native presentation submissions: %llu",
+                    static_cast<unsigned long long>(fg.counters.presented_frames));
+                ImGui::Text("Real submitted: %llu | Generated submitted: %llu",
+                    static_cast<unsigned long long>(fg.counters.real_presented_frames),
+                    static_cast<unsigned long long>(fg.counters.generated_presented_frames));
+            } else ImGui::TextDisabled("Separate native submission counts: unavailable");
+            if (fg.sdk_presented_frames)
+                ImGui::Text("SDK native submissions (real + generated): %llu",
+                    static_cast<unsigned long long>(*fg.sdk_presented_frames));
+            if (fg.counters.presentation_feedback_available) {
+                ImGui::Text("Display confirmations: %llu",
+                    static_cast<unsigned long long>(fg.counters.confirmed_displayed_frames));
+            } else ImGui::TextDisabled("Displayed frame count: unavailable (no presentation feedback)");
+        }
     }
 
     if (panel == Panel::Quality) {
@@ -1192,7 +1250,9 @@ void OverlayUI::build_result_report(const BenchmarkStatus& status,
         ImGui::SeparatorText("Scores");
         if (status.result.diagnostic) {
             ImGui::TextUnformatted("Diagnostic run - unscored");
-            ImGui::TextWrapped("Microprofiler recording occurred during this tour. Frame statistics remain available.");
+            ImGui::TextWrapped("%s. Frame statistics describe accepted real renders.",
+                status.result.diagnostic_reason.empty() ? "Microprofiler recording"
+                    : status.result.diagnostic_reason.c_str());
         } else {
             ImGui::Text("Overall: %lld", round_score(perf.scores.overall));
             ImGui::Text("CPU: %lld", round_score(perf.scores.cpu));

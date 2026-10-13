@@ -341,6 +341,10 @@ set(RHI_SOURCES
     src/rhi/render_test_scene_assets.cpp
     src/rhi/backend_factory.cpp
     src/rhi/filament_backend.cpp
+    src/rhi/frame_generation/frame_generation_runtime.cpp
+    src/rhi/frame_generation/frame_generation_output.cpp
+    src/rhi/frame_generation/temporal_scene.cpp
+    src/rhi/frame_generation/temporal_grass.cpp
     src/rhi/filament_util.cpp
     src/rhi/post_process.cpp
     src/rhi/depth_prepass.cpp
@@ -397,10 +401,31 @@ if(HEAVEN_PLATFORM_MACOS)
     list(APPEND RHI_SOURCES src/rhi/macos_surface.mm)
 endif()
 
+option(HEAVEN_ENABLE_FSR3 "Experimental FSR 3.1 Vulkan frame generation" OFF)
+if(HEAVEN_ENABLE_FSR3)
+    if(NOT HEAVEN_PLATFORM_LINUX AND NOT HEAVEN_PLATFORM_WINDOWS)
+        message(FATAL_ERROR "FSR presentation is currently enabled only for Linux and Windows")
+    endif()
+    add_subdirectory(src/rhi/frame_generation)
+    list(APPEND RHI_SOURCES src/rhi/frame_generation/frame_generation_platform.cpp
+        src/rhi/frame_generation/frame_generation_capture.cpp)
+    set(fg_ui_spirv "${CMAKE_CURRENT_BINARY_DIR}/fg_ui.spv")
+    set(fg_ui_header "${CMAKE_CURRENT_BINARY_DIR}/fg_ui_spirv.h")
+    add_custom_command(OUTPUT "${fg_ui_header}"
+        COMMAND "${HEAVEN_FSR_GLSLANG}" -V --target-env vulkan1.1
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/fg_ui.comp" -o "${fg_ui_spirv}"
+        COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/embed_spirv.py"
+            "${fg_ui_spirv}" "${fg_ui_header}"
+        DEPENDS src/rhi/frame_generation/fg_ui.comp ../scripts/embed_spirv.py VERBATIM)
+    list(APPEND RHI_SOURCES "${fg_ui_header}")
+endif()
+
 # Benchmark = pure CPU logic (frame stats, scoring, scene markers, the
 # run state machine). GLOB so new logic files (stats_collector,
 # score_calculator, scene_markers, benchmark_system) added by later
 # spec tasks are picked up automatically without editing this list.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenDlss.cmake)
+
 file(GLOB BENCHMARK_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/*.cpp
 )
@@ -525,6 +550,9 @@ target_link_libraries(heaven_benchmark PRIVATE
 
 heaven_configure_owned_cpp_target(heaven_benchmark)
 heaven_apply_cpu_arch(heaven_benchmark)
+heaven_link_dlss(heaven_benchmark)
+target_compile_definitions(heaven_benchmark PRIVATE
+    HEAVEN_HAS_FSR3=$<BOOL:${HEAVEN_ENABLE_FSR3}>)
 if(NOT MSVC)
     target_compile_options(heaven_benchmark PRIVATE
         -Wno-unused-parameter
@@ -590,6 +618,9 @@ add_executable(heaven_benchmark_smoke
     ${RHI_SOURCES}
     ${BENCHMARK_SOURCES}
 )
+# Native swapchain fault injection is compiled only into this GPU test binary.
+# The ordinary benchmark and SDK-off paths contain no injection branch.
+target_compile_definitions(heaven_benchmark_smoke PRIVATE HEAVEN_FG_FAULT_INJECTION=1)
 
 target_include_directories(heaven_benchmark_smoke PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -651,6 +682,7 @@ target_link_libraries(heaven_benchmark_smoke PRIVATE
 
 heaven_configure_owned_cpp_target(heaven_benchmark_smoke)
 heaven_apply_cpu_arch(heaven_benchmark_smoke)
+heaven_link_dlss(heaven_benchmark_smoke)
 if(NOT MSVC)
     target_compile_options(heaven_benchmark_smoke PRIVATE
         -Wno-unused-parameter
@@ -664,6 +696,15 @@ endif()
 target_compile_definitions(heaven_benchmark_smoke PRIVATE
     HEAVEN_BUNDLED_ASSET_DIR="${HEAVEN_BUNDLED_ASSET_DIR}"
 )
+
+foreach(render_target IN ITEMS heaven_benchmark heaven_benchmark_smoke)
+    if(HEAVEN_ENABLE_FSR3)
+        target_include_directories(${render_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_link_libraries(${render_target} PRIVATE heaven_fsr31_provider)
+    endif()
+endforeach()
+target_compile_definitions(heaven_benchmark_smoke PRIVATE
+    HEAVEN_HAS_FSR3=$<BOOL:${HEAVEN_ENABLE_FSR3}>)
 
 if(HEAVEN_PLATFORM_LINUX)
     # BlueGL's generated assembly contains fixed function-pointer trampolines,
@@ -836,6 +877,81 @@ target_compile_definitions(heaven_benchmark_tests PRIVATE
 
 # Register with CTest so `ctest` in the build dir runs the suite.
 enable_testing()
+add_executable(heaven_capture_camera_motion_tests
+    tests/capture_camera_motion_contract_test.cpp)
+heaven_configure_owned_cpp_target(heaven_capture_camera_motion_tests)
+target_include_directories(heaven_capture_camera_motion_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(heaven_capture_camera_motion_tests PRIVATE HEAVEN_CAPTURE_CAMERA_MOTION_TEST_MAIN)
+add_test(NAME heaven_capture_camera_motion_tests COMMAND heaven_capture_camera_motion_tests)
+add_executable(heaven_frame_generation_history_tests
+    src/rhi/frame_generation/frame_generation_history_test.cpp)
+target_compile_features(heaven_frame_generation_history_tests PRIVATE cxx_std_17)
+add_test(NAME heaven_frame_generation_history_tests COMMAND heaven_frame_generation_history_tests)
+if(HEAVEN_ENABLE_FSR3)
+    add_executable(heaven_frame_generation_capture_contract_tests
+        src/rhi/frame_generation/frame_generation_capture_contract_test.cpp
+        src/rhi/frame_generation/frame_generation_capture.cpp)
+    heaven_configure_owned_cpp_target(heaven_frame_generation_capture_contract_tests)
+    target_include_directories(heaven_frame_generation_capture_contract_tests SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/third_party/vulkan-headers/include")
+    target_link_libraries(heaven_frame_generation_capture_contract_tests PRIVATE bluevk)
+    add_test(NAME heaven_frame_generation_capture_contract_tests
+        COMMAND heaven_frame_generation_capture_contract_tests
+            "${CMAKE_CURRENT_BINARY_DIR}/capture-contract-tests")
+endif()
+add_executable(heaven_filament_ssr_variant_tests
+    src/rhi/frame_generation/filament_ssr_variant_test.cpp
+    ../lib/filament/libs/filabridge/src/Variant.cpp
+    ../lib/filament/libs/filamat/src/MaterialVariants.cpp)
+target_compile_features(heaven_filament_ssr_variant_tests PRIVATE cxx_std_17)
+target_include_directories(heaven_filament_ssr_variant_tests SYSTEM PRIVATE
+    ../lib/filament/libs/filabridge/include
+    ../lib/filament/filament/include
+    ../lib/filament/filament/backend/include
+    ../lib/filament/libs/utils/include
+    ../lib/filament/libs/math/include
+    ../lib/filament/libs/filamat/include
+    ../lib/filament/libs/filamat/src
+    ../lib/filament/filament/src)
+add_test(NAME heaven_filament_ssr_variant_tests COMMAND heaven_filament_ssr_variant_tests)
+add_executable(heaven_vulkan_pipeline_lifetime_tests
+    ../lib/filament/filament/backend/test/test_VulkanPipelineLifetime.cpp)
+target_compile_features(heaven_vulkan_pipeline_lifetime_tests PRIVATE cxx_std_17)
+target_include_directories(heaven_vulkan_pipeline_lifetime_tests PRIVATE
+    ../lib/filament/filament/backend/src)
+add_test(NAME heaven_vulkan_pipeline_lifetime_tests COMMAND heaven_vulkan_pipeline_lifetime_tests)
+if(TARGET heaven_fsr31_pipeline_lifetime_test)
+    add_test(NAME heaven_fsr31_pipeline_lifetime_test COMMAND heaven_fsr31_pipeline_lifetime_test)
+endif()
+if(TARGET heaven_fsr31_view_retirement_test)
+    add_test(NAME heaven_fsr31_view_retirement_test COMMAND heaven_fsr31_view_retirement_test)
+    foreach(view_negative IN ITEMS old-double-rotation unbounded-inflight)
+        add_test(NAME heaven_fsr31_view_retirement_${view_negative}
+            COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/check_fsr31_view_negative.py"
+                --executable "$<TARGET_FILE:heaven_fsr31_view_retirement_test>" --case "${view_negative}")
+    endforeach()
+endif()
+add_executable(heaven_dlss_contract_tests
+    src/rhi/frame_generation/dlss_contract_tests.cpp)
+heaven_configure_owned_cpp_target(heaven_dlss_contract_tests)
+target_compile_definitions(heaven_dlss_contract_tests PRIVATE HEAVEN_DLSS_CONTRACT_TEST_MAIN)
+target_link_libraries(heaven_dlss_contract_tests PRIVATE heaven_dlss_provider)
+add_test(NAME heaven_dlss_contract_tests COMMAND heaven_dlss_contract_tests)
+add_executable(heaven_dlss_runtime_bridge_tests
+    src/rhi/frame_generation/dlss_runtime_bridge_tests.cpp)
+heaven_configure_owned_cpp_target(heaven_dlss_runtime_bridge_tests)
+target_compile_definitions(heaven_dlss_runtime_bridge_tests PRIVATE
+    HEAVEN_DLSS_RUNTIME_INPUT_TEST_MAIN)
+target_include_directories(heaven_dlss_runtime_bridge_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(heaven_dlss_runtime_bridge_tests SYSTEM PRIVATE
+    "${GLM_INCLUDE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/filament/backend/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/utils/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/third_party/vulkan-headers/include")
+add_test(NAME heaven_dlss_runtime_bridge_tests COMMAND heaven_dlss_runtime_bridge_tests)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenTemporalSceneTest.cmake)
 add_executable(heaven_profiler_trace_tests
     ../lib/filament/filament/backend/test/test_ProfilerTrace.cpp)
 target_include_directories(heaven_profiler_trace_tests PRIVATE
@@ -846,6 +962,9 @@ add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME heaven_fsr31_source_contract
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/verify_fsr31_source_test.py)
     add_test(NAME heaven_microprofile_analysis
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/microprofile_analyzer_test.py)
@@ -875,6 +994,18 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_filament_depth_program_lifetime
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/filament_depth_program_lifetime_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/depth-program-lifetime-test")
+        set_tests_properties(heaven_filament_depth_program_lifetime PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_filament_froxel_stream_lifetime
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/filament_froxel_stream_lifetime_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/froxel-stream-lifetime-test")
+        set_tests_properties(heaven_filament_froxel_stream_lifetime PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_surface_color_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/surface_color_contract_test.py
@@ -893,8 +1024,30 @@ endif()
 # reports a skip rather than a false rendering pass. Opted-in setup errors
 # are failures on a machine that advertises a display.
 add_test(NAME heaven_benchmark_smoke COMMAND heaven_benchmark_smoke)
+add_test(NAME heaven_temporal_input_contract
+    COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/temporal_input_contract_test.py")
 set_tests_properties(heaven_benchmark_smoke PROPERTIES
     SKIP_RETURN_CODE 77
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 endif() # desktop test executables
+
+# Keep the established host-test build entry point complete as contracts grow.
+# Dedicated native GPU fixtures remain explicit, opt-in targets.
+if(TARGET heaven_benchmark_tests)
+    set(heaven_host_contract_targets
+        heaven_profiler_trace_tests
+        heaven_capture_camera_motion_tests
+        heaven_frame_generation_history_tests
+        heaven_filament_ssr_variant_tests
+        heaven_vulkan_pipeline_lifetime_tests
+        heaven_dlss_contract_tests
+        heaven_dlss_runtime_bridge_tests)
+    if(HEAVEN_ENABLE_FSR3)
+        list(APPEND heaven_host_contract_targets
+            heaven_frame_generation_capture_contract_tests
+            heaven_fsr31_pipeline_lifetime_test
+            heaven_fsr31_view_retirement_test)
+    endif()
+    add_dependencies(heaven_benchmark_tests ${heaven_host_contract_targets})
+endif()

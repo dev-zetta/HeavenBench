@@ -2,6 +2,7 @@
 """Collect release license texts with repository/dependency provenance.
 
 Usage: collect_licenses.py --output DIR [--dependency-dir [NAME=]DIR ...]
+                          [--notice-file NAME=FILE ...]
 External dependency directories should contain installed license notices (for
 example a vcpkg triplet's share directory or a system package's doc directory).
 This scans license filenames, not source trees for arbitrary copyright claims.
@@ -41,7 +42,7 @@ def leading_comment(path):
     raise ValueError(f"Expected copyright notice in {path}")
 
 
-def collect(output, dependency_dirs):
+def collect(output, dependency_dirs, notice_files=()):
     output.mkdir(parents=True, exist_ok=True)
     inventory = []
     destinations = set()
@@ -107,6 +108,19 @@ def collect(output, dependency_dirs):
             raise ValueError(f"No license texts found in {directory}")
         for source in files:
             copy(source, Path("dependencies") / label / source.relative_to(directory))
+    # Optional SDKs can require just one reviewed framework/source notice.
+    # Do not recursively collect their source or proprietary runtime folders.
+    for argument in notice_files:
+        label, separator, location = argument.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label) or label in labels:
+            raise ValueError(f"Invalid or duplicate dependency label: {label}")
+        labels.add(label)
+        source = Path(location)
+        if not source.is_file() or source.is_symlink():
+            raise FileNotFoundError(f"Missing required {label} notice file: {source}")
+        if not LICENSE_NAME.fullmatch(source.name) or source.suffix.lower() == ".dll":
+            raise ValueError(f"Expected a license or notice text file for {label}: {source}")
+        copy(source, Path("dependencies") / label / source.name)
     (output / "MANIFEST.json").write_text(
         json.dumps({"files": sorted(inventory, key=lambda entry: entry["path"])}, indent=2) + "\n",
         encoding="utf-8")
@@ -117,9 +131,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dependency-dir", action="append", default=[])
+    parser.add_argument("--notice-file", action="append", default=[])
     args = parser.parse_args()
     try:
-        print(f"Collected {collect(args.output, args.dependency_dir)} license and notice files.")
+        print(f"Collected {collect(args.output, args.dependency_dir, args.notice_file)} license and notice files.")
     except (OSError, ValueError) as error:
         parser.exit(1, f"error: {error}\n")
 
