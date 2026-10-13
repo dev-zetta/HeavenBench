@@ -23,8 +23,11 @@ add_library(heaven_dlss_provider STATIC
     src/rhi/frame_generation/dlss_runtime_loader.cpp)
 target_include_directories(heaven_dlss_provider PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation")
-target_include_directories(heaven_dlss_provider SYSTEM PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/third_party/vulkan-headers/include")
+# The public adapter uses Vulkan types even with the SDK disabled. Propagate
+# the desktop header-only dependency; Android uses its existing NDK sysroot.
+if(HEAVEN_VULKAN_LINK)
+    target_link_libraries(heaven_dlss_provider PUBLIC ${HEAVEN_VULKAN_LINK})
+endif()
 target_compile_definitions(heaven_dlss_provider PRIVATE
     HEAVEN_HAS_STREAMLINE=$<BOOL:${HEAVEN_ENABLE_DLSS}>)
 set_target_properties(heaven_dlss_provider PROPERTIES POSITION_INDEPENDENT_CODE ON)

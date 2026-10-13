@@ -892,9 +892,8 @@ if(HEAVEN_ENABLE_FSR3)
         src/rhi/frame_generation/frame_generation_capture_contract_test.cpp
         src/rhi/frame_generation/frame_generation_capture.cpp)
     heaven_configure_owned_cpp_target(heaven_frame_generation_capture_contract_tests)
-    target_include_directories(heaven_frame_generation_capture_contract_tests SYSTEM PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/third_party/vulkan-headers/include")
-    target_link_libraries(heaven_frame_generation_capture_contract_tests PRIVATE bluevk)
+    target_link_libraries(heaven_frame_generation_capture_contract_tests PRIVATE
+        bluevk ${HEAVEN_VULKAN_LINK})
     add_test(NAME heaven_frame_generation_capture_contract_tests
         COMMAND heaven_frame_generation_capture_contract_tests
             "${CMAKE_CURRENT_BINARY_DIR}/capture-contract-tests")
@@ -948,8 +947,8 @@ target_include_directories(heaven_dlss_runtime_bridge_tests SYSTEM PRIVATE
     "${GLM_INCLUDE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/filament/backend/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/utils/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/third_party/vulkan-headers/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/utils/include")
+target_link_libraries(heaven_dlss_runtime_bridge_tests PRIVATE ${HEAVEN_VULKAN_LINK})
 add_test(NAME heaven_dlss_runtime_bridge_tests COMMAND heaven_dlss_runtime_bridge_tests)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenTemporalSceneTest.cmake)
 add_executable(heaven_profiler_trace_tests

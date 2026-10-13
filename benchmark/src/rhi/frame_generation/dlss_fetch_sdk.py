@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicitly fetch verified Streamline headers/license; never runtime DLLs."""
+"""Fetch the verified official archive; extract only Streamline headers/license."""
 import argparse
 import hashlib
 import json
