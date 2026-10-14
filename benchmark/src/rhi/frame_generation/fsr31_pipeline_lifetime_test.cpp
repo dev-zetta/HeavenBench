@@ -86,10 +86,10 @@ unsigned exercise(unsigned failure, bool failed_pipeline_handle = false) {
     vk.vkCreatePipelineLayout = pipeline_layout; vk.vkDestroyPipelineLayout = destroy_pipeline_layout;
     vk.vkCreateShaderModule = module; vk.vkDestroyShaderModule = destroy_module;
     vk.vkCreateComputePipelines = pipeline; vk.vkDestroyPipeline = destroy_pipeline;
-    FfxInterface interface{};
-    interface.scratchBuffer = &backend;
-    interface.fpGetPermutationBlobByIndex = blob;
-    interface.fpGetDeviceCapabilities = capabilities;
+    FfxInterface sdk_interface{};
+    sdk_interface.scratchBuffer = &backend;
+    sdk_interface.fpGetPermutationBlobByIndex = blob;
+    sdk_interface.fpGetDeviceCapabilities = capabilities;
     FfxPipelineDescription description{};
     FfxSamplerDescription samples[2]{};
     for (auto& sample : samples) {
@@ -99,19 +99,19 @@ unsigned exercise(unsigned failure, bool failed_pipeline_handle = false) {
     description.samplers = samples;
     description.samplerCount = 2;
     FfxPipelineState output{};
-    const auto result = CreatePipelineVK(&interface, FFX_EFFECT_FRAMEINTERPOLATION, 0, 0, &description, 0, &output);
+    const auto result = CreatePipelineVK(&sdk_interface, FFX_EFFECT_FRAMEINTERPOLATION, 0, 0, &description, 0, &output);
     const auto calls = allocation_call;
     if (failure) {
         if (result == FFX_OK || !live.empty() || effect.nextPipelineLayout || output.pipeline || output.rootSignature)
             throw std::runtime_error("Failed allocation leaked or committed output at call " + std::to_string(failure));
         // Context destruction must safely see the now-empty pipeline record.
-        DestroyPipelineVK(&interface, &output, 0);
+        DestroyPipelineVK(&sdk_interface, &output, 0);
     } else {
         if (result != FFX_OK || live.empty() || effect.nextPipelineLayout != 1 || !output.pipeline || !output.rootSignature)
             throw std::runtime_error("Successful pipeline was not transferred to its owner");
         for (const auto& [id, kind] : live)
             if (kind == "module") throw std::runtime_error("Successful pipeline leaked temporary shader module");
-        DestroyPipelineVK(&interface, &output, 0);
+        DestroyPipelineVK(&sdk_interface, &output, 0);
     }
     if (!live.empty()) throw std::runtime_error("Retirement left live handles");
     return calls;
@@ -175,11 +175,11 @@ unsigned exercise_backend(unsigned failure) {
     auto* backend = reinterpret_cast<BackendContext_VK*>(scratch.data());
     backend->maxEffectContexts = 1;
     VkDeviceContext device{fake_handle<VkDevice>(1), physical, proc};
-    FfxInterface interface{};
-    interface.device = reinterpret_cast<FfxDevice>(&device);
-    interface.scratchBuffer = scratch.data(); interface.scratchBufferSize = scratch.size() * sizeof(Block);
+    FfxInterface sdk_interface{};
+    sdk_interface.device = reinterpret_cast<FfxDevice>(&device);
+    sdk_interface.scratchBuffer = scratch.data(); sdk_interface.scratchBufferSize = scratch.size() * sizeof(Block);
     uint32_t effect = UINT32_MAX;
-    const auto result = CreateBackendContextVK(&interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect);
+    const auto result = CreateBackendContextVK(&sdk_interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect);
     const auto calls = allocation_call;
     if (failure) {
         if (result == FFX_OK || !live.empty() || mapped || backend->refCount || backend->device ||
@@ -187,12 +187,12 @@ unsigned exercise_backend(unsigned failure) {
             throw std::runtime_error("Global setup leaked or committed at call " + std::to_string(failure));
         // A failed attempt must be reusable without inheriting stale handles.
         fail_call = 0;
-        if (CreateBackendContextVK(&interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect) != FFX_OK)
+        if (CreateBackendContextVK(&sdk_interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect) != FFX_OK)
             throw std::runtime_error("Global setup retry failed");
     } else if (result != FFX_OK || backend->refCount != 1 || !mapped || live.size() != 3 || effect != 0) {
         throw std::runtime_error("Successful global setup did not retain exactly its pool/buffer/memory");
     }
-    DestroyBackendContextVK(&interface, effect);
+    DestroyBackendContextVK(&sdk_interface, effect);
     if (!live.empty() || mapped) throw std::runtime_error("Global teardown leaked handles or mapping");
     return calls;
 }
@@ -207,12 +207,12 @@ void exercise_upload(unsigned failure) {
     auto* backend = reinterpret_cast<BackendContext_VK*>(scratch.data());
     backend->maxEffectContexts = 1;
     VkDeviceContext device{fake_handle<VkDevice>(1), physical, proc};
-    FfxInterface interface{};
-    interface.device = reinterpret_cast<FfxDevice>(&device);
-    interface.scratchBuffer = scratch.data(); interface.scratchBufferSize = scratch.size() * sizeof(Block);
-    interface.fpCreateResource = CreateResourceVK; interface.fpScheduleGpuJob = schedule;
+    FfxInterface sdk_interface{};
+    sdk_interface.device = reinterpret_cast<FfxDevice>(&device);
+    sdk_interface.scratchBuffer = scratch.data(); sdk_interface.scratchBufferSize = scratch.size() * sizeof(Block);
+    sdk_interface.fpCreateResource = CreateResourceVK; sdk_interface.fpScheduleGpuJob = schedule;
     uint32_t effect = UINT32_MAX;
-    if (CreateBackendContextVK(&interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect) != FFX_OK)
+    if (CreateBackendContextVK(&sdk_interface, FFX_EFFECT_SHAREDRESOURCES, nullptr, &effect) != FFX_OK)
         throw std::runtime_error("Upload fixture backend setup failed");
     allocation_call = 0; fail_call = failure;
     FfxCreateResourceDescription description{};
@@ -222,16 +222,16 @@ void exercise_upload(unsigned failure) {
     description.initialState = FFX_RESOURCE_STATE_UNORDERED_ACCESS;
     description.initData = FfxResourceInitData::FfxResourceInitValue(4, 0);
     FfxResourceInternal resource{};
-    const auto result = CreateResourceVK(&interface, &description, effect, &resource);
+    const auto result = CreateResourceVK(&sdk_interface, &description, effect, &resource);
     if (failure ? (result == FFX_OK || scheduled_jobs != 0) : (result != FFX_OK || scheduled_jobs != 1))
         throw std::runtime_error("Recursive upload failure was not propagated before copy scheduling");
     // The failed recursive allocation already has a context-owned resource
     // slot. Exercise the same copy-resource/primary-resource unwind as FI.
-    DestroyResourceVK(&interface, {resource.internalIndex + 1}, effect);
-    DestroyResourceVK(&interface, resource, effect);
+    DestroyResourceVK(&sdk_interface, {resource.internalIndex + 1}, effect);
+    DestroyResourceVK(&sdk_interface, resource, effect);
     if (live.size() != 3 || mapped_memory.size() != 1)
         throw std::runtime_error("Partial upload resources did not unwind");
-    DestroyBackendContextVK(&interface, effect);
+    DestroyBackendContextVK(&sdk_interface, effect);
     if (!live.empty() || mapped) throw std::runtime_error("Upload fixture teardown leaked");
 }
 }

@@ -10,7 +10,8 @@ param(
     [string]$VcpkgRoot = '',
     [ValidateSet('Release', 'Debug')][string]$Configuration = 'Release',
     [ValidateRange(1, 64)][int]$Jobs = 2,
-    [switch]$ConfigureOnly
+    [switch]$ConfigureOnly,
+    [switch]$HostPreflight
 )
 . "$PSScriptRoot/windows_common.ps1"
 $repoRoot = Split-Path $PSScriptRoot -Parent
@@ -75,6 +76,57 @@ Invoke-Checked cmake.exe (@('-S', "$repoRoot/benchmark", '-B', $BuildDir) + $com
     "-DVulkan_INCLUDE_DIR=$triplet/include", "-DVulkan_LIBRARY=$triplet/lib/vulkan-1.lib",
     '-DFILAMENT_WINDOWS_CI_BUILD=ON'
 ))
+if ($HostPreflight) {
+    # Use the canonical registration and native compiler before compiling the
+    # renderer. Keep this opt-in gate separate from the later complete CTest run.
+    $phase = if ($ConfigureOnly) { 'configure-only' } else { 'build' }
+    $evidence = Join-Path $BuildDir "host-preflight/$phase"
+    New-Item -ItemType Directory -Force $evidence | Out-Null
+    $testName = 'heaven_filament_depth_program_lifetime'
+    $pattern = '^' + $testName + '$'
+    try {
+        $discoveryText = Invoke-Checked ctest.exe @('--test-dir', $BuildDir,
+            '--show-only=json-v1', '--no-tests=error', '-R', $pattern) | Out-String
+        Set-Content -LiteralPath (Join-Path $evidence 'discovery.json') -Value $discoveryText
+        $discovery = $discoveryText | ConvertFrom-Json
+        $found = @($discovery.tests)
+        if ($found.Count -ne 1 -or $found[0].name -cne $testName) {
+            throw 'Early native host discovery omitted the material-lifetime fixture.'
+        }
+        $command = @($found[0].command)
+        $compilerIndex = [Array]::IndexOf($command, '--cxx')
+        $source = [IO.Path]::GetFullPath("$repoRoot/benchmark/src/rhi/frame_generation/filament_depth_program_lifetime_test.py").Replace('\', '/')
+        $sourceMatches = @($command | Where-Object {
+            $_ -like '*filament_depth_program_lifetime_test.py' -and
+            [IO.Path]::GetFullPath($_).Replace('\', '/') -eq $source
+        })
+        if ($compilerIndex -lt 0 -or $compilerIndex + 1 -ge $command.Count -or
+            [IO.Path]::GetFileName($command[$compilerIndex + 1]) -notin @('cl', 'cl.exe') -or
+            $sourceMatches.Count -ne 1) {
+            throw 'Early material-lifetime fixture did not select the canonical MSVC compiler/source.'
+        }
+        Invoke-Checked ctest.exe @('--test-dir', $BuildDir, '-R', $pattern,
+            '--output-on-failure', '--no-tests=error', '--timeout', '120',
+            '--output-junit', (Join-Path $evidence 'host-tests.xml')) 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'ctest.log')
+    } catch {
+        $_ | Out-String | Set-Content -LiteralPath (Join-Path $evidence 'failure.log')
+        throw
+    } finally {
+        $lastTest = Join-Path $BuildDir 'Testing/Temporary/LastTest.log'
+        if (Test-Path -LiteralPath $lastTest -PathType Leaf) {
+            Copy-Item -LiteralPath $lastTest -Destination (Join-Path $evidence 'LastTest.log')
+        }
+        $fixture = Join-Path $BuildDir 'depth-program-lifetime-test'
+        if (Test-Path -LiteralPath $fixture -PathType Container) {
+            $fixtureEvidence = Join-Path $evidence 'fixture'
+            New-Item -ItemType Directory -Force $fixtureEvidence | Out-Null
+            Get-ChildItem -LiteralPath $fixture -File |
+                Where-Object { $_.Extension -eq '.log' -or $_.Name -eq 'receipt.json' } |
+                Copy-Item -Destination $fixtureEvidence
+        }
+    }
+}
 if ($ConfigureOnly) {
     Write-Host "Windows configure complete: $BuildDir"
     return

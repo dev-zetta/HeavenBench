@@ -14,8 +14,17 @@ PREFIX = r'''
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <vector>
+namespace utils {
+UTILS_NORETURN
+void panic(const char* function, const char* file, int line, const char* assertion) noexcept {
+    std::fprintf(stderr, "Fixture assertion failed: %s | %s | %s:%d\n", function, assertion, file, line);
+    std::fflush(stderr);
+    std::_Exit(86);
+}
+}
 namespace filament {
 using backend::ShaderModel;
 using utils::Slice;
@@ -87,7 +96,12 @@ struct LocalProgramCache {
 
 SUFFIX = r'''
 } // namespace filament
-int main() {
+int main(int argc, char**) {
+    if (argc == 2) {
+        assert_invariant(false);
+        std::fputs("FAIL: actual Filament assertion was disabled\n", stderr);
+        return 2;
+    }
     using namespace filament;
     unsigned cases = 0;
     for (bool cache_enabled : {false, true}) {
@@ -200,10 +214,17 @@ def main():
             (work / (label + "-run.log")).write_text(run.stdout + run.stderr)
             result["run_exit"] = run.returncode
             print(run.stdout + run.stderr, end="")
+            probe = subprocess.run([str(exe), "--assertion-probe"], capture_output=True, text=True)
+            (work / (label + "-assertion-probe.log")).write_text(probe.stdout + probe.stderr)
+            result["assertion_probe_exit"] = probe.returncode
+            result["assertion_probe_valid"] = probe.returncode == 86 and \
+                "Fixture assertion failed: main | false |" in probe.stderr
+            print(probe.stdout + probe.stderr, end="")
         else:
             print(compiled.stdout + compiled.stderr, end="")
         results.append(result)
-    passed = results[0].get("run_exit") == 0 and results[1].get("run_exit") == 1
+    passed = results[0].get("run_exit") == 0 and results[1].get("run_exit") == 1 and \
+        all(result.get("assertion_probe_valid", False) for result in results)
     (work / "receipt.json").write_text(json.dumps({"passed": passed, "gpu_executed": False,
             "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "function_sha256": hashlib.sha256(function.encode()).hexdigest(),

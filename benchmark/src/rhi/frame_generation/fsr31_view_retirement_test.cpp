@@ -73,7 +73,7 @@ struct Harness {
     std::vector<BackendContext_VK::VkResourceView> views{
         std::size_t{2} * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2};
     std::vector<BackendContext_VK::Resource> resources{std::size_t{2} * FFX_MAX_RESOURCE_COUNT};
-    FfxInterface interface{};
+    FfxInterface sdk_interface{};
 
     Harness() {
         require(current == nullptr, "Fixture harnesses must not overlap");
@@ -85,7 +85,7 @@ struct Harness {
         backend.vkFunctionTable.vkCreateImageView = create_view;
         backend.vkFunctionTable.vkDestroyImageView = destroy_view;
         backend.vkFunctionTable.vkCmdPipelineBarrier = barrier;
-        interface.scratchBuffer = &backend;
+        sdk_interface.scratchBuffer = &backend;
         for (unsigned c = 0; c != 2; ++c) {
             effects[c].nextStaticResource = c * FFX_MAX_RESOURCE_COUNT + 1;
             effects[c].nextDynamicResource = getDynamicResourcesStartIndex(c);
@@ -111,12 +111,12 @@ struct Harness {
             resource.description.depth = resource.description.mipCount = 1;
             resource.description.usage = i < count - uav_count ? FFX_RESOURCE_USAGE_READ_ONLY : FFX_RESOURCE_USAGE_UAV;
             FfxResourceInternal output{};
-            require(RegisterResourceVK(&interface, &resource, context, &output) == FFX_OK,
+            require(RegisterResourceVK(&sdk_interface, &resource, context, &output) == FFX_OK,
                 "Actual SDK registration failed");
             imported.push_back(output);
             backend.pResources[output.internalIndex].currentState = FFX_RESOURCE_STATE_COPY_DEST;
         }
-        require(UnregisterResourcesVK(&interface,
+        require(UnregisterResourcesVK(&sdk_interface,
             fake_handle<FfxCommandList>(1), context) == FFX_OK,
             "Actual SDK unregister failed");
         for (auto imported_resource : imported) {
@@ -149,8 +149,8 @@ void records(bool old_policy, bool violate_completion = false) {
             (h.host.current_record > 2 ? h.host.current_record - 2 : 0);
         const auto fi_slot = h.effects[0].frameIndex;
         {
-            heaven::Fsr31PrepareViewScope prepare(h.interface);
-            if (old_policy) heavenFsr31VkDeferViewRotation(&h.interface, false);
+            heaven::Fsr31PrepareViewScope prepare(h.sdk_interface);
+            if (old_policy) heavenFsr31VkDeferViewRotation(&h.sdk_interface, false);
             h.stage(0, 5, 3); // Actual SDK FI Prepare's five imports.
             if (!old_policy) require(h.effects[0].frameIndex == fi_slot,
                 "Prepare rotated the provider-owned image-view slot");
@@ -179,7 +179,7 @@ void prepare_cleanup() {
         FfxErrorCode result = FFX_OK;
         try {
             result = [&] {
-                heaven::Fsr31PrepareViewScope prepare(h.interface);
+                heaven::Fsr31PrepareViewScope prepare(h.sdk_interface);
                 require(h.backend.heavenDeferViewRotation, "Shared prepare scope did not defer rotation");
                 if (test == PrepareExit::ErrorBefore) return FFX_ERROR_BACKEND_API_ERROR;
                 if (test == PrepareExit::ThrowBefore) throw std::runtime_error("Injected prepare exception");
@@ -205,9 +205,9 @@ void prepare_cleanup() {
     {
         Harness h;
         {
-            heaven::Fsr31PrepareViewScope outer(h.interface);
+            heaven::Fsr31PrepareViewScope outer(h.sdk_interface);
             {
-                heaven::Fsr31PrepareViewScope inner(h.interface);
+                heaven::Fsr31PrepareViewScope inner(h.sdk_interface);
                 require(h.backend.heavenDeferViewRotation, "Nested prepare scope lost policy");
             }
             require(h.backend.heavenDeferViewRotation, "Nested prepare scope did not restore previous policy");

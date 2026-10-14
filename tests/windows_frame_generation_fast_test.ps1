@@ -65,9 +65,9 @@ function Invoke-Checked {
 }
 '@
     Set-Content -LiteralPath "$temporary/scripts/build_windows.ps1" -Value @'
-param([string]$BuildDir, [int]$Jobs, [switch]$ConfigureOnly)
-$global:HeavenFastCalls.Add(@{ command = 'canonical-configure'; arguments = @($BuildDir, $Jobs, [bool]$ConfigureOnly) })
-if (-not $ConfigureOnly -or $Jobs -ne 2) { throw 'Fast step bypassed canonical configure-only.' }
+param([string]$BuildDir, [int]$Jobs, [switch]$ConfigureOnly, [switch]$HostPreflight)
+$global:HeavenFastCalls.Add(@{ command = 'canonical-configure'; arguments = @($BuildDir, $Jobs, [bool]$ConfigureOnly, [bool]$HostPreflight) })
+if (-not $ConfigureOnly -or -not $HostPreflight -or $Jobs -ne 2) { throw 'Fast step bypassed canonical configure-only or early native host preflight.' }
 New-Item -ItemType Directory -Force $BuildDir | Out-Null
 Set-Content (Join-Path $BuildDir 'CMakeCache.txt') "HEAVEN_ENABLE_DLSS:BOOL=OFF`nHEAVEN_ENABLE_FSR3:BOOL=OFF"
 '@

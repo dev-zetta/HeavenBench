@@ -112,8 +112,8 @@ function Invoke-Checked {
 }
 '@
     Set-Content -LiteralPath "$temporary/scripts/build_windows.ps1" -Value @'
-param([string]$BuildDir, [string]$Configuration, [int]$Jobs)
-$global:HeavenPipelineEvents.Add(@{ name = 'build'; directory = $BuildDir; configuration = $Configuration; jobs = $Jobs })
+param([string]$BuildDir, [string]$Configuration, [int]$Jobs, [switch]$HostPreflight)
+$global:HeavenPipelineEvents.Add(@{ name = 'build'; directory = $BuildDir; configuration = $Configuration; jobs = $Jobs; host_preflight = [bool]$HostPreflight })
 if ($global:HeavenPipelineFailure -eq 'build') { throw 'fixture build failure' }
 '@
     Set-Content -LiteralPath "$temporary/scripts/package_windows.ps1" -Value @'
@@ -178,6 +178,7 @@ Remove-Item -LiteralPath $stage -Recurse -Force
         Assert-That ($buildEvent.Count -eq 1) 'Build did not run exactly once.'
         Assert-That ([Array]::IndexOf($events, $pythonEvents[-1]) -lt [Array]::IndexOf($events, $buildEvent[0])) 'Script preflights ran after native compilation.'
         Assert-That ($buildEvent[0].directory -eq $build -and $buildEvent[0].jobs -eq $jobs -and $buildEvent[0].configuration -eq 'Release') 'Build arguments were lost.'
+        Assert-That $buildEvent[0].host_preflight 'Standard Windows release bypassed the early native host preflight.'
         $packages = @($events | Where-Object { $_.name -eq 'package' })
         if ($failure -eq 'build') {
             Assert-That ($packages.Count -eq 0) 'A failed build/test reached packaging.'

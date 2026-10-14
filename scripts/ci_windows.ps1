@@ -31,6 +31,8 @@ try {
     Import-HeavenMsvcEnvironment
     Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
         "$repoRoot/tests/windows_pipeline_test.ps1")
+    Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+        "$repoRoot/tests/windows_host_preflight_test.ps1")
     Invoke-Checked python.exe @("$repoRoot/tests/collect_licenses_test.py")
     # Catch script/platform defects before the cold native dependency build.
     # The complete tools CTest group still runs after compilation.
@@ -40,7 +42,7 @@ try {
                            'assemble_scene_test.py')) {
         Invoke-Checked python.exe @("$repoRoot/tests/$fixture")
     }
-    & "$PSScriptRoot/build_windows.ps1" -BuildDir $BuildDir -Configuration Release -Jobs $Jobs
+    & "$PSScriptRoot/build_windows.ps1" -BuildDir $BuildDir -Configuration Release -Jobs $Jobs -HostPreflight
     [Environment]::SetEnvironmentVariable('HEAVEN_RESOURCE_DIR', $null, 'Process')
     Invoke-Checked ctest.exe @('--test-dir', $BuildDir, '--output-on-failure', '--no-tests=error',
         '--timeout', '300', '-E', '^heaven_benchmark_smoke$')

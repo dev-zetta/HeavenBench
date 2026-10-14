@@ -21,6 +21,7 @@ on:
       - 'tests/windows_optional_sdk_licenses_test.ps1'
       - 'tests/windows_build_flags_test.ps1'
       - 'tests/windows_frame_generation_fast_test.ps1'
+      - 'tests/windows_host_preflight_test.ps1'
       - 'tests/fetch_fsr31_test.py'
       - 'tests/frame_generation_recovery_contract_test.py'
   workflow_dispatch:
@@ -60,6 +61,8 @@ jobs:
         run: |
           . ./scripts/windows_common.ps1
           Invoke-Checked python.exe @('tests/fetch_fsr31_test.py')
+          Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+            'tests/windows_host_preflight_test.ps1')
       - name: Fast native DLSS SDK compile and host contracts
         if: env.FRAME_GENERATION_PROVIDERS != 'fsr3'
         run: |
@@ -78,7 +81,7 @@ jobs:
               'tests/windows_frame_generation_fast_test.ps1')
             # Reuse the canonical compiler/CRT/dependency configuration. Only
             # these independent provider/host targets compile before Filament.
-            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2 -ConfigureOnly
+            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2 -ConfigureOnly -HostPreflight
             $configured = $true
             Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
               'tests/windows_build_flags_test.ps1', '-InstallPrefixContract')
@@ -155,7 +158,7 @@ jobs:
             Invoke-Checked python.exe @('benchmark/src/rhi/frame_generation/verify_fsr31_source_test.py')
             # Reuse the native helper's compiler, static CRT, SDL and pinned
             # vcpkg configuration. Optional reconfiguration retains that cache.
-            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2
+            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2 -HostPreflight
             Import-HeavenMsvcEnvironment
             Invoke-Checked python.exe @('tests/collect_licenses_test.py')
             Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
@@ -302,4 +305,5 @@ jobs:
             build/frame-generation/windows-msvc/CMakeCache.txt
             build/frame-generation/windows-msvc/CMakeFiles/CMakeConfigureLog.yaml
             build/frame-generation/windows-msvc/Testing/Temporary/LastTest.log
+            build/frame-generation/windows-msvc/host-preflight/
           if-no-files-found: ignore
