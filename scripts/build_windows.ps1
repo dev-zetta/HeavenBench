@@ -53,6 +53,8 @@ $installed = Join-Path $BuildDir 'vcpkg_installed'
 $triplet = Join-Path $installed 'x64-windows-static'
 $common = @(
     '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$Configuration",
+    # glslang otherwise caches a relative Windows default, breaking libzip on reconfigure.
+    "-DCMAKE_INSTALL_PREFIX=$BuildDir/install",
     '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl',
     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>',
     # Let CMake append its MSVC platform and exception flags. Clear only the

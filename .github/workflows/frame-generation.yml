@@ -74,6 +74,8 @@ jobs:
             # these independent provider/host targets compile before Filament.
             ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2 -ConfigureOnly
             $configured = $true
+            Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+              'tests/windows_build_flags_test.ps1', '-InstallPrefixContract')
             Import-HeavenMsvcEnvironment
             $headers = Join-Path $evidence 'streamline-2.14.1-headers'
             Invoke-Checked python.exe @('benchmark/src/rhi/frame_generation/dlss_fetch_sdk.py', '--output', $headers)

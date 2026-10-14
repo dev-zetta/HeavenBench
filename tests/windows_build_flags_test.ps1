@@ -1,5 +1,5 @@
 # Exercise the real build helper's CMake arguments without downloads or MSVC.
-param([string]$BuildScript = '')
+param([string]$BuildScript = '', [switch]$InstallPrefixContract)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
@@ -51,6 +51,10 @@ function Invoke-Checked {
     )
     foreach ($configure in $configures) {
         $arguments = $configure.arguments
+        $expectedInstall = [IO.Path]::GetFullPath((Join-Path $temporary 'build with spaces')) + '/install'
+        if ($arguments -notcontains "-DCMAKE_INSTALL_PREFIX=$expectedInstall") {
+            throw 'Renderer and extraction tools need the same explicit absolute install prefix.'
+        }
         if (@($arguments | Where-Object { $_ -match '^-DCMAKE_C(X{2})?_FLAGS=' }).Count) {
             throw 'Build helper replaces CMake platform defaults with generic compiler flags.'
         }
@@ -89,7 +93,64 @@ function Invoke-Checked {
         (Test-Path -LiteralPath (Join-Path $configureDirectory 'tools'))) {
         throw 'Configure-only performed compilation, extraction-tool configuration or resource staging.'
     }
-    Write-Host 'Windows build flag fixtures passed: canonical compiler defaults, incremental resources and configure-only isolation.'
+    if (-not $InstallPrefixContract) {
+        Write-Host 'Windows build flag fixtures passed: compiler defaults, absolute install prefix, resources and configure-only isolation.'
+        return
+    }
+    # The normal preflight runs before dependencies are fetched. This explicit
+    # source-aware mode runs after canonical configuration verifies those pins.
+    $nativeCmake = (Get-Command $(if ($IsWindows) { 'cmake.exe' } else { 'cmake' }) -CommandType Application | Select-Object -First 1).Source
+    $prefixArguments = @($configures[0].arguments | Where-Object { $_ -like '-DCMAKE_INSTALL_PREFIX=*' })
+    if ($prefixArguments.Count -ne 1) { throw 'Configure-only needs one explicit install prefix.' }
+    $prefix = $prefixArguments[0].Substring('-DCMAKE_INSTALL_PREFIX='.Length)
+    if (-not [IO.Path]::IsPathFullyQualified($prefix) -or $prefix -ne "$configureDirectory/install") {
+        throw 'Configure-only install prefix must be absolute and belong to its build directory.'
+    }
+
+    # Execute the exact pinned cache mutation and libzip path calculations in
+    # their production order, without configuring compilers or GPU dependencies.
+    $glslang = Get-Content -Raw -LiteralPath "$repoRoot/lib/filament/third_party/glslang/tnt/CMakeLists.txt"
+    $defaultPrefix = [regex]::Match($glslang, '(?ms)^if\(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND WIN32\)\r?\n.*?^endif\(\)')
+    $libzip = Get-Content -Raw -LiteralPath "$repoRoot/lib/libzip/CMakeLists.txt"
+    $relativePaths = [regex]::Matches($libzip, '(?m)^file\(RELATIVE_PATH pc_relative_(?:bindir|libdir|includedir) \$\{CMAKE_INSTALL_PREFIX\} \$\{CMAKE_INSTALL_FULL_(?:BINDIR|LIBDIR|INCLUDEDIR)\}\)\r?$')
+    if (-not $defaultPrefix.Success -or $relativePaths.Count -ne 3) {
+        throw 'Pinned Windows install-prefix reproduction inputs changed; review the fixture.'
+    }
+    $source = Join-Path $temporary 'install prefix source'
+    New-Item -ItemType Directory $source | Out-Null
+    $project = @'
+cmake_minimum_required(VERSION 3.19)
+project(HeavenWindowsInstallPrefixFixture LANGUAGES NONE)
+set(WIN32 TRUE)
+set(CMAKE_SIZEOF_VOID_P 8)
+include(GNUInstallDirs)
+'@
+    $project += "`n" + (($relativePaths | ForEach-Object { $_.Value }) -join "`n")
+    $project += "`n" + $defaultPrefix.Value + "`n"
+    Set-Content -LiteralPath (Join-Path $source 'CMakeLists.txt') -Value $project -Encoding utf8
+    foreach ($case in @('default-prefix-negative', 'explicit-prefix')) {
+        $build = Join-Path $temporary $case
+        foreach ($pass in @(1, 2)) {
+            $arguments = @('-S', $source, '-B', $build)
+            # Later SDK configurations reuse the cache without repeating the helper's flags.
+            if ($case -eq 'explicit-prefix' -and $pass -eq 1) { $arguments += $prefixArguments[0] }
+            $output = & $nativeCmake @arguments 2>&1
+            $code = $LASTEXITCODE
+            $output | ForEach-Object { Write-Host $_ }
+            Write-Host "Install-prefix CMake fixture: $case pass=$pass exit=$code"
+            if ($case -eq 'default-prefix-negative' -and $pass -eq 2) {
+                if ($code -eq 0 -or ($output -join "`n") -notmatch 'RELATIVE_PATH must be passed a full path to the directory: install') {
+                    throw 'Old default-prefix two-pass negative did not reproduce the native libzip failure.'
+                }
+            } elseif ($code -ne 0) { throw "Two-pass install-prefix configuration failed: $case pass=$pass" }
+        }
+        $cache = Get-Content -Raw -LiteralPath (Join-Path $build 'CMakeCache.txt')
+        $expectedPrefix = if ($case -eq 'explicit-prefix') { $prefix.Replace('\', '/') } else { 'install' }
+        if ($cache -notmatch ('(?m)^CMAKE_INSTALL_PREFIX:(?:PATH|STRING)=' + [regex]::Escape($expectedPrefix) + '\r?$')) {
+            throw "Unexpected cached install prefix after two passes: $case"
+        }
+    }
+    Write-Host 'Windows build flag fixtures passed: compiler defaults, resources, configure-only isolation and actual two-pass install-prefix positive/negative.'
 } finally {
     foreach ($entry in $savedEnvironment.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')

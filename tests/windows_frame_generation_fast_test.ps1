@@ -31,6 +31,9 @@ function Invoke-Checked {
     param([string]$Command, [string[]]$Arguments = @(), [int]$ExpectedExitCode = 0)
     $name = [IO.Path]::GetFileName($Command)
     $global:HeavenFastCalls.Add(@{ command = $name; arguments = $Arguments })
+    if ($Arguments -contains '-InstallPrefixContract' -and $global:HeavenFastCase -eq 'prefix') {
+        throw 'fixture two-pass prefix contract failure'
+    }
     if ($name -eq 'python.exe') {
         if ($global:HeavenFastCase -eq 'fetch') { throw 'fixture source verification failure' }
         $headers = $Arguments[[Array]::IndexOf($Arguments, '--output') + 1]
@@ -69,7 +72,7 @@ New-Item -ItemType Directory -Force $BuildDir | Out-Null
 Set-Content (Join-Path $BuildDir 'CMakeCache.txt') "HEAVEN_ENABLE_DLSS:BOOL=OFF`nHEAVEN_ENABLE_FSR3:BOOL=OFF"
 '@
     function global:git.exe { $global:LASTEXITCODE = 0; return 'fixture-source-head' }
-    foreach ($case in @('success', 'dlss', 'fetch', 'configure', 'build', 'tests', 'missing', 'restore')) {
+    foreach ($case in @('success', 'dlss', 'prefix', 'fetch', 'configure', 'build', 'tests', 'missing', 'restore')) {
         $working = Join-Path $temporary $case
         New-Item -ItemType Directory -Force "$working/scripts", "$working/benchmark" | Out-Null
         Copy-Item -LiteralPath "$temporary/scripts/windows_common.ps1", "$temporary/scripts/build_windows.ps1" -Destination "$working/scripts"
@@ -84,6 +87,16 @@ Set-Content (Join-Path $BuildDir 'CMakeCache.txt') "HEAVEN_ENABLE_DLSS:BOOL=OFF`
         $calls = @($global:HeavenFastCalls.ToArray())
         $configure = @($calls | Where-Object { $_.command -eq 'canonical-configure' })
         if ($configure.Count -ne 1) { throw "Fast step did not reuse canonical configuration: $case" }
+        $prefixContract = @($calls | Where-Object { $_.command -eq 'pwsh.exe' -and $_.arguments -contains '-InstallPrefixContract' })
+        if ($prefixContract.Count -ne 1 -or
+            $prefixContract[0].arguments -notcontains 'tests/windows_build_flags_test.ps1' -or
+            [Array]::IndexOf($calls, $prefixContract[0]) -le [Array]::IndexOf($calls, $configure[0])) {
+            throw "Two-pass prefix contract must run after canonical dependency configuration: $case"
+        }
+        $sdkConfigures = @($calls | Where-Object { $_.command -eq 'cmake.exe' -and $_.arguments -contains '-DHEAVEN_ENABLE_DLSS=ON' })
+        if (@($sdkConfigures | Where-Object {
+            [Array]::IndexOf($calls, $_) -lt [Array]::IndexOf($calls, $prefixContract[0])
+        }).Count) { throw "Optional SDK configure bypassed the two-pass prefix contract: $case" }
         $restore = @($calls | Where-Object { $_.command -eq 'cmake.exe' -and $_.arguments -contains '-DHEAVEN_ENABLE_DLSS=OFF' })
         if ($restore.Count -ne 1 -or $restore[0].arguments -notcontains '-DHEAVEN_ENABLE_FSR3=OFF') {
             throw "Fast step failed to restore both SDK-off flags: $case"
@@ -91,7 +104,7 @@ Set-Content (Join-Path $BuildDir 'CMakeCache.txt') "HEAVEN_ENABLE_DLSS:BOOL=OFF`
         $cache = Get-Content -Raw (Join-Path $working 'build/frame-generation/windows-msvc/CMakeCache.txt')
         if ($case -ne 'restore' -and $cache -notmatch 'HEAVEN_ENABLE_DLSS:BOOL=OFF') { throw "Optional SDK state leaked: $case" }
         $builds = @($calls | Where-Object { $_.command -eq 'cmake.exe' -and $_.arguments -contains '--build' })
-        if ($case -notin @('fetch', 'configure')) {
+        if ($case -notin @('prefix', 'fetch', 'configure')) {
             if ($builds.Count -ne 1) { throw "Wrong fast compile count: $case" }
             $targets = $builds[0].arguments[([Array]::IndexOf($builds[0].arguments, '--target') + 1)..($builds[0].arguments.Count - 1)]
             if (($targets -join ',') -cne 'heaven_dlss_contract_tests,heaven_dlss_frame_token_tests,heaven_dlss_runtime_bridge_tests') {
@@ -109,7 +122,7 @@ Set-Content (Join-Path $BuildDir 'CMakeCache.txt') "HEAVEN_ENABLE_DLSS:BOOL=OFF`
             if ('heaven_benchmark_smoke' -match $pattern) { throw 'Fast host filter selected graphical smoke.' }
         } elseif ($executions.Count) { throw "Fast failure continued to host tests: $case" }
     }
-    Write-Host 'Fast Windows DLSS workflow fixtures passed: canonical configuration, three independent targets, required host discovery, failure paths and SDK-off restoration.'
+    Write-Host 'Fast Windows DLSS workflow fixtures passed: canonical configuration, two-pass prefix gate, three independent targets, required host discovery, failure paths and SDK-off restoration.'
 } finally {
     Set-Location $location
     foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
