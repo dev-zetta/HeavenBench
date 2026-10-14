@@ -188,6 +188,9 @@ public:
     [[nodiscard]] FrameGenerationStatus frame_generation_status() const override;
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
     [[nodiscard]] bool debug_frame_generation_out_of_date_once();
+    [[nodiscard]] bool debug_frame_generation_work_failure_once();
+    [[nodiscard]] uint64_t debug_frame_generation_work_failure_source() const;
+    [[nodiscard]] uint64_t debug_frame_generation_provider_attempts() const;
 #endif
     [[nodiscard]] std::vector<double>
     finalize_benchmark_gpu_times() override;

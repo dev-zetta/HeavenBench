@@ -969,6 +969,9 @@ add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME heaven_fsr31_fetch_contract
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tests/fetch_fsr31_test.py)
     add_test(NAME heaven_dlss_lifecycle_contract
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../tests/dlss_lifecycle_contract_test.py)
@@ -1012,6 +1015,12 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_frame_generation_recovery_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_recovery_contract_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/frame-generation-recovery-contract")
+        set_tests_properties(heaven_frame_generation_recovery_contract PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_dlss_frame_token_negative_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/dlss_frame_lifecycle_test.py

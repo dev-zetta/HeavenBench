@@ -52,6 +52,9 @@ public:
     void end_simulation();
     void native_window_message(uint32_t message);
     void drain();
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+    uint64_t debug_provider_record_attempts() const noexcept;
+#endif
     TemporalScene* temporal_scene() const { return temporal_.get(); }
 private:
     struct Native;

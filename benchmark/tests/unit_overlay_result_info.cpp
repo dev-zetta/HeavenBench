@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <string_view>
 #include <vector>
 
 #include "benchmark/benchmark_system.h"
@@ -205,6 +206,43 @@ bool unit_overlay_result_info() {
             std::printf("[unit_overlay_result_info] FAILED: diagnostics "
                         "sidebar is not active and pinned to the left work area\n");
             ok = false;
+        }
+
+        // Exercise the actual sidebar's failure cell, including a retained
+        // nonzero value whose native counter coverage has become unavailable.
+        struct FailureCase { bool available; uint64_t count; std::string_view expected; };
+        for (const auto& failure : {FailureCase{false, 17, "Unavailable"},
+                                   FailureCase{true, 0, "0"},
+                                   FailureCase{true, 17, "17"}}) {
+            heaven::FrameGenerationStatus generation;
+            generation.counters.presentation_submissions_available = failure.available;
+            generation.counters.failed_presentations = failure.count;
+            ImGui::NewFrame();
+            ImGui::LogToClipboard();
+            overlay.draw_debug_sidebar(info, generation);
+            ImGui::LogFinish();
+            ImGui::Render();
+            const char* output = ImGui::GetClipboardText();
+            const std::string_view text = output ? output : "";
+            constexpr std::string_view label = "Failed submits";
+            const auto begin = text.find(label);
+            const auto end = text.find("SDK submitted", begin == std::string_view::npos ? 0 : begin);
+            std::string_view value;
+            if (begin != std::string_view::npos && end != std::string_view::npos) {
+                value = text.substr(begin + label.size(), end - begin - label.size());
+                // ImGui logs a vertical bar at each table-cell/row boundary.
+                const auto first = value.find_first_not_of(" \t\r\n|");
+                if (first != std::string_view::npos) {
+                    value.remove_prefix(first);
+                    value = value.substr(0, value.find_last_not_of(" \t\r\n|") + 1);
+                }
+            }
+            if (value != failure.expected) {
+                std::printf("[unit_overlay_result_info] FAILED: native failure cell should show %.*s, captured \"%.*s\"\n",
+                            static_cast<int>(failure.expected.size()), failure.expected.data(),
+                            static_cast<int>(value.size()), value.empty() ? "" : value.data());
+                ok = false;
+            }
         }
     }
 

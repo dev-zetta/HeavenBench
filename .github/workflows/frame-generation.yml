@@ -21,6 +21,8 @@ on:
       - 'tests/windows_optional_sdk_licenses_test.ps1'
       - 'tests/windows_build_flags_test.ps1'
       - 'tests/windows_frame_generation_fast_test.ps1'
+      - 'tests/fetch_fsr31_test.py'
+      - 'tests/frame_generation_recovery_contract_test.py'
   workflow_dispatch:
     inputs:
       providers:
@@ -54,6 +56,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Validate FSR download contracts
+        run: |
+          . ./scripts/windows_common.ps1
+          Invoke-Checked python.exe @('tests/fetch_fsr31_test.py')
       - name: Fast native DLSS SDK compile and host contracts
         if: env.FRAME_GENERATION_PROVIDERS != 'fsr3'
         run: |

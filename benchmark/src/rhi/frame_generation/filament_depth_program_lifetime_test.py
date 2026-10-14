@@ -16,7 +16,6 @@ PREFIX = r'''
 #include <cstdio>
 #include <map>
 #include <vector>
-#define UTILS_LIKELY(x) (x)
 namespace filament {
 using backend::ShaderModel;
 using utils::Slice;
@@ -180,8 +179,9 @@ def main():
     includes = ["filament/src", "filament/include", "filament/backend/include",
                 "libs/filabridge/include", "libs/utils/include", "libs/math/include"]
     msvc = Path(args.cxx).name.lower() in ("cl", "cl.exe", "clang-cl", "clang-cl.exe")
-    command = [args.cxx, "/nologo", "/std:c++17", "/O1", "/EHsc"] if msvc else [
-            args.cxx, "-std=c++17", "-O1"]
+    # Actual DriverEnums.h uses C++20 designated initializers on every compiler.
+    command = [args.cxx, "/nologo", "/std:c++20", "/O1", "/EHsc"] if msvc else [
+            args.cxx, "-std=c++20", "-O1"]
     if args.stdlib == "libc++" and not msvc:
         command.append("-stdlib=libc++")
     command += [("/I" if msvc else "-I") + str(root / "lib/filament" / p) for p in includes]

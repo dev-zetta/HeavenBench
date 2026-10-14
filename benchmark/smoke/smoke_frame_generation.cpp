@@ -256,6 +256,8 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
     const bool ui_oracle = ui_oracle_setting && std::string_view(ui_oracle_setting) == "1";
     const char* process_setting = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE");
     const bool process_pause = process_setting && std::string_view(process_setting) == "1";
+    const char* broken_setting = std::getenv("HEAVEN_SMOKE_FG_BROKEN_CHAIN_ORACLE");
+    const bool broken_chain_oracle = broken_setting && std::string_view(broken_setting) == "1";
 #ifdef __linux__
     std::unique_ptr<ProcessPauseGate> process_gate;
     std::optional<ProcessPauseGate::Mode> gate_mode;
@@ -263,6 +265,11 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
     bool asynchronous_frames = false;
     bool ok = true;
     try {
+        require(!broken_chain_oracle || (!ui_oracle && !process_pause),
+                "broken-chain oracle requires ordinary lifecycle UI without the process-pause controller");
+#ifndef HEAVEN_FG_FAULT_INJECTION
+        require(!broken_chain_oracle, "broken-chain oracle requires native fault-injection support");
+#endif
 #ifdef __linux__
         if (process_pause) {
             require(!ui_oracle && original.renderer, "process pause requires ordinary lifecycle UI and renderer");
@@ -550,6 +557,102 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         require_active(recreation_recovery);
         require(recreation_recovery.counters.generated_frames > recreated.counters.generated_frames,
                 "implicit recreation did not recover after fresh sources");
+
+        if (broken_chain_oracle) {
+            constexpr const char* tag = "[smoke_frame_generation_broken_chain]";
+            constexpr std::string_view failure_reason = "Generated presentation command buffer is unavailable";
+            bool oracle_ok = true;
+            const auto oracle_check = [&](bool condition, const char* message) {
+                if (!condition) {
+                    std::printf("%s FAIL: %s\n", tag, message);
+                    oracle_ok = false;
+                }
+            };
+            const auto before_fault = snapshot();
+            require_active(before_fault);
+            const auto attempts_before_fault = backend.debug_frame_generation_provider_attempts();
+            require(attempts_before_fault > 0 && backend.debug_frame_generation_work_failure_once(),
+                    "native generated-work fault injection or exact provider-attempt counter is unavailable");
+
+            // Several accepted callbacks may already be queued when the first
+            // generated present breaks its chain. Their provider invocations
+            // must stop too, independent of a later frontend status poll.
+            asynchronous_frames = true;
+            auto blocked = frames(16, "broken-chain queued failure sources");
+            asynchronous_frames = false;
+            const auto fault_source = backend.debug_frame_generation_work_failure_source();
+            const auto attempts_after_fault = backend.debug_frame_generation_provider_attempts();
+            const auto allowed_attempts = fault_source > before_fault.counters.real_frames
+                ? fault_source - before_fault.counters.real_frames : 0;
+            oracle_check(fault_source > before_fault.counters.real_frames &&
+                         fault_source <= blocked.counters.real_frames,
+                         "one-shot generated-work failure did not identify its accepted source");
+            oracle_check(attempts_after_fault - attempts_before_fault == allowed_attempts,
+                         "already-queued callbacks continued invoking the provider after the chain broke");
+            oracle_check(blocked.counters.generated_frames == before_fault.counters.generated_frames + 1,
+                         "broken chain recorded further interpolation after its failed source");
+            oracle_check(blocked.counters.real_presented_frames - before_fault.counters.real_presented_frames == 16 &&
+                         blocked.counters.generated_presented_frames == before_fault.counters.generated_presented_frames,
+                         "broken-chain sources were not submitted as real images only");
+            oracle_check(blocked.effective == FrameGenerationMode::Off && !blocked.capability.available &&
+                         blocked.reason == failure_reason,
+                         "broken chain lost its unavailable status or original failure reason");
+            const auto failure_effective = frame_generation_mode_id(blocked.effective);
+            std::printf("%s failure source=%llu batch_real=16 allowed_attempts=%llu provider_attempts=%llu "
+                        "generated_recordings=%llu native_generated=%llu effective=%.*s reason=%s\n", tag,
+                        static_cast<unsigned long long>(fault_source),
+                        static_cast<unsigned long long>(allowed_attempts),
+                        static_cast<unsigned long long>(attempts_after_fault - attempts_before_fault),
+                        static_cast<unsigned long long>(blocked.counters.generated_frames - before_fault.counters.generated_frames),
+                        static_cast<unsigned long long>(blocked.counters.generated_presented_frames - before_fault.counters.generated_presented_frames),
+                        static_cast<int>(failure_effective.size()), failure_effective.data(), blocked.reason.c_str());
+            const auto recordings_after_fault = blocked.counters.generated_frames;
+            for (unsigned index = 0; index != 4; ++index) {
+                const auto previous = blocked.counters;
+                blocked = frames(1, "broken-chain unavailable source");
+                oracle_check(backend.debug_frame_generation_provider_attempts() == attempts_after_fault &&
+                             blocked.counters.generated_frames == recordings_after_fault,
+                             "unavailable presentation continued interpolation work");
+                oracle_check(blocked.effective == FrameGenerationMode::Off && !blocked.capability.available &&
+                             blocked.reason == failure_reason,
+                             "unavailable presentation promoted or replaced its failure reason");
+                oracle_check(blocked.counters.real_presented_frames == previous.real_presented_frames + 1 &&
+                             blocked.counters.generated_presented_frames == previous.generated_presented_frames,
+                             "unavailable presentation did not retain exact real-only native counts");
+                const auto effective = frame_generation_mode_id(blocked.effective);
+                std::printf("%s blocked source=%llu provider_attempts=%llu generated_recordings=%llu "
+                            "native_real=%llu native_generated=%llu effective=%.*s reason=%s\n", tag,
+                            static_cast<unsigned long long>(blocked.counters.real_frames),
+                            static_cast<unsigned long long>(backend.debug_frame_generation_provider_attempts()),
+                            static_cast<unsigned long long>(blocked.counters.generated_frames),
+                            static_cast<unsigned long long>(blocked.counters.real_presented_frames),
+                            static_cast<unsigned long long>(blocked.counters.generated_presented_frames),
+                            static_cast<int>(effective.size()), effective.data(), blocked.reason.c_str());
+            }
+
+            // Successful native recreation is the existing retry boundary.
+            // Continue even after a failed assertion to retain recovery evidence
+            // in the initial deliberately failing control.
+            require(backend.debug_frame_generation_out_of_date_once(),
+                    "broken-chain recovery recreation injection is unavailable");
+            const auto retry_first = frames(1, "broken-chain recreation first source");
+            oracle_check(retry_first.history_epoch > blocked.history_epoch &&
+                         retry_first.counters.generated_frames == blocked.counters.generated_frames,
+                         "broken-chain recreation reused pre-failure interpolation history");
+            const auto retry = frames(5, "broken-chain recreation recovery");
+            oracle_check(retry.effective == FrameGenerationMode::Fsr3 && retry.capability.available && retry.history_ready &&
+                         retry.counters.generated_presented_frames > retry_first.counters.generated_presented_frames &&
+                         backend.debug_frame_generation_provider_attempts() > attempts_after_fault,
+                         "successful recreation did not recover provider work and generated native submissions");
+            std::printf("%s recovery provider_attempts=%llu native_real=%llu native_generated=%llu epoch=%llu\n", tag,
+                        static_cast<unsigned long long>(backend.debug_frame_generation_provider_attempts()),
+                        static_cast<unsigned long long>(retry.counters.real_presented_frames),
+                        static_cast<unsigned long long>(retry.counters.generated_presented_frames),
+                        static_cast<unsigned long long>(retry.history_epoch));
+            std::printf("%s %s: queued and real-only sources, exact provider attempts, stable unavailable reason, "
+                        "native recreation recovery\n", tag, oracle_ok ? "PASS" : "FAIL");
+            require(oracle_ok, "broken-chain fault oracle rejected interpolation during unavailable presentation");
+        }
 #endif
 
         backend.request_frame_generation(FrameGenerationMode::Off);

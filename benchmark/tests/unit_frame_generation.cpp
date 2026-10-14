@@ -131,8 +131,10 @@ bool frame_generation_scoring() {
                json.at("scores").at("overall").is_null() &&
                json.at("frame_generation").at("generated_frames").is_null() &&
                json.at("frame_generation").at("presentation_submissions").is_null() &&
+               json.at("frame_generation").at("failed_presentations").is_null() &&
                json.at("frame_generation").at("sdk_presentation_submissions").is_null() &&
                json.at("frame_generation").at("confirmed_displayed_frames").is_null() &&
+               report.html.find("Failed native submissions:</td><td><div class=\"highlight\">Unavailable</div>") != std::string::npos &&
                report.html.find("frame generation requested") != std::string::npos,
                "FG diagnostic lost real-render stats or awarded a score")) return false;
     auto measured_result = result;
@@ -152,9 +154,18 @@ bool frame_generation_scoring() {
                measured.at("presentation_submissions") == 9 &&
                measured.at("real_presentation_submissions") == 6 &&
                measured.at("generated_presentation_submissions") == 3 &&
+               measured.at("failed_presentations") == 0 &&
                measured.at("confirmed_displayed_frames").is_null() &&
+               measured_report.html.find("Failed native submissions:</td><td><div class=\"highlight\">0</div>") != std::string::npos &&
                measured_report.html.find("Real native submissions") != std::string::npos,
                "exact native event counts were lost or presented as displayed frames")) return false;
+    fg.counters.failed_presentations = 2;
+    measured_report = build_benchmark_report(measured_result, BenchConfig{}, {"test", "test"},
+                                             std::chrono::system_clock::time_point{});
+    measured = nlohmann::json::parse(measured_report.json).at("frame_generation");
+    if (!check(measured.at("failed_presentations") == 2 &&
+               measured_report.html.find("Failed native submissions:</td><td><div class=\"highlight\">2</div>") != std::string::npos,
+               "measured native presentation failures were hidden from JSON or HTML")) return false;
     // A provider-reported combined count cannot establish a generated count or
     // a real/generated split. A measured SDK zero remains distinguishable from
     // an unavailable total, and old exact state counters must remain hidden.
@@ -172,6 +183,7 @@ bool frame_generation_scoring() {
                measured.at("failed_presentations").is_null() &&
                measured.at("sdk_presentation_submissions") == 0 &&
                measured.at("confirmed_displayed_frames").is_null() &&
+               measured_report.html.find("Failed native submissions:</td><td><div class=\"highlight\">Unavailable</div>") != std::string::npos &&
                measured_report.html.find("SDK native submissions (combined)") != std::string::npos &&
                measured_report.html.find("Unavailable") != std::string::npos,
                "unavailable SDK split counts became measured zeros or inferred values")) return false;

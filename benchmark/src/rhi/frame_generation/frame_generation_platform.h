@@ -100,10 +100,17 @@ public:
     // Independent of application event consumption. Native callbacks latch
     // this immediately before interpolation after an implicit recreation.
     uint64_t history_epoch() const noexcept;
+    // A failed native chain remains real-only until successful recreation.
+    // This is separate from lazy initial presentation capability discovery.
+    bool generation_blocked() const noexcept;
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
     // Native smoke only: the next outer acquire follows the ordinary
     // OUT_OF_DATE retry/recreation path before any image is acquired.
     void debug_out_of_date_once() noexcept;
+    // Native smoke only: fail one generated command-buffer begin before any
+    // command recording, exercising the existing broken-chain fallback.
+    void debug_generated_work_failure_once() noexcept;
+    uint64_t debug_generated_work_failure_source() const noexcept;
 #endif
 
     Customization getCustomization() const noexcept override;

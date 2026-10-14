@@ -4,9 +4,7 @@
 
 #include <algorithm>
 #include <array>
-#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
 #include <atomic>
-#endif
 #include <chrono>
 #include <cstdio>
 #include <deque>
@@ -46,6 +44,11 @@ VkImageCopy copy_region(VkExtent2D extent) {
     region.extent = {extent.width, extent.height, 1};
     return region;
 }
+bool native_swapchain_images_ready(const Base::SwapChainBundle& bundle) {
+    return !bundle.colors.empty() && bundle.extent.width != 0 && bundle.extent.height != 0 &&
+        bundle.colorFormat != VK_FORMAT_UNDEFINED &&
+        std::ranges::all_of(bundle.colors, [](VkImage image) { return image != VK_NULL_HANDLE; });
+}
 } // namespace
 
 struct FrameGenerationPlatform::Impl {
@@ -77,8 +80,11 @@ struct FrameGenerationPlatform::Impl {
     mutable std::mutex status_mutex;
     FrameGenerationPresentationStatus status;
     FrameGenerationHistoryEpoch history;
+    std::atomic<bool> generation_blocked{false};
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
     std::atomic<bool> out_of_date_once{false};
+    std::atomic<bool> generated_work_failure_once{false};
+    std::atomic<uint64_t> generated_work_failure_source{0};
 #endif
     std::deque<FrameGenerationPresentEvent> events;
     FrameGenerationCapture capture;
@@ -108,7 +114,7 @@ struct FrameGenerationPlatform::Impl {
             ++status.failed_submissions;
             status.available = false;
         }
-        if (!reason.empty()) status.reason = reason;
+        if (!reason.empty() && !generation_blocked.load(std::memory_order_relaxed)) status.reason = reason;
         constexpr size_t maximum_events = 256;
         if (events.size() == maximum_events) { events.pop_front(); ++status.dropped_events; }
         events.push_back({kind, source, result, std::move(reason)});
@@ -116,8 +122,30 @@ struct FrameGenerationPlatform::Impl {
 
     void set_availability(bool available, std::string reason) {
         std::scoped_lock lock(status_mutex);
+        if (generation_blocked.load(std::memory_order_relaxed)) return;
         status.available = available;
         status.reason = std::move(reason);
+    }
+
+    void break_chain(Chain& chain, std::string reason) {
+        chain.broken = true;
+        std::scoped_lock lock(status_mutex);
+        if (!generation_blocked.load(std::memory_order_relaxed)) {
+            status.reason = std::move(reason);
+            history.invalidate();
+        }
+        status.available = false;
+        generation_blocked.store(true, std::memory_order_release);
+    }
+
+    void unblock_after_recreation() {
+        if (!generation_blocked.load(std::memory_order_acquire) ||
+                std::ranges::any_of(chains, [](const auto& entry) { return entry.second.broken; })) return;
+        history.invalidate();
+        std::scoped_lock lock(status_mutex);
+        status.available = false;
+        status.reason = "Native swapchain recreated; awaiting generated presentation";
+        generation_blocked.store(false, std::memory_order_release);
     }
 
     void clear_armed() {
@@ -147,18 +175,18 @@ struct FrameGenerationPlatform::Impl {
         if (chain.broken) return false;
         if (!chain.surface || chain.bundle.isProtected ||
                 chain.bundle.layerCount != 1 || chain.bundle.colors.empty()) {
-            set_availability(false, "Generated presentation requires an unprotected native surface swapchain");
+            break_chain(chain, "Generated presentation requires an unprotected native surface swapchain");
             return false;
         }
         if (armed.extent.width != chain.bundle.extent.width ||
                 armed.extent.height != chain.bundle.extent.height) {
-            set_availability(false, "Generated output and native swapchain extents differ");
+            break_chain(chain, "Generated output and native swapchain extents differ");
             return false;
         }
         if ((armed.format != VK_FORMAT_R8G8B8A8_UNORM && armed.format != VK_FORMAT_B8G8R8A8_UNORM) ||
                 (chain.bundle.colorFormat != VK_FORMAT_R8G8B8A8_UNORM &&
                  chain.bundle.colorFormat != VK_FORMAT_B8G8R8A8_UNORM)) {
-            set_availability(false, "Generated presentation requires SDR RGBA8/BGRA8 UNORM images");
+            break_chain(chain, "Generated presentation requires SDR RGBA8/BGRA8 UNORM images");
             return false;
         }
         VkFormatProperties source{}, destination{};
@@ -167,7 +195,7 @@ struct FrameGenerationPlatform::Impl {
         if (armed.format != chain.bundle.colorFormat &&
                 (!(source.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) ||
                  !(destination.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT))) {
-            set_availability(false, "Native formats do not support generated-output transfer conversion");
+            break_chain(chain, "Native formats do not support generated-output transfer conversion");
             return false;
         }
         if (!chain.work.empty()) {
@@ -240,8 +268,7 @@ struct FrameGenerationPlatform::Impl {
 
     bool allocation_failed(VkDevice device, Chain& chain, VkResult result) {
         release_chain(device, chain);
-        chain.broken = true;
-        set_availability(false, "Generated presentation resource allocation failed: " + std::to_string(result));
+        break_chain(chain, "Generated presentation resource allocation failed: " + std::to_string(result));
         return false;
     }
 
@@ -432,9 +459,19 @@ FrameGenerationPresentationStatus FrameGenerationPlatform::presentation_status()
 uint64_t FrameGenerationPlatform::history_epoch() const noexcept {
     return impl_->history.current();
 }
+bool FrameGenerationPlatform::generation_blocked() const noexcept {
+    return impl_->generation_blocked.load(std::memory_order_acquire);
+}
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
 void FrameGenerationPlatform::debug_out_of_date_once() noexcept {
     impl_->out_of_date_once.store(true, std::memory_order_release);
+}
+void FrameGenerationPlatform::debug_generated_work_failure_once() noexcept {
+    impl_->generated_work_failure_source.store(0, std::memory_order_relaxed);
+    impl_->generated_work_failure_once.store(true, std::memory_order_release);
+}
+uint64_t FrameGenerationPlatform::debug_generated_work_failure_source() const noexcept {
+    return impl_->generated_work_failure_source.load(std::memory_order_acquire);
 }
 #endif
 
@@ -456,6 +493,7 @@ FrameGenerationPlatform::SwapChainPtr FrameGenerationPlatform::createSwapChain(
         auto& chain = impl_->chains[handle];
         chain.bundle = Base::getSwapChainBundle(handle);
         chain.surface = nativeWindow && extent.width == 0 && extent.height == 0;
+        if (chain.surface && native_swapchain_images_ready(chain.bundle)) impl_->unblock_after_recreation();
     }
     return handle;
 }
@@ -479,6 +517,8 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     auto ordinary = [&] {
         impl_->capture.abandon_ui_inputs(armed.source);
         const auto result = Base::present(handle, index, finishedDrawing);
+        if (!submitted(result) && found != impl_->chains.end())
+            impl_->break_chain(found->second, "Native presentation failed: VkResult " + std::to_string(result));
         impl_->event(submitted(result) ? FrameGenerationPresentEventKind::RealSubmitted :
             FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result);
         if (found != impl_->chains.end() && submitted(result)) found->second.last_real_present = Clock::now();
@@ -498,7 +538,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     auto& chain = found->second;
     if (index >= chain.work.size()) {
         impl_->capture.abandon_ui_inputs(armed.source);
-        chain.broken = true;
+        impl_->break_chain(chain, "Native acquired image index is outside the swapchain");
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source,
             VK_ERROR_INITIALIZATION_FAILED, "Native acquired image index is outside the swapchain");
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -510,9 +550,18 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         impl_->event(FrameGenerationPresentEventKind::NativeCaptureFailed, armed.source, VK_NOT_READY,
             impl_->capture.last_error());
     auto& generated_work = chain.work[index];
-    auto result = impl_->begin_work(getDevice(), generated_work);
+    const auto begin_generated_work = [&] {
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+        if (impl_->generated_work_failure_once.exchange(false, std::memory_order_acq_rel)) {
+            impl_->generated_work_failure_source.store(armed.source, std::memory_order_release);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+#endif
+        return impl_->begin_work(getDevice(), generated_work);
+    };
+    auto result = begin_generated_work();
     if (result != VK_SUCCESS) {
-        chain.broken = true;
+        impl_->break_chain(chain, "Generated presentation command buffer is unavailable");
         impl_->event(FrameGenerationPresentEventKind::GenerationSkipped, armed.source, result,
             "Generated presentation command buffer is unavailable");
         return ordinary();
@@ -562,7 +611,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     result = impl_->submit_work(*this, generated_work, finishedDrawing);
     if (result != VK_SUCCESS) {
-        chain.broken = true;
+        impl_->break_chain(chain, "Generated image copy submission failed");
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Generated image copy submission failed");
         return result;
@@ -573,14 +622,17 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     result = Base::present(handle, index, generated_work.present_ready);
     impl_->event(submitted(result) ? FrameGenerationPresentEventKind::GeneratedSubmitted :
         FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result);
-    if (!submitted(result)) { chain.broken = true; return result; }
+    if (!submitted(result)) {
+        impl_->break_chain(chain, "Native presentation failed: VkResult " + std::to_string(result));
+        return result;
+    }
     bool suboptimal = result == VK_SUBOPTIMAL_KHR;
     const auto generated_present = Clock::now();
 
     ImageSyncData sync;
     result = Base::acquire(handle, &sync);
     if (!submitted(result) || sync.imageIndex >= chain.work.size()) {
-        chain.broken = true;
+        impl_->break_chain(chain, "Real-frame reacquire after generated presentation failed");
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Real-frame reacquire after generated presentation failed");
         return submitted(result) ? VK_ERROR_INITIALIZATION_FAILED : result;
@@ -589,7 +641,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     auto& real_work = chain.work[sync.imageIndex];
     result = impl_->begin_work(getDevice(), real_work);
     if (result != VK_SUCCESS) {
-        chain.broken = true;
+        impl_->break_chain(chain, "Real-frame restore command buffer is unavailable");
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Real-frame restore command buffer is unavailable");
         return result;
@@ -613,7 +665,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     result = impl_->submit_work(*this, real_work, sync.imageReadySemaphore);
     if (result != VK_SUCCESS) {
-        chain.broken = true;
+        impl_->break_chain(chain, "Real-frame restore submission failed");
         impl_->event(FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result,
             "Real-frame restore submission failed");
         return result;
@@ -637,7 +689,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
                 saved ? "Native generated/real diagnostic pair saved" : impl_->capture.last_error());
         }
     }
-    else chain.broken = true;
+    else impl_->break_chain(chain, "Native presentation failed: VkResult " + std::to_string(result));
     return result == VK_SUCCESS && suboptimal ? VK_SUBOPTIMAL_KHR : result;
 }
 
@@ -650,10 +702,13 @@ VkResult FrameGenerationPlatform::recreate(SwapChainPtr handle) {
     if (const auto found = impl_->chains.find(handle); found != impl_->chains.end())
         impl_->release_chain(getDevice(), found->second);
     const auto result = Base::recreate(handle);
-    if (const auto found = impl_->chains.find(handle); found != impl_->chains.end()) {
+    if (const auto found = impl_->chains.find(handle); found != impl_->chains.end() && result == VK_SUCCESS) {
         found->second.bundle = Base::getSwapChainBundle(handle);
         found->second.broken = false;
         found->second.last_real_present = {};
+        impl_->unblock_after_recreation();
+    } else if (found != impl_->chains.end()) {
+        impl_->break_chain(found->second, "Native swapchain recreation failed: VkResult " + std::to_string(result));
     }
     impl_->event(FrameGenerationPresentEventKind::HistoryInvalidated, 0, result,
         "Native swapchain recreation invalidated generated presentation history");

@@ -2793,6 +2793,25 @@ bool FilamentBackend::debug_frame_generation_out_of_date_once() {
 #endif
     return false;
 }
+bool FilamentBackend::debug_frame_generation_work_failure_once() {
+#if HEAVEN_HAS_FSR3
+    if (frame_generation_platform_ && frame_generation_) {
+        frame_generation_platform_->debug_generated_work_failure_once();
+        return true;
+    }
+#endif
+    return false;
+}
+uint64_t FilamentBackend::debug_frame_generation_work_failure_source() const {
+#if HEAVEN_HAS_FSR3
+    if (frame_generation_platform_)
+        return frame_generation_platform_->debug_generated_work_failure_source();
+#endif
+    return 0;
+}
+uint64_t FilamentBackend::debug_frame_generation_provider_attempts() const {
+    return frame_generation_ ? frame_generation_->debug_provider_record_attempts() : 0;
+}
 #endif
 
 Result<void> FilamentBackend::update_mesh_vertices(uint64_t surface_handle,

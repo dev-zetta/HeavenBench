@@ -239,6 +239,8 @@ void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info,
                     ? grouped_count(counts.real_presented_frames) : std::string{"Unavailable"}},
                 std::pair{"Gen. submitted", counts.presentation_submissions_available
                     ? grouped_count(counts.generated_presented_frames) : std::string{"Unavailable"}},
+                std::pair{"Failed submits", counts.presentation_submissions_available
+                    ? grouped_count(counts.failed_presentations) : std::string{"Unavailable"}},
                 std::pair{"SDK submitted", fg.sdk_presented_frames
                     ? grouped_count(*fg.sdk_presented_frames) : std::string{"Unavailable"}},
                 std::pair{"Display confirmed", counts.presentation_feedback_available

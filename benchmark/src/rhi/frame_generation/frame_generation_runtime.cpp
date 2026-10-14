@@ -68,6 +68,9 @@ struct FrameGenerationRuntime::Native {
     uint64_t previous_pacing_wait = 0;
     double unpaced_interval_ns = 16'666'667.0;
     std::atomic<bool> failed{false};
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+    std::atomic<uint64_t> provider_record_attempts{0};
+#endif
     FrameGenerationHistoryLatch history;
     ~Native() { destroy(); }
     void destroy() {
@@ -191,6 +194,14 @@ struct FrameGenerationRuntime::Native {
           source=owner.state_.record_real_frame(true); }
         owner.platform_->arm_real(source);
         try {
+            // A frontend packet may already be queued when native presentation
+            // breaks. Keep its real submission while refusing further SDK work.
+            if(owner.platform_->generation_blocked()) {
+                const auto presentation=owner.platform_->presentation_status();
+                std::scoped_lock lock(owner.mutex_);
+                owner.state_.set_capability({FrameGenerationMode::Fsr3,false,presentation.reason});
+                return;
+            }
             if(self.failed.load()) return;
             if (!native_context) throw std::runtime_error("Native Vulkan command resources unavailable");
             const auto& context=*static_cast<const filament::backend::VulkanCommandContext*>(native_context);
@@ -226,6 +237,9 @@ struct FrameGenerationRuntime::Native {
             frame.hudless_color=input(0); frame.depth=input(1); frame.motion_vectors=input(2);
             frame.generated_output={self.generated,VK_FORMAT_R8G8B8A8_UNORM,self.size,
                 VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_LAYOUT_GENERAL};
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+            self.provider_record_attempts.fetch_add(1, std::memory_order_release);
+#endif
             auto produced=self.provider->record(frame);
             if (!produced) throw std::runtime_error(produced.error());
             { std::scoped_lock lock(owner.mutex_);
@@ -406,10 +420,18 @@ FrameGenerationStatus FrameGenerationRuntime::status() {
 #endif
     auto snapshot=state_.status();
 #if HEAVEN_HAS_FSR3
-    if(platform_ && snapshot.capability.mode==FrameGenerationMode::Fsr3) {
-        snapshot.counters.generated_frames_available=snapshot.capability.available;
-        snapshot.counters.presentation_submissions_available=
-            native_tracking_complete_ && platform_->presentation_status().dropped_events==0;
+    const bool presentation_blocked=platform_ && platform_->generation_blocked();
+    if(platform_ && (snapshot.capability.mode==FrameGenerationMode::Fsr3 || presentation_blocked)) {
+        const auto presentation=platform_->presentation_status();
+        if(snapshot.requested==FrameGenerationMode::Fsr3 && presentation_blocked) {
+            state_.set_capability({FrameGenerationMode::Fsr3,false,presentation.reason});
+            snapshot=state_.status();
+        }
+        if(snapshot.capability.mode==FrameGenerationMode::Fsr3) {
+            snapshot.counters.generated_frames_available=snapshot.capability.available;
+            snapshot.counters.presentation_submissions_available=
+                native_tracking_complete_ && presentation.dropped_events==0;
+        }
     }
 #endif
 #if HEAVEN_HAS_DLSS
@@ -420,6 +442,14 @@ FrameGenerationStatus FrameGenerationRuntime::status() {
 #endif
     return snapshot;
 }
+#if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
+uint64_t FrameGenerationRuntime::debug_provider_record_attempts() const noexcept {
+#if HEAVEN_HAS_FSR3
+    if (native_) return native_->provider_record_attempts.load(std::memory_order_acquire);
+#endif
+    return 0;
+}
+#endif
 bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe_unused]] TextureStore& textures,
     [[maybe_unused]] std::span<const Instance> instances, [[maybe_unused]] std::span<const GpuMesh> gpu_meshes,
     [[maybe_unused]] const MaterialResolver& resolver, [[maybe_unused]] const AppConfig& config,
@@ -432,6 +462,8 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
     const auto requested=status().requested;
     bool usable=false;
 #if HEAVEN_HAS_FSR3
+    if(requested==FrameGenerationMode::Fsr3 && platform_ && platform_->generation_blocked())
+        return unavailable(platform_->presentation_status().reason);
     usable=requested==FrameGenerationMode::Fsr3 && platform_ && !native_->failed.load();
 #endif
 #if HEAVEN_HAS_DLSS

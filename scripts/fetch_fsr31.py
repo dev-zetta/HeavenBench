@@ -3,13 +3,17 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePath
 import tarfile
 import urllib.request
 
 COMMIT = "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55"
 SHA256 = "eff7e8e371b2d461b980f8c75583133f771e940ed7aa00779dbbaf6dd2f88746"
 URL = f"https://codeload.github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tar.gz/{COMMIT}"
+
+
+def manifest_key(path: PurePath) -> str:
+    return path.as_posix()
 
 
 def main():
@@ -23,7 +27,8 @@ def main():
         temporary = archive.with_suffix(".download")
         urllib.request.urlretrieve(URL, temporary)
         temporary.replace(archive)
-    digest = hashlib.file_digest(archive.open("rb"), "sha256").hexdigest()
+    with archive.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != SHA256:
         raise SystemExit(f"FSR SDK archive checksum mismatch: {digest}")
     marker = a.output / "heavenbench-source.json"
@@ -42,7 +47,7 @@ def main():
                 actual = hashlib.file_digest(stream, "sha256").hexdigest()
             if actual != expected:
                 raise SystemExit(f"Modified SDK source: {relative}")
-        actual_files = {str(path.relative_to(a.output)) for path in a.output.rglob("*") if path.is_file() and path != marker}
+        actual_files = {manifest_key(path.relative_to(a.output)) for path in a.output.rglob("*") if path.is_file() and path != marker}
         if actual_files != set(expected_files):
             raise SystemExit("Unexpected files in pinned SDK source directory")
         print(a.output.resolve())
@@ -53,6 +58,8 @@ def main():
     prefix = f"FidelityFX-SDK-{COMMIT}/"
     with tarfile.open(archive) as tar:
         for member in tar:
+            if member.name == prefix[:-1] and member.isdir():
+                continue
             if not member.name.startswith(prefix):
                 raise SystemExit("Unexpected SDK archive prefix")
             relative = member.name[len(prefix):]
@@ -68,7 +75,7 @@ def main():
     for path in sorted(a.output.rglob("*")):
         if path.is_file():
             with path.open("rb") as stream:
-                file_hashes[str(path.relative_to(a.output))] = hashlib.file_digest(stream, "sha256").hexdigest()
+                file_hashes[manifest_key(path.relative_to(a.output))] = hashlib.file_digest(stream, "sha256").hexdigest()
     marker.write_text(json.dumps({"sdk_version": "1.1.4", "fsr_version": "3.1.4",
         "commit": COMMIT, "archive_sha256": SHA256, "url": URL,
         "files_sha256": file_hashes}, indent=2) + "\n")

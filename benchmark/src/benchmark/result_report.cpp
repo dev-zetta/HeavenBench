@@ -591,6 +591,7 @@ footer { margin:42px 10px 10px; text-align:center; }
               std::pair{"Native presentation submissions", "presentation_submissions"},
               std::pair{"Real native submissions", "real_presentation_submissions"},
               std::pair{"Generated native submissions", "generated_presentation_submissions"},
+              std::pair{"Failed native submissions", "failed_presentations"},
               std::pair{"SDK native submissions (combined)", "sdk_presentation_submissions"}})
             append_detail_row(out, label, fg.at(key).is_null() ? "Unavailable" : std::to_string(fg.at(key).get<uint64_t>()));
         if (!fg.at("sdk_presentation_submissions").is_null())
