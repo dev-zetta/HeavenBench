@@ -2,6 +2,7 @@
 // with dlss_provider.cpp and dlss_runtime_loader.cpp, defining
 // HEAVEN_DLSS_CONTRACT_TEST_MAIN, for a standalone host acceptance executable.
 #include "dlss_input_validation.h"
+#include "dlss_device_creation.h"
 
 #include <cstddef>
 #include <cmath>
@@ -69,12 +70,128 @@ bool check(bool condition, const char* message) {
     return condition;
 }
 
+struct DeviceCreationHarness {
+    VkInstance instance = handle<VkInstance>(1);
+    VkPhysicalDevice selected = handle<VkPhysicalDevice>(2);
+    VkPhysicalDevice other = handle<VkPhysicalDevice>(3);
+    VkDevice device = handle<VkDevice>(4);
+    VkDeviceCreateInfo info{};
+    VkResult probe_result = VK_SUCCESS;
+    VkResult fetch_result = VK_SUCCESS;
+    VkResult create_result = VK_SUCCESS;
+    uint32_t reported_count = 2;
+    unsigned incomplete_probes = 0, incomplete_fetches = 0;
+    unsigned probes = 0, fetches = 0, creates = 0;
+    bool include_selected = true, parent_registered = false, arguments_match = true;
+};
+DeviceCreationHarness* creation_harness = nullptr;
+
+VKAPI_ATTR VkResult VKAPI_CALL enumerate_for_creation(VkInstance instance,
+        uint32_t* count, VkPhysicalDevice* devices) {
+    auto& h = *creation_harness;
+    h.arguments_match &= instance == h.instance && count != nullptr;
+    if (!devices) {
+        ++h.probes;
+        *count = h.reported_count;
+        if (h.incomplete_probes) { --h.incomplete_probes; return VK_INCOMPLETE; }
+        return h.probe_result;
+    }
+    ++h.fetches;
+    h.arguments_match &= *count == 2;
+    devices[0] = h.other;
+    devices[1] = h.include_selected ? h.selected : h.other;
+    h.parent_registered = h.include_selected;
+    *count = 2;
+    if (h.incomplete_fetches) { --h.incomplete_fetches; return VK_INCOMPLETE; }
+    return h.fetch_result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL create_after_enumeration(VkPhysicalDevice physical,
+        const VkDeviceCreateInfo* info, const VkAllocationCallbacks* allocator, VkDevice* device) {
+    auto& h = *creation_harness;
+    ++h.creates;
+    h.arguments_match &= physical == h.selected && info == &h.info && allocator == nullptr;
+    // This is the exact parent-map dependency in pinned wrapper.cpp:992/1003.
+    // Count-only enumeration does not register the selected physical device.
+    if (!h.parent_registered) return VK_ERROR_INITIALIZATION_FAILED;
+    if (h.create_result == VK_SUCCESS) *device = h.device;
+    return h.create_result;
+}
+
+bool run_dlss_device_creation_tests() {
+    const auto invoke = [](DeviceCreationHarness& h, VkDevice& device) {
+        creation_harness = &h;
+        return dlss_device_creation_detail::create_device(h.instance, h.selected, h.info,
+            enumerate_for_creation, create_after_enumeration, &device);
+    };
+    bool success = true;
+    {
+        DeviceCreationHarness h;
+        VkDevice device = VK_NULL_HANDLE;
+        success &= check(invoke(h, device) == VK_SUCCESS && device == h.device &&
+            h.probes == 1 && h.fetches == 1 && h.creates == 1 && h.arguments_match,
+            "creation proxy did not establish the selected physical-device parent before create");
+    }
+    for (const bool incomplete_probe : {false, true}) {
+        DeviceCreationHarness h;
+        if (incomplete_probe) h.incomplete_probes = 1; else h.incomplete_fetches = 1;
+        VkDevice device = VK_NULL_HANDLE;
+        success &= check(invoke(h, device) == VK_SUCCESS && device == h.device &&
+            h.probes == 2 && h.fetches == (incomplete_probe ? 1u : 2u) &&
+            h.creates == 1 && h.arguments_match, "incomplete enumeration did not retry before creation");
+    }
+    for (const bool incomplete_probe : {false, true}) {
+        DeviceCreationHarness h;
+        if (incomplete_probe) h.incomplete_probes = 8; else h.incomplete_fetches = 8;
+        VkDevice device = h.device;
+        success &= check(invoke(h, device) == VK_INCOMPLETE && device == VK_NULL_HANDLE &&
+            h.probes == 4 && h.fetches == (incomplete_probe ? 0u : 4u) &&
+            h.creates == 0, "unstable enumeration escaped the bounded retry limit");
+    }
+    for (const bool probe_failure : {false, true}) {
+        DeviceCreationHarness h;
+        if (probe_failure) h.probe_result = VK_ERROR_INITIALIZATION_FAILED;
+        else h.fetch_result = VK_ERROR_DEVICE_LOST;
+        const auto expected = probe_failure ? h.probe_result : h.fetch_result;
+        VkDevice device = h.device;
+        success &= check(invoke(h, device) == expected && device == VK_NULL_HANDLE &&
+            h.probes == 1 && h.fetches == (probe_failure ? 0u : 1u) && h.creates == 0,
+            "enumeration failure still invoked create or lost the original error");
+    }
+    {
+        DeviceCreationHarness h;
+        h.include_selected = false;
+        VkDevice device = h.device;
+        success &= check(invoke(h, device) == VK_ERROR_INITIALIZATION_FAILED &&
+            device == VK_NULL_HANDLE && h.creates == 0,
+            "selected physical device absent from SDK enumeration was still created");
+    }
+    for (const uint32_t count : {0u, 4097u}) {
+        DeviceCreationHarness h;
+        h.reported_count = count;
+        VkDevice device = h.device;
+        success &= check(invoke(h, device) == VK_ERROR_INITIALIZATION_FAILED &&
+            device == VK_NULL_HANDLE && h.fetches == 0 && h.creates == 0,
+            "invalid enumeration count allocated or invoked create");
+    }
+    {
+        DeviceCreationHarness h;
+        h.create_result = VK_ERROR_FEATURE_NOT_PRESENT;
+        VkDevice device = h.device;
+        success &= check(invoke(h, device) == h.create_result && device == VK_NULL_HANDLE &&
+            h.creates == 1 && h.arguments_match, "creation proxy failure was not preserved");
+    }
+    creation_harness = nullptr;
+    return success;
+}
+
 bool run_dlss_contract_tests() {
     const auto valid = valid_inputs();
     const auto accepts = [](const DlssPresentInputs& input) {
         return validate_dlss_present_inputs(input, 64, 1).empty();
     };
-    bool success = check(accepts(valid), "complete SDR temporal input was rejected");
+    bool success = run_dlss_device_creation_tests();
+    success &= check(accepts(valid), "complete SDR temporal input was rejected");
     auto reject_change = [&](auto change, const char* label) {
         auto input = valid;
         change(input);
@@ -138,16 +255,18 @@ bool run_dlss_contract_tests() {
     // These lifecycle checks are valid in every build. No bootstrap or native
     // handle is supplied, so an unavailable adapter must remain inactive.
     DlssProvider provider;
-    DlssFrameToken token{handle<void*>(4), 7, 7};
+    DlssFrameToken token{handle<void*>(4), 7, 7, {}};
     success &= check(!provider.status().available && !provider.status().enabled,
         "new provider claims generation is active");
-    success &= check(!provider.begin_frame(8, token) && !token.native_token,
+    success &= check(!provider.begin_frame(token) && !token.native_token,
         "uninitialized provider created a usable frame token");
     success &= check(!provider.bind_device({}) && !provider.prepare_present(valid),
         "uninitialized provider accepted native device or presentation");
     success &= check(provider.instance_hook(VK_NULL_HANDLE, "vkCreateInstance") == nullptr &&
         provider.device_hook(VK_NULL_HANDLE, "vkCreateDevice") == nullptr,
         "manual adapter intercepted native creation without owner requirements");
+    success &= check(provider.enumerate_physical_devices_proxy(VK_NULL_HANDLE) == nullptr,
+        "inactive creation path exposed an SDK physical-device enumeration proxy");
     success &= check(provider.suspend() && provider.suspend(), "inactive suspension was not idempotent");
     provider.shutdown_after_drain();
     provider.shutdown_after_drain();

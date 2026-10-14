@@ -12,10 +12,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <utility>
 #include <atomic>
 #include <limits>
 #include "rhi/frame_generation/dlss_runtime_bridge.h"
+#include "rhi/frame_generation/dlss_status.h"
 #if HEAVEN_HAS_DLSS
 #include "rhi/frame_generation/dlss_platform.h"
 #include <backend/VulkanCommandContext.h>
@@ -321,9 +323,19 @@ void FrameGenerationRuntime::drain() {
 #endif
 #if HEAVEN_HAS_DLSS
     if(dlss_) core_.renderer->nativeCommand(nullptr,nullptr,nullptr,nullptr,
-        [](void* user,const void*) noexcept { static_cast<DlssRuntimeBridge*>(user)->suspend_generation(); },dlss_.get());
+        [](void* user,const void*) noexcept {
+            const auto result=static_cast<DlssRuntimeBridge*>(user)->drain_generation();
+            if(result!=VK_SUCCESS) {
+                // Retiring tagged images after a failed SDK drain is unsafe.
+                std::fprintf(stderr,"DLSS device/presentation drain failed: %d\n",static_cast<int>(result));
+                std::terminate();
+            }
+        },dlss_.get());
 #endif
     core_.engine->flushAndWait();
+    // Prospective tickets may have sampled input without an accepted render.
+    // Retire them only after native callbacks and SDK presentation are drained.
+    dlss_frame_.cancel();
 }
 void FrameGenerationRuntime::request(FrameGenerationMode mode) {
     drain();
@@ -356,25 +368,20 @@ void FrameGenerationRuntime::request(FrameGenerationMode mode) {
     reset_=true; previous_source_={}; previous_camera_.reset();
 }
 void FrameGenerationRuntime::begin_application_frame([[maybe_unused]] uint64_t application_frame) {
-    dlss_token_={};
 #if HEAVEN_HAS_DLSS
     if(dlss_ && status().requested==FrameGenerationMode::Dlss)
-        dlss_token_=dlss_->begin_frame(application_frame);
+        dlss_frame_.begin([this] { return dlss_->begin_frame(); });
 #endif
 }
 void FrameGenerationRuntime::end_simulation() {
-#if HEAVEN_HAS_DLSS
-    if(dlss_ && dlss_token_.native_token) {
-        dlss_->mark(dlss_token_,DlssLatencyMarker::SimulationEnd);
-        dlss_->mark(dlss_token_,DlssLatencyMarker::RenderSubmitStart);
-    }
-#endif
+    // A rejected beginFrame retries the same logical source. Close simulation
+    // and begin submission only when render_temporal enters an accepted frame.
 }
 void FrameGenerationRuntime::native_window_message([[maybe_unused]] uint32_t message) {
 #if HEAVEN_HAS_DLSS
-    if(dlss_platform_ && dlss_ && dlss_token_.native_token &&
+    if(dlss_platform_ && dlss_ && dlss_frame_.current().native_token &&
        message==dlss_platform_->latency_ping_message())
-        dlss_->mark(dlss_token_,DlssLatencyMarker::LatencyPing);
+        dlss_->mark(dlss_frame_.current(),DlssLatencyMarker::LatencyPing);
 #endif
 }
 FrameGenerationStatus FrameGenerationRuntime::status() {
@@ -408,9 +415,7 @@ FrameGenerationStatus FrameGenerationRuntime::status() {
 #if HEAVEN_HAS_DLSS
     if(dlss_platform_ && snapshot.requested==FrameGenerationMode::Dlss) {
         const auto provider=dlss_platform_->provider_status();
-        snapshot.counters.generated_frames_available=false;
-        snapshot.counters.presentation_submissions_available=false;
-        if(provider.initialized) snapshot.sdk_presented_frames=provider.total_sdk_presented_frames;
+        apply_dlss_provider_status(state_,snapshot,provider);
     }
 #endif
     return snapshot;
@@ -431,7 +436,7 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
 #endif
 #if HEAVEN_HAS_DLSS
     usable=usable || (requested==FrameGenerationMode::Dlss && dlss_ &&
-        dlss_token_.native_token && dlss_platform_->provider_status().available);
+        dlss_frame_.current().native_token && dlss_platform_->provider_status().available);
 #endif
     if(!usable) return false;
     if(previous_camera_) {
@@ -476,6 +481,11 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
         native_=std::make_unique<Native>(*this);
 #endif
         invalidate_history(); width_=width; height_=height;
+#if HEAVEN_HAS_DLSS
+        // drain canceled the input-time ticket. Acquire and sleep for the next
+        // logical source before its input; never replace that ticket here.
+        if(requested==FrameGenerationMode::Dlss) return false;
+#endif
     }
     if(!motion_) motion_=filament::Material::Builder().package(k_heaven_motion_filamat,k_heaven_motion_filamat_size).build(*core_.engine);
     if(!masked_) masked_=filament::Material::Builder().package(k_heaven_motion_masked_filamat,k_heaven_motion_masked_filamat_size).build(*core_.engine);
@@ -528,6 +538,12 @@ bool FrameGenerationRuntime::unavailable(std::string reason) {
 filament::RenderTarget* FrameGenerationRuntime::scene_target() const { return active_?output_->scene_rt():nullptr; }
 void FrameGenerationRuntime::render_temporal() {
     if(!active_) return;
+#if HEAVEN_HAS_DLSS
+    if(dlss_ && status().requested==FrameGenerationMode::Dlss)
+        dlss_frame_.begin_submission([this](const DlssFrameToken& token,DlssLatencyMarker marker) {
+            dlss_->mark(token,marker);
+        });
+#endif
     core_.renderer->render(temporal_->view()); output_->render_extract();
 }
 void FrameGenerationRuntime::render_composite() { if(active_) output_->render_composite(); }
@@ -536,7 +552,7 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
 #if HEAVEN_HAS_DLSS
     if(active_ && status().requested==FrameGenerationMode::Dlss && dlss_) {
         DlssRuntimeFrame frame;
-        frame.token=dlss_token_; frame.projection=projection_;
+        frame.token=dlss_frame_.current(); frame.projection=projection_;
         frame.current_view_projection=current_clip_;
         frame.previous_view_projection=reset_?current_clip_:previous_clip_;
         frame.near_plane=static_cast<float>(core_.camera->getNear());
@@ -567,6 +583,9 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
                     owner.state_.set_capability({FrameGenerationMode::Dlss,false,
                         "Native Vulkan temporal resources unavailable"}); }
             },packet);
+        // The packet owns the reservation until the platform's pending/tag
+        // owners take over; rejected submissions never release this ticket.
+        dlss_frame_.accept();
         previous_clip_=current_clip_; previous_camera_=camera;
         previous_source_=std::chrono::steady_clock::now();
         temporal_->commit_accepted(); if(grass_) grass_->commit_accepted();
@@ -574,6 +593,9 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
         return;
     }
 #endif
+    // An accepted ordinary fallback has no DLSS native packet. Cancel its
+    // prospective simulation interval instead of reusing it for another source.
+    dlss_frame_.cancel();
 #if HEAVEN_HAS_FSR3
     if(active_) {
         const auto now=std::chrono::steady_clock::now();

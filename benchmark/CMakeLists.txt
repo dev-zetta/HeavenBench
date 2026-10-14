@@ -939,7 +939,8 @@ target_compile_definitions(heaven_dlss_contract_tests PRIVATE HEAVEN_DLSS_CONTRA
 target_link_libraries(heaven_dlss_contract_tests PRIVATE heaven_dlss_provider)
 add_test(NAME heaven_dlss_contract_tests COMMAND heaven_dlss_contract_tests)
 add_executable(heaven_dlss_runtime_bridge_tests
-    src/rhi/frame_generation/dlss_runtime_bridge_tests.cpp)
+    src/rhi/frame_generation/dlss_runtime_bridge_tests.cpp
+    src/engine/frame_generation.cpp)
 heaven_configure_owned_cpp_target(heaven_dlss_runtime_bridge_tests)
 target_compile_definitions(heaven_dlss_runtime_bridge_tests PRIVATE
     HEAVEN_DLSS_RUNTIME_INPUT_TEST_MAIN)
@@ -952,6 +953,11 @@ target_include_directories(heaven_dlss_runtime_bridge_tests SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/utils/include")
 target_link_libraries(heaven_dlss_runtime_bridge_tests PRIVATE ${HEAVEN_VULKAN_LINK})
 add_test(NAME heaven_dlss_runtime_bridge_tests COMMAND heaven_dlss_runtime_bridge_tests)
+add_executable(heaven_dlss_frame_token_tests
+    src/rhi/frame_generation/dlss_frame_lifecycle_tests.cpp)
+heaven_configure_owned_cpp_target(heaven_dlss_frame_token_tests)
+target_include_directories(heaven_dlss_frame_token_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(NAME heaven_dlss_frame_token_tests COMMAND heaven_dlss_frame_token_tests)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenTemporalSceneTest.cmake)
 add_executable(heaven_profiler_trace_tests
     ../lib/filament/filament/backend/test/test_ProfilerTrace.cpp)
@@ -963,6 +969,9 @@ add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME heaven_dlss_lifecycle_contract
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tests/dlss_lifecycle_contract_test.py)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
         # CPU-only controller checks; the real GPU pause fixture stays opt-in.
         add_test(NAME heaven_frame_generation_pause_controller
@@ -1003,6 +1012,12 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_dlss_frame_token_negative_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/dlss_frame_lifecycle_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/dlss-frame-token-contract")
+        set_tests_properties(heaven_dlss_frame_token_negative_contract PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_filament_depth_program_lifetime
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/filament_depth_program_lifetime_test.py
@@ -1051,7 +1066,8 @@ if(TARGET heaven_benchmark_tests)
         heaven_filament_ssr_variant_tests
         heaven_vulkan_pipeline_lifetime_tests
         heaven_dlss_contract_tests
-        heaven_dlss_runtime_bridge_tests)
+        heaven_dlss_runtime_bridge_tests
+        heaven_dlss_frame_token_tests)
     if(HEAVEN_ENABLE_FSR3)
         list(APPEND heaven_host_contract_targets
             heaven_frame_generation_capture_contract_tests

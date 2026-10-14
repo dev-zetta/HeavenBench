@@ -87,7 +87,8 @@ bool frame_generation_configuration() {
                    config.frame_generation == mode, "catalog cannot request a supported mode identity")) return false;
         const auto serialized = serialize_config(config);
         const auto json = nlohmann::json::parse(serialized);
-        if (!check(json.at("frame_generation") == id, "persisted mode is not canonical")) return false;
+        if (!check(std::string_view{json.at("frame_generation").get_ref<const std::string&>()} == id,
+                   "persisted mode is not canonical")) return false;
     }
     for (const auto invalid : {"", "auto", "fsr", "FSR3", "dlss4", "off-extra"}) {
         const auto parsed = parse_cli(std::array<std::string_view, 5>{

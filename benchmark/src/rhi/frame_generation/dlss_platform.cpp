@@ -1,12 +1,20 @@
 #include "dlss_platform.h"
+#include "dlss_device_creation.h"
 
 #include <atomic>
+#include <cstdio>
+#include <exception>
 #include <mutex>
 
 namespace heaven {
 namespace {
 using Base = DlssNativePlatform;
 using namespace bluevk;
+
+[[noreturn]] void fail_lifecycle_drain(const char* operation, VkResult result) {
+    std::fprintf(stderr, "DLSS %s drain failed: %d\n", operation, static_cast<int>(result));
+    std::terminate();
+}
 }
 
 struct DlssPlatform::Impl {
@@ -20,6 +28,8 @@ struct DlssPlatform::Impl {
     bool bootstrapped = false;
     bool creation_enabled = false;
     bool creation_failed = false;
+    bool sdk_device_created = false;
+    PFN_vkDeviceWaitIdle sdk_device_idle = nullptr;
     VkResult creation_result = VK_SUCCESS;
     std::atomic<bool> bound{false};
 #ifdef _WIN32
@@ -44,6 +54,7 @@ struct DlssPlatform::Impl {
         proxy.acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(provider.device_hook(device, "vkAcquireNextImageKHR"));
         proxy.present = reinterpret_cast<PFN_vkQueuePresentKHR>(provider.device_hook(device, "vkQueuePresentKHR"));
         proxy.device_idle = reinterpret_cast<PFN_vkDeviceWaitIdle>(provider.device_hook(device, "vkDeviceWaitIdle"));
+        sdk_device_idle = proxy.device_idle;
         if (!proxy.create_surface || !proxy.destroy_surface || !proxy.create_swapchain ||
                 !proxy.destroy_swapchain || !proxy.images || !proxy.acquire ||
                 !proxy.present || !proxy.device_idle) return false;
@@ -79,6 +90,20 @@ struct DlssPlatform::Impl {
         hooks_installed = false;
     }
 #endif
+
+    VkResult wait_device_idle(VkDevice device) {
+        if (!device) return VK_SUCCESS;
+        if (sdk_device_created) {
+            // Partial hook installation still leaves an SDK-created device.
+            // Resolve its idle hook without dispatching a native fallback
+            // device through Streamline's private registration tables.
+            if (!sdk_device_idle) sdk_device_idle = reinterpret_cast<PFN_vkDeviceWaitIdle>(
+                provider.device_hook(device, "vkDeviceWaitIdle"));
+            if (!sdk_device_idle) return VK_ERROR_INITIALIZATION_FAILED;
+            return sdk_device_idle(device);
+        }
+        return bluevk::vkDeviceWaitIdle(device);
+    }
 
     void publish(std::string reason = {}) {
         auto state = provider.status();
@@ -128,9 +153,14 @@ VkInstance DlssPlatform::createVkInstance(const VkInstanceCreateInfo& info) noex
 VkDevice DlssPlatform::createVkDevice(const VkDeviceCreateInfo& info) noexcept {
     if (!impl_->creation_enabled) return Base::createVkDevice(info);
     const auto create = impl_->provider.create_device_proxy(getInstance());
+    const auto enumerate = impl_->provider.enumerate_physical_devices_proxy(getInstance());
     VkDevice device = VK_NULL_HANDLE;
-    const auto result = create ? create(getPhysicalDevice(), &info, nullptr, &device) : VK_ERROR_INITIALIZATION_FAILED;
-    if (result == VK_SUCCESS && device) return device;
+    const auto result = dlss_device_creation_detail::create_device(
+        getInstance(), getPhysicalDevice(), info, enumerate, create, &device);
+    if (result == VK_SUCCESS && device) {
+        impl_->sdk_device_created = true;
+        return device;
+    }
     impl_->creation_failed = true;
     impl_->creation_enabled = false;
     impl_->creation_result = result == VK_SUCCESS ? VK_ERROR_INITIALIZATION_FAILED : result;
@@ -149,7 +179,6 @@ filament::backend::Driver* DlssPlatform::createDriver(void* sharedContext,
         impl_->publish();
         return driver;
     }
-    impl_->restore();
 #endif
     std::string reason;
     if (sharedContext) reason = "DLSS cannot prove precreation requirements for an external shared Vulkan context";
@@ -158,15 +187,21 @@ filament::backend::Driver* DlssPlatform::createDriver(void* sharedContext,
     else reason = impl_->provider.status().reason;
     // No surface or swapchain has been created, so unsuccessful optional
     // bootstrap can retire safely and leave the ordinary native engine usable.
-    if (getDevice()) vkDeviceWaitIdle(getDevice());
+    const auto drained = drain_generation();
+    if (drained != VK_SUCCESS) fail_lifecycle_drain("initialization fallback", drained);
     impl_->provider.shutdown_after_drain();
+#ifdef _WIN32
+    impl_->restore();
+#endif
+    impl_->sdk_device_created = false;
+    impl_->sdk_device_idle = nullptr;
     impl_->publish(std::move(reason));
     return driver;
 }
 
-bool DlssPlatform::begin_frame(uint64_t application_frame, DlssFrameToken& token) {
+bool DlssPlatform::begin_frame(DlssFrameToken& token) {
     if (!impl_->bound.load(std::memory_order_acquire)) { token = {}; return false; }
-    return impl_->provider.begin_frame(application_frame, token);
+    return impl_->provider.begin_frame(token);
 }
 bool DlssPlatform::mark(const DlssFrameToken& token, DlssLatencyMarker marker) const {
     return impl_->bound.load(std::memory_order_acquire) && impl_->provider.mark(token, marker);
@@ -185,6 +220,10 @@ void DlssPlatform::suspend_generation() {
     impl_->provider.suspend();
     impl_->pending = {};
     impl_->publish();
+}
+VkResult DlssPlatform::drain_generation() {
+    suspend_generation();
+    return impl_->wait_device_idle(getDevice());
 }
 DlssProviderStatus DlssPlatform::provider_status() const {
     std::scoped_lock lock(impl_->mutex);
@@ -214,14 +253,20 @@ VkResult DlssPlatform::present(SwapChainPtr handle, uint32_t index, VkSemaphore 
     else impl_->provider.suspend(); // Never reuse stale constants or temporal images.
     const auto result = Base::present(handle, index, finished);
     if (token.native_token) impl_->provider.mark(token, DlssLatencyMarker::PresentEnd);
+    // PresentEnd is the last native dereference for this submission. Its local
+    // ticket still pins the slot while the provider releases its tag owner.
+    if (token.native_token) {
+        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) impl_->provider.finish_present(token);
+        else impl_->provider.suspend(&token);
+    }
     impl_->provider.collect_state();
     impl_->publish();
     return result;
 }
 
 VkResult DlssPlatform::recreate(SwapChainPtr handle) {
-    suspend_generation();
-    if (getDevice()) vkDeviceWaitIdle(getDevice());
+    const auto drained = drain_generation();
+    if (drained != VK_SUCCESS) return drained;
     const auto result = Base::recreate(handle);
     if (handle == impl_->surface_chain) {
         if (result == VK_SUCCESS)
@@ -231,8 +276,8 @@ VkResult DlssPlatform::recreate(SwapChainPtr handle) {
     return result;
 }
 void DlssPlatform::destroy(SwapChainPtr handle) {
-    suspend_generation();
-    if (getDevice()) vkDeviceWaitIdle(getDevice());
+    const auto drained = drain_generation();
+    if (drained != VK_SUCCESS) fail_lifecycle_drain("swapchain destruction", drained);
     Base::destroy(handle);
     if (handle == impl_->surface_chain) {
         impl_->surface_chain = nullptr;
@@ -244,12 +289,14 @@ void DlssPlatform::destroy(SwapChainPtr handle) {
 }
 void DlssPlatform::terminate() {
     impl_->bound.store(false, std::memory_order_release);
-    suspend_generation();
-    if (getDevice()) vkDeviceWaitIdle(getDevice());
+    const auto drained = drain_generation();
+    if (drained != VK_SUCCESS) fail_lifecycle_drain("device termination", drained);
     impl_->provider.shutdown_after_drain();
 #ifdef _WIN32
     impl_->restore();
 #endif
+    impl_->sdk_device_created = false;
+    impl_->sdk_device_idle = nullptr;
     impl_->publish();
     impl_->publish_swapchain({}, false, 0);
     Base::terminate();

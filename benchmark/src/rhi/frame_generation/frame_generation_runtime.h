@@ -63,7 +63,7 @@ private:
     std::unique_ptr<TemporalGrass> grass_;
     std::shared_ptr<FrameGenerationOutput> output_;
     std::unique_ptr<DlssRuntimeBridge> dlss_;
-    DlssFrameToken dlss_token_;
+    DlssProspectiveFrame dlss_frame_;
     std::unique_ptr<Native> native_;
     filament::Material* motion_ = nullptr;
     filament::Material* masked_ = nullptr;

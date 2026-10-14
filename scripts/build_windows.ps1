@@ -9,7 +9,8 @@ param(
     [string]$BuildDir = '',
     [string]$VcpkgRoot = '',
     [ValidateSet('Release', 'Debug')][string]$Configuration = 'Release',
-    [ValidateRange(1, 64)][int]$Jobs = 2
+    [ValidateRange(1, 64)][int]$Jobs = 2,
+    [switch]$ConfigureOnly
 )
 . "$PSScriptRoot/windows_common.ps1"
 $repoRoot = Split-Path $PSScriptRoot -Parent
@@ -72,6 +73,10 @@ Invoke-Checked cmake.exe (@('-S', "$repoRoot/benchmark", '-B', $BuildDir) + $com
     "-DVulkan_INCLUDE_DIR=$triplet/include", "-DVulkan_LIBRARY=$triplet/lib/vulkan-1.lib",
     '-DFILAMENT_WINDOWS_CI_BUILD=ON'
 ))
+if ($ConfigureOnly) {
+    Write-Host "Windows configure complete: $BuildDir"
+    return
+}
 Invoke-Checked cmake.exe @('--build', $BuildDir, '--parallel', "$Jobs", '--target',
     'heaven_benchmark', 'heaven_asset_packer', 'heaven_benchmark_tests',
     'heaven_profiler_trace_tests', 'heaven_benchmark_smoke')

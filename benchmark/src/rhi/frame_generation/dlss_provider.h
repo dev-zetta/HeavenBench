@@ -1,6 +1,8 @@
 #ifndef HEAVEN_DLSS_PROVIDER_H
 #define HEAVEN_DLSS_PROVIDER_H
 
+#include "dlss_frame_lifecycle.h"
+
 #include <vulkan/vulkan_core.h>
 
 #include <array>
@@ -98,17 +100,6 @@ struct DlssCameraConstants {
     bool motion_jittered = false;
 };
 
-struct DlssFrameToken {
-    void* native_token = nullptr;
-    uint64_t application_frame = 0;
-    uint32_t stream_frame = 0;
-};
-
-enum class DlssLatencyMarker : uint8_t {
-    SimulationStart, SimulationEnd, RenderSubmitStart, RenderSubmitEnd,
-    PresentStart, PresentEnd, TriggerFlash, LatencyPing
-};
-
 struct DlssPresentInputs {
     DlssFrameToken token;
     DlssCameraConstants camera;
@@ -171,7 +162,10 @@ public:
     // Optional SDK creation proxies inject requirements and record SDK queue
     // metadata internally. Use adopt_interposed_device for this route, never
     // combine it with manually injected requirements()/bind_device metadata.
+    // Before device creation, enumerate through the SDK proxy so its physical
+    // device-to-instance map contains the selected device.
     PFN_vkCreateInstance create_instance_proxy() const;
+    PFN_vkEnumeratePhysicalDevices enumerate_physical_devices_proxy(VkInstance instance) const;
     PFN_vkCreateDevice create_device_proxy(VkInstance instance) const;
     static std::span<const char* const> mandatory_instance_hooks() noexcept;
     static std::span<const char* const> mandatory_device_hooks() noexcept;
@@ -184,7 +178,7 @@ public:
     // begin_frame and mark may run on the application/driver threads; use the
     // returned ticket unchanged across them. Sleep occurs before input sampling.
     // Do not call these concurrently with bootstrap/bind/shutdown.
-    bool begin_frame(uint64_t application_frame, DlssFrameToken& token);
+    bool begin_frame(DlssFrameToken& token);
     bool mark(const DlssFrameToken& token, DlssLatencyMarker marker) const;
     uint32_t latency_ping_message() const noexcept;
 
@@ -192,6 +186,9 @@ public:
     // SDK tags borrow images until present finishes consuming them. Default
     // queue blocking is retained; cross-queue reuse is refused by this adapter.
     bool prepare_present(const DlssPresentInputs& inputs);
+    // Driver thread, after PresentEnd. Valid-until-present tags no longer
+    // borrow this ticket, while the caller still retains its own lease.
+    void finish_present(const DlssFrameToken& token);
     bool collect_state();
     bool suspend(const DlssFrameToken* token = nullptr);
     DlssProviderStatus status() const;

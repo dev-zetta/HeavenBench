@@ -2733,26 +2733,27 @@ void FilamentBackend::request_frame_generation(FrameGenerationMode mode) {
     config_.frame_generation=mode;
     if(!core_.engine) return;
     if(!frame_generation_ && mode!=FrameGenerationMode::Off) {
-#if HEAVEN_HAS_FSR3
-        FrameGenerationPlatform* platform=nullptr;
-        if(engine_->getBackend()==filament::Engine::Backend::VULKAN)
-            platform=frame_generation_platform_.get();
-#else
-        constexpr auto platform = nullptr;
-#endif
-#if HEAVEN_HAS_DLSS
-        DlssPlatform* dlss = nullptr;
-        if (engine_->getBackend() == filament::Engine::Backend::VULKAN)
-            dlss = dlss_platform_.get();
-#else
-        constexpr auto dlss = nullptr;
-#endif
         // A Streamline-created device is tied to that provider until backend
         // recreation. Never also interpose the FSR swap chain on its resources.
+        const auto select_fsr_platform = [&]() -> FrameGenerationPlatform* {
 #if HEAVEN_HAS_FSR3
-        if (dlss != nullptr) platform = nullptr;
+            if (engine_->getBackend() != filament::Engine::Backend::VULKAN) return nullptr;
+#if HEAVEN_HAS_DLSS
+            if (dlss_platform_) return nullptr;
 #endif
-        frame_generation_=std::make_unique<FrameGenerationRuntime>(core_,platform,dlss);
+            return frame_generation_platform_.get();
+#else
+            return nullptr;
+#endif
+        };
+        const auto select_dlss_platform = [&]() -> DlssPlatform* {
+#if HEAVEN_HAS_DLSS
+            return engine_->getBackend() == filament::Engine::Backend::VULKAN ? dlss_platform_.get() : nullptr;
+#else
+            return nullptr;
+#endif
+        };
+        frame_generation_=std::make_unique<FrameGenerationRuntime>(core_, select_fsr_platform(), select_dlss_platform());
     }
     if(frame_generation_) frame_generation_->request(mode);
 }

@@ -65,12 +65,16 @@ public:
     void terminate() override;
 
     // begin_frame/mark follow the same threading contract as DlssProvider.
-    bool begin_frame(uint64_t application_frame, DlssFrameToken& token);
+    bool begin_frame(DlssFrameToken& token);
     bool mark(const DlssFrameToken& token, DlssLatencyMarker marker) const;
     uint32_t latency_ping_message() const noexcept;
     // Serialized driver-thread native callback before renderer.endFrame.
     bool prepare_present(const DlssPresentInputs& inputs);
     void suspend_generation();
+    // Serialized driver thread, only before retiring tagged image resources.
+    // The SDK's device-idle proxy drains asynchronous presentation work that
+    // Filament's ordinary graphics-queue wait does not own.
+    [[nodiscard]] VkResult drain_generation();
     // Snapshot is safe for application/UI access while driver callbacks run.
     DlssProviderStatus provider_status() const;
     DlssSwapchainDescription swapchain_description() const;

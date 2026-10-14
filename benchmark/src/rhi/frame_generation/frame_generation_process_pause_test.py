@@ -351,7 +351,11 @@ def main():
     require(sys.platform == "linux", "Process-pause controller requires Linux /proc and signals")
     require(0.5 <= args.hold_seconds <= 3 and 10 <= args.timeout <= 300, "Invalid bounded controller duration")
     if args.self_test:
-        result = self_test(args.work_dir)
+        # CTest reuses its build directory. Preserve each run's evidence while
+        # giving the child controllers fresh logs and pipe paths on every run.
+        directory = args.work_dir / f"self-test-{os.getpid()}-{time.monotonic_ns()}"
+        result = self_test(directory)
+        result["work_dir"] = str(directory)
     else:
         require(args.binary and args.binary.is_file(), "--binary must name the real smoke executable")
         environment = dict(os.environ, HEAVEN_SMOKE="1", HEAVEN_SMOKE_CASE="frame_generation",

@@ -20,10 +20,12 @@ DlssRuntimeBridge::DlssRuntimeBridge(DlssPlatform& platform,
 
 DlssRuntimeBridge::~DlssRuntimeBridge() = default;
 
-DlssFrameToken DlssRuntimeBridge::begin_frame(uint64_t application_frame) {
+DlssFrameToken DlssRuntimeBridge::begin_frame() {
     DlssFrameToken token;
-    if (!platform_.begin_frame(application_frame, token)) return {};
-    if (!platform_.mark(token, DlssLatencyMarker::SimulationStart)) return {};
+    if (!platform_.begin_frame(token)) return {};
+    // Preserve an acquired ticket even when its first marker fails. The
+    // provider's deferred failure then reaches the accepted native callback.
+    platform_.mark(token, DlssLatencyMarker::SimulationStart);
     return token;
 }
 
@@ -33,9 +35,16 @@ bool DlssRuntimeBridge::mark(const DlssFrameToken& token, DlssLatencyMarker mark
 
 void DlssRuntimeBridge::suspend_generation() {
     platform_.suspend_generation();
-    previous_application_frame_.reset();
+    previous_logical_frame_.reset();
     previous_native_callback_ = {};
     swapchain_epoch_ = 0;
+}
+
+VkResult DlssRuntimeBridge::drain_generation() {
+    previous_logical_frame_.reset();
+    previous_native_callback_ = {};
+    swapchain_epoch_ = 0;
+    return platform_.drain_generation();
 }
 
 std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
@@ -78,9 +87,11 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
                 return fail("DLSS temporal inputs unexpectedly alias one another");
     }
 
-    const bool consecutive = previous_application_frame_ &&
-        *previous_application_frame_ != std::numeric_limits<uint64_t>::max() &&
-        frame.token.application_frame == *previous_application_frame_ + 1;
+    // These are prospective rendered-source identities, not main-loop attempt
+    // IDs. Rejected attempts retain the same token and do not break history.
+    const bool consecutive = previous_logical_frame_ &&
+        *previous_logical_frame_ != std::numeric_limits<uint64_t>::max() &&
+        frame.token.application_frame == *previous_logical_frame_ + 1;
     const bool reset = frame.reset || !consecutive || swapchain.epoch != swapchain_epoch_ ||
         frame_generation_callback_gap(previous_native_callback_, callback_time);
     const auto camera_constants = dlss_runtime_detail::camera_constants(
@@ -117,7 +128,7 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
         return fail("DLSS render submission marker failed");
     if (!platform_.prepare_present(inputs))
         return fail(platform_.provider_status().reason);
-    previous_application_frame_ = frame.token.application_frame;
+    previous_logical_frame_ = frame.token.application_frame;
     previous_native_callback_ = callback_time;
     swapchain_epoch_ = swapchain.epoch;
     return {};

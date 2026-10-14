@@ -42,18 +42,19 @@ function Invoke-Checked {
         [IO.Path]::GetFileName($_.command) -eq 'cmake.exe' -and $_.arguments -contains '-S'
     })
     if ($configures.Count -ne 2) { throw 'Renderer and extraction-tools configure commands must both be checked.' }
+    $requiredFlags = @(
+        '-UCMAKE_CXX_FLAGS', '-UCMAKE_C_FLAGS',
+        '-DCMAKE_CXX_FLAGS_INIT=/utf-8 /Zc:__cplusplus /Zc:preprocessor /bigobj',
+        '-DCMAKE_C_FLAGS_INIT=/utf-8',
+        '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl',
+        '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>'
+    )
     foreach ($configure in $configures) {
         $arguments = $configure.arguments
         if (@($arguments | Where-Object { $_ -match '^-DCMAKE_C(X{2})?_FLAGS=' }).Count) {
             throw 'Build helper replaces CMake platform defaults with generic compiler flags.'
         }
-        foreach ($required in @(
-            '-UCMAKE_CXX_FLAGS', '-UCMAKE_C_FLAGS',
-            '-DCMAKE_CXX_FLAGS_INIT=/utf-8 /Zc:__cplusplus /Zc:preprocessor /bigobj',
-            '-DCMAKE_C_FLAGS_INIT=/utf-8',
-            '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl',
-            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>'
-        )) {
+        foreach ($required in $requiredFlags) {
             if ($arguments -notcontains $required) { throw "Missing compiler initialization contract: $required" }
         }
     }
@@ -71,7 +72,24 @@ function Invoke-Checked {
         (Test-Path -LiteralPath (Join-Path $temporary 'build with spaces/resources/assets'))) {
         throw 'Incremental native build did not refresh the existing resource layout.'
     }
-    Write-Host 'Windows build flag fixtures passed: CMake platform defaults and stale-cache reset preserved in both configure commands.'
+    $global:HeavenBuildFlagCalls.Clear()
+    $configureDirectory = Join-Path $temporary 'configure only with spaces'
+    & "$temporary/scripts/build_windows.ps1" -BuildDir $configureDirectory -VcpkgRoot "$temporary/vcpkg" -Jobs 3 -ConfigureOnly
+    $configures = @($global:HeavenBuildFlagCalls | Where-Object {
+        [IO.Path]::GetFileName($_.command) -eq 'cmake.exe' -and $_.arguments -contains '-S'
+    })
+    if ($configures.Count -ne 1 -or $configures[0].arguments -notcontains "$temporary/benchmark") {
+        throw 'Configure-only must configure exactly the renderer through the canonical command.'
+    }
+    foreach ($required in $requiredFlags) {
+        if ($configures[0].arguments -notcontains $required) { throw "Configure-only lost compiler initialization contract: $required" }
+    }
+    if (@($global:HeavenBuildFlagCalls | Where-Object { $_.arguments -contains '--build' }).Count -or
+        (Test-Path -LiteralPath (Join-Path $configureDirectory 'resources')) -or
+        (Test-Path -LiteralPath (Join-Path $configureDirectory 'tools'))) {
+        throw 'Configure-only performed compilation, extraction-tool configuration or resource staging.'
+    }
+    Write-Host 'Windows build flag fixtures passed: canonical compiler defaults, incremental resources and configure-only isolation.'
 } finally {
     foreach ($entry in $savedEnvironment.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')

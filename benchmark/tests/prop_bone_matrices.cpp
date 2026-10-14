@@ -39,6 +39,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <vector>
 
@@ -88,7 +89,7 @@ std::vector<heaven::Bone> gen_bones(int num_bones) {
     std::vector<heaven::Bone> bones(static_cast<std::size_t>(num_bones));
     bones[0].parent = -1;
     for (int b = 1; b < num_bones; ++b) {
-        bones[static_cast<std::size_t>(b)].parent = *rc::gen::inRange(-1, b - 1);
+        bones[static_cast<std::size_t>(b)].parent = *rc::gen::inRange(-1, b);
     }
     return bones;
 }
@@ -126,7 +127,7 @@ heaven::SkinnedVertex gen_vertex(int num_bones) {
     for (int w = 0; w < 4; ++w) {
         const bool active = (w == 0) || (*rc::gen::inRange(0, 2) == 0);
         if (active) {
-            sv.bone_indices[w] = *rc::gen::inRange(0, num_bones - 1);
+            sv.bone_indices[w] = *rc::gen::inRange(0, num_bones);
             sv.bone_weights[w] =
                 static_cast<float>(*rc::gen::inRange(1, 100)) * 0.01f;
         } else {
@@ -163,6 +164,54 @@ bool close(const glm::vec3& a, const glm::vec3& b) {
     for (int i = 0; i < 3; ++i) {
         const float tol = 1e-3f + 1e-3f * std::max(std::abs(a[i]), std::abs(b[i]));
         if (std::abs(a[i] - b[i]) > tol) return false;
+    }
+    return true;
+}
+
+bool run_bone_matrix_boundaries() {
+    for (const int count : {1, 3}) {
+        heaven::SkinnedMesh mesh;
+        mesh.num_frames = 2;
+        mesh.bones.resize(static_cast<std::size_t>(count));
+        mesh.frames.resize(static_cast<std::size_t>(count) * 2);
+        for (int bone = 0; bone != count; ++bone) {
+            mesh.bones[static_cast<std::size_t>(bone)].parent = bone - 1;
+            auto& bind = mesh.frames[static_cast<std::size_t>(bone)];
+            bind.position = {0, 0, 0, 1};
+            bind.rotation = {1, 0, 0, 0};
+            auto& animated = mesh.frames[static_cast<std::size_t>(count) + static_cast<std::size_t>(bone)];
+            const float distance = static_cast<float>(bone + 1);
+            animated.position = {distance, -distance, 0.5f * distance, 1};
+            animated.rotation = bind.rotation;
+        }
+        heaven::SkinnedVertex vertex{};
+        vertex.px = 0.25f; vertex.py = -0.5f; vertex.pz = 0.75f;
+        vertex.ny = 1;
+        vertex.bone_indices[0] = count - 1;
+        vertex.bone_weights[0] = 1;
+        mesh.surfaces.resize(1);
+        mesh.surfaces[0].vertices.push_back(vertex);
+        const glm::vec3 rest(vertex.px, vertex.py, vertex.pz);
+        const float sum = static_cast<float>(count * (count + 1)) * 0.5f;
+        const glm::vec3 displacement(sum, -sum, 0.5f * sum);
+        for (const float frame : {0.0f, 0.5f, 1.0f}) {
+            const auto cpu = mesh.skin_interpolated(0, frame);
+            const auto matrices = mesh.bone_matrices_interpolated(frame);
+            if (cpu.size() != 1 || matrices.size() != static_cast<std::size_t>(count))
+                return false;
+            const glm::vec3 expected = rest + frame * displacement;
+            const glm::vec3 cpu_position(cpu[0].px, cpu[0].py, cpu[0].pz);
+            if (!close(cpu_position, expected) || !close(gpu_lbs_position(vertex, matrices), expected)) {
+                std::fprintf(stderr, "Bone-matrix boundary failed: bones=%d frame=%.1f\n", count, frame);
+                return false;
+            }
+            // A lost final-bone transform must fail the same positional oracle.
+            if (frame > 0.0f) {
+                auto missing_final = matrices;
+                missing_final.back() = glm::mat4(1.0f);
+                if (close(gpu_lbs_position(vertex, missing_final), expected)) return false;
+            }
+        }
     }
     return true;
 }
@@ -236,5 +285,7 @@ bool run_p2_bone_matrix_lbs_equivalence() {
 
 const heaven::testing::Register g_register_bone_matrices{
     &run_p2_bone_matrix_lbs_equivalence};
+const heaven::testing::Register g_register_bone_matrix_boundaries{
+    &run_bone_matrix_boundaries};
 
 } // namespace

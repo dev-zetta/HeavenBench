@@ -19,6 +19,8 @@ on:
       - 'scripts/collect_licenses.py'
       - 'tests/collect_licenses_test.py'
       - 'tests/windows_optional_sdk_licenses_test.ps1'
+      - 'tests/windows_build_flags_test.ps1'
+      - 'tests/windows_frame_generation_fast_test.ps1'
   workflow_dispatch:
     inputs:
       providers:
@@ -52,6 +54,84 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Fast native DLSS SDK compile and host contracts
+        if: env.FRAME_GENERATION_PROVIDERS != 'fsr3'
+        run: |
+          . ./scripts/windows_common.ps1
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/frame-generation/windows-msvc'
+          $evidence = Join-Path $repo 'build/frame-generation/windows-ci'
+          $logs = Join-Path $evidence 'logs'
+          $metadata = Join-Path $evidence 'metadata'
+          New-Item -ItemType Directory -Force $logs, $metadata | Out-Null
+          Start-Transcript -Path (Join-Path $logs 'dlss-fast-build-and-host-tests.log')
+          $configured = $false
+          try {
+            if ($env:FRAME_GENERATION_PROVIDERS -notin @('both', 'dlss')) { throw 'Invalid fast DLSS provider choice.' }
+            Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+              'tests/windows_frame_generation_fast_test.ps1')
+            # Reuse the canonical compiler/CRT/dependency configuration. Only
+            # these independent provider/host targets compile before Filament.
+            ./scripts/build_windows.ps1 -BuildDir $build -Jobs 2 -ConfigureOnly
+            $configured = $true
+            Import-HeavenMsvcEnvironment
+            $headers = Join-Path $evidence 'streamline-2.14.1-headers'
+            Invoke-Checked python.exe @('benchmark/src/rhi/frame_generation/dlss_fetch_sdk.py', '--output', $headers)
+            Copy-Item (Join-Path $headers 'heavenbench-source.json') (Join-Path $metadata 'streamline-source.json')
+            Copy-Item (Join-Path $headers 'license.txt') (Join-Path $metadata 'Streamline-LICENSE.txt')
+            if (Get-ChildItem -LiteralPath $headers -Recurse -File -Filter '*.dll') {
+              throw 'Header-only Streamline input unexpectedly contains a runtime DLL.'
+            }
+            Invoke-Checked cmake.exe @('-S', (Join-Path $repo 'benchmark'), '-B', $build,
+              '-DHEAVEN_ENABLE_FSR3=OFF', '-DHEAVEN_ENABLE_DLSS=ON', "-DHEAVEN_STREAMLINE_HEADERS=$headers")
+            Copy-Item (Join-Path $build 'CMakeCache.txt') (Join-Path $metadata 'dlss-fast-enabled-CMakeCache.txt')
+            Invoke-Checked cmake.exe @('--build', $build, '--parallel', '2', '--target',
+              'heaven_dlss_contract_tests', 'heaven_dlss_frame_token_tests', 'heaven_dlss_runtime_bridge_tests')
+            $env:HEAVEN_SMOKE = '0'
+            $env:HEAVEN_DLSS_PLUGIN_DIR = $null
+            $env:HEAVEN_DLSS_PROJECT_ID = $null
+            $expected = @('heaven_dlss_contract_tests', 'heaven_dlss_frame_token_tests',
+              'heaven_dlss_runtime_bridge_tests', 'heaven_dlss_lifecycle_contract',
+              'heaven_dlss_frame_token_negative_contract')
+            $pattern = '^(' + ($expected -join '|') + ')$'
+            $discovery = (Invoke-Checked ctest.exe @('--test-dir', $build,
+              '--show-only=json-v1', '-R', $pattern) | Out-String) | ConvertFrom-Json
+            $found = @($discovery.tests | ForEach-Object { $_.name })
+            if ($found.Count -ne $expected.Count -or @($expected | Where-Object { $_ -notin $found }).Count) {
+              throw 'Fast DLSS host discovery omitted a required executable/source/negative contract.'
+            }
+            Invoke-Checked ctest.exe @('--test-dir', $build, '-R', $pattern,
+              '--output-on-failure', '--no-tests=error', '--timeout', '300',
+              '--output-junit', (Join-Path $logs 'dlss-fast-host-tests.xml'))
+            @{
+              head = (& git.exe rev-parse HEAD).Trim()
+              providers = 'dlss'
+              msvc = $env:VCToolsVersion
+              targets = @('heaven_dlss_contract_tests', 'heaven_dlss_frame_token_tests', 'heaven_dlss_runtime_bridge_tests')
+              tests = $found
+              scope = 'Native MSVC SDK/provider compilation and GPU-free host/source contracts; Filament library not built by this step'
+              native_gpu_runtime = 'not exercised; proprietary runtime DLLs absent'
+            } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $metadata 'dlss-fast-acceptance.json')
+          } finally {
+            try {
+              # Keep the ordinary baseline SDK-off, including after a failed
+              # fast configure, compiler or host test. Preserve the ON cache above.
+              if ($configured) {
+                foreach ($item in @(
+                  @{ source = 'CMakeCache.txt'; destination = 'dlss-fast-last-CMakeCache.txt' },
+                  @{ source = 'CMakeFiles/CMakeConfigureLog.yaml'; destination = 'dlss-fast-CMakeConfigureLog.yaml' }
+                )) {
+                  $path = Join-Path $build $item.source
+                  if (Test-Path -LiteralPath $path -PathType Leaf) { Copy-Item $path (Join-Path $metadata $item.destination) }
+                }
+                $lastTest = Join-Path $build 'Testing/Temporary/LastTest.log'
+                if (Test-Path -LiteralPath $lastTest -PathType Leaf) { Copy-Item $lastTest (Join-Path $logs 'dlss-fast-LastTest.log') }
+                Invoke-Checked cmake.exe @('-S', (Join-Path $repo 'benchmark'), '-B', $build,
+                  '-DHEAVEN_ENABLE_FSR3=OFF', '-DHEAVEN_ENABLE_DLSS=OFF')
+                Copy-Item (Join-Path $build 'CMakeCache.txt') (Join-Path $metadata 'dlss-fast-restored-CMakeCache.txt')
+              }
+            } finally { Stop-Transcript }
+          }
       - name: Prepare native baseline and verified SDK inputs
         run: |
           . ./scripts/windows_common.ps1
@@ -169,7 +249,7 @@ jobs:
               'heaven_capture_camera_motion_tests',
               'heaven_frame_generation_history_tests', 'heaven_filament_ssr_variant_tests',
               'heaven_vulkan_pipeline_lifetime_tests', 'heaven_dlss_contract_tests',
-              'heaven_dlss_runtime_bridge_tests')
+              'heaven_dlss_runtime_bridge_tests', 'heaven_dlss_frame_token_tests')
             if ($fsr) {
               $targets += @('heaven_frame_generation_capture_contract_tests',
                 'heaven_fsr31_pipeline_lifetime_test', 'heaven_fsr31_view_retirement_test')

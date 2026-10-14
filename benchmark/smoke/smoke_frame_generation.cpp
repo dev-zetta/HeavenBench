@@ -45,7 +45,7 @@ void require(bool condition, const char* reason) {
     if (!condition) throw std::runtime_error(reason);
 }
 
-#if defined(__linux__)
+#ifdef __linux__
 // A test-only driver gate holds a queued packet across an actual process stop.
 // The controller releases rejected attempts without stopping them. Callback
 // data owns its pipe/state until execution, including exceptional teardown.
@@ -256,14 +256,14 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
     const bool ui_oracle = ui_oracle_setting && std::string_view(ui_oracle_setting) == "1";
     const char* process_setting = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE");
     const bool process_pause = process_setting && std::string_view(process_setting) == "1";
-#if defined(__linux__)
+#ifdef __linux__
     std::unique_ptr<ProcessPauseGate> process_gate;
     std::optional<ProcessPauseGate::Mode> gate_mode;
 #endif
     bool asynchronous_frames = false;
     bool ok = true;
     try {
-#if defined(__linux__)
+#ifdef __linux__
         if (process_pause) {
             require(!ui_oracle && original.renderer, "process pause requires ordinary lifecycle UI and renderer");
             process_gate = std::make_unique<ProcessPauseGate>();
@@ -300,7 +300,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         const auto* ui_context = ImGui::GetCurrentContext();
         backend.overlay_set_draw([&] {
             ++ui_calls;
-#if defined(__linux__)
+#ifdef __linux__
             if (process_gate && process_gate->armed()) process_gate->enqueue(*original.renderer);
 #endif
             if (ui_oracle) {
@@ -375,7 +375,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
             const uint64_t attempt_limit = asynchronous_frames ? uint64_t(count) * 32 + 192 : 192;
             while (accepted < count && attempts - first_attempt < attempt_limit && SDL_GetTicks64() < deadline) {
                 SDL_PumpEvents();
-#if defined(__linux__)
+#ifdef __linux__
                 if (gate_mode) {
                     require(count == 1, "queued process gate requires one accepted source");
                     process_gate->begin(*gate_mode, before.counters.real_frames + 1);
@@ -406,7 +406,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                 const auto frame = backend.render_frame(scene->scene.instances, dirty,
                     scene->scene.gpu_meshes, resolve, camera, lighting, weather, tonemap, width, height);
                 if (frame.presented) { ++accepted; ++accepted_total; }
-#if defined(__linux__)
+#ifdef __linux__
                 if (gate_mode) {
                     require(process_gate->queued(), "process gate was not queued before the SDK callback");
                     // This reads owner counters without GPU draining. Any reset
@@ -422,9 +422,12 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                     require(process_gate->completed(), "process gate controller failed or timed out");
                     require(!frame.presented || unchanged, "frontend reset preceded queued process pause");
                     if (frame.presented) gate_mode.reset();
-                } else
-#endif
+                } else if (!asynchronous_frames) {
+                    original.engine->flushAndWait();
+                }
+#else
                 if (!asynchronous_frames) original.engine->flushAndWait();
+#endif
                 require(ImGui::GetCurrentContext() == ui_context, "UI target lifecycle replaced its context");
                 if (!frame.presented) SDL_Delay(2);
             }
@@ -458,7 +461,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         require(bone_updates > 0 && ui_calls >= attempts, "fixture never exercised actual bones/UI preparation");
         if (ui_oracle) std::printf("%s native UI oracle: opaque sentinels and alternating accepted-source block, initial sources=12\n", kTag);
 
-#if defined(__linux__)
+#ifdef __linux__
         if (process_pause) {
             const auto owners = [&] {
                 return std::array{original.engine->getBufferObjectCount(), original.engine->getViewCount(),
@@ -533,7 +536,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         require(recovered.counters.generated_frames > cut.counters.generated_frames,
                 "camera cut did not recover generation");
 
-#if defined(HEAVEN_FG_FAULT_INJECTION)
+#ifdef HEAVEN_FG_FAULT_INJECTION
         // Queue a continuous source before native acquire reports OUT_OF_DATE.
         // The application has not consumed the recreation event when the SDK
         // callback runs, so this checks the driver-visible history reset.
@@ -613,7 +616,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
         std::printf("%s FAIL: %s\n", kTag, error.what());
         ok = false;
     }
-#if defined(__linux__)
+#ifdef __linux__
     if (process_gate) process_gate->cancel();
 #endif
     ok = restore.run() && ok;

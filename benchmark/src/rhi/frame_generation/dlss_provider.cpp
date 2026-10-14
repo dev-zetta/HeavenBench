@@ -11,6 +11,7 @@
 
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
 #include <sl.h>
+#include <sl_consts.h>
 #include <sl_dlss_g.h>
 #include <sl_helpers.h>
 #include <sl_helpers_vk.h>
@@ -19,6 +20,8 @@
 
 static_assert(SL_VERSION_MAJOR == 2 && SL_VERSION_MINOR == 14 && SL_VERSION_PATCH == 1,
         "HeavenBench DLSS adapter requires the reviewed Streamline 2.14.1 headers");
+static_assert(sl::MAX_FRAMES_IN_FLIGHT == 6,
+        "HeavenBench token reservations require the pinned six-slot Streamline ring");
 #endif
 
 namespace heaven {
@@ -117,6 +120,7 @@ void api_error_callback(const sl::APIError& error) {
 } // namespace
 
 struct DlssProvider::Impl {
+    DlssTokenReservations token_reservations;
     DlssVulkanRequirements requirements;
     DlssProviderStatus status;
     uint32_t minimum_dimension = 0;
@@ -146,6 +150,7 @@ struct DlssProvider::Impl {
     sl::ViewportHandle viewport{0};
     sl::DLSSGOptions options;
     std::atomic<int32_t> threaded_result{static_cast<int32_t>(sl::Result::eOk)};
+    std::atomic<bool> token_index_exhausted{false};
     std::atomic<bool> frame_available{false};
     bool owns_streamline = false;
     DlssRuntimeLoader loader;
@@ -317,6 +322,16 @@ PFN_vkCreateInstance DlssProvider::create_instance_proxy() const {
     return nullptr;
 }
 
+PFN_vkEnumeratePhysicalDevices DlssProvider::enumerate_physical_devices_proxy(
+        [[maybe_unused]] VkInstance instance) const {
+#if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
+    if (impl_->status.initialized)
+        return reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+            impl_->instance_resolver(instance, "vkEnumeratePhysicalDevices"));
+#endif
+    return nullptr;
+}
+
 PFN_vkCreateDevice DlssProvider::create_device_proxy([[maybe_unused]] VkInstance instance) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (impl_->status.initialized)
@@ -404,20 +419,35 @@ bool DlssProvider::bind_device_impl([[maybe_unused]] const DlssVulkanDevice& dev
 #endif
 }
 
-bool DlssProvider::begin_frame([[maybe_unused]] uint64_t application_frame, DlssFrameToken& token) {
+bool DlssProvider::begin_frame(DlssFrameToken& token) {
     token = {};
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->frame_available.load(std::memory_order_acquire)) return false;
+    // Reserve before asking Streamline to rotate its mutable token ring. A
+    // rejected attempt retains its prospective ticket and never reaches here.
+    const auto reservation = impl_->token_reservations.reserve();
+    if (!reservation) {
+        if (impl_->token_reservations.exhausted()) {
+            impl_->token_index_exhausted.store(true, std::memory_order_relaxed);
+            impl_->threaded_result.store(static_cast<int32_t>(sl::Result::eErrorInvalidState), std::memory_order_relaxed);
+            impl_->frame_available.store(false, std::memory_order_release);
+        }
+        return false;
+    }
     sl::FrameToken* native = nullptr;
-    const uint32_t index = static_cast<uint32_t>(application_frame);
+    const uint32_t index = static_cast<uint32_t>(reservation->logical_frame);
     auto result = impl_->get_frame_token(native, &index);
     if (result == sl::Result::eOk && native) result = impl_->reflex_sleep(*native);
     if (result == sl::Result::eOk && !native) result = sl::Result::eErrorInvalidState;
     if (result != sl::Result::eOk) {
         impl_->threaded_result.store(static_cast<int32_t>(result), std::memory_order_relaxed);
+        // A failed acquisition cannot prove whether SDK rotation occurred.
+        // Stop new acquisitions until the provider has drained and shut down.
+        impl_->token_reservations.disable();
+        impl_->frame_available.store(false, std::memory_order_release);
         return false;
     }
-    token = {native, application_frame, index};
+    token = {native, reservation->logical_frame, index, reservation};
     return true;
 #else
     return false;
@@ -426,7 +456,11 @@ bool DlssProvider::begin_frame([[maybe_unused]] uint64_t application_frame, Dlss
 
 bool DlssProvider::mark([[maybe_unused]] const DlssFrameToken& token, [[maybe_unused]] DlssLatencyMarker marker) const {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
-    if (!token.native_token || !impl_->pcl_marker) return false;
+    if (!token.native_token || !token.reservation || !impl_->pcl_marker) return false;
+    if (static_cast<uint32_t>(*static_cast<sl::FrameToken*>(token.native_token)) != token.stream_frame) {
+        impl_->threaded_result.store(static_cast<int32_t>(sl::Result::eErrorInvalidState), std::memory_order_relaxed);
+        return false;
+    }
     sl::PCLMarker native_marker;
     switch (marker) {
     case DlssLatencyMarker::SimulationStart: native_marker = sl::PCLMarker::eSimulationStart; break;
@@ -519,9 +553,25 @@ bool DlssProvider::prepare_present([[maybe_unused]] const DlssPresentInputs& inp
 #endif
 }
 
+void DlssProvider::finish_present([[maybe_unused]] const DlssFrameToken& token) {
+#if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
+    if (impl_->last_token.reservation == token.reservation) impl_->last_token = {};
+#endif
+}
+
 bool DlssProvider::collect_state() {
 #if defined(HEAVEN_HAS_STREAMLINE) && HEAVEN_HAS_STREAMLINE
     if (!impl_->get_state) return false;
+    // Failed acquisition can leave no packet to consume the deferred result.
+    // Ordinary fallback presentation still publishes that failure promptly.
+    const auto frame_result = static_cast<sl::Result>(
+        impl_->threaded_result.exchange(static_cast<int32_t>(sl::Result::eOk)));
+    const char* frame_operation = impl_->token_index_exhausted.exchange(false) ?
+        "Streamline frame identity exhausted; restart required" : "Reflex frame/marker";
+    if (!impl_->accept(frame_result, frame_operation)) {
+        suspend();
+        return false;
+    }
     const auto api_error = asynchronous_api_error.exchange(VK_SUCCESS, std::memory_order_relaxed);
     if (api_error != VK_SUCCESS) {
         suspend();

@@ -48,7 +48,7 @@ public:
     // Application thread, before sampling input. Sleep precedes SimulationStart.
     // The same returned ticket must be copied into DlssRuntimeFrame and all
     // subsequent markers. A missing ticket leaves this iteration unprofiled.
-    DlssFrameToken begin_frame(uint64_t application_frame);
+    DlssFrameToken begin_frame();
     bool mark(const DlssFrameToken& token, DlssLatencyMarker marker) const;
 
     // Serialized driver thread, after all four persistent textures have been
@@ -63,11 +63,12 @@ public:
     // release targets. A shared pointer retains the object, not retired images
     // if another owner calls ensure() prematurely. Destroy bridge after drain.
     void suspend_generation();
+    VkResult drain_generation();
 
 private:
     DlssPlatform& platform_;
     std::shared_ptr<FrameGenerationOutput> output_;
-    std::optional<uint64_t> previous_application_frame_;
+    std::optional<uint64_t> previous_logical_frame_;
     std::chrono::steady_clock::time_point previous_native_callback_;
     uint64_t swapchain_epoch_ = 0;
 };

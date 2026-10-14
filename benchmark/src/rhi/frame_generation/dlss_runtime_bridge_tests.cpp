@@ -1,6 +1,7 @@
 // GPU-independent camera/layout contracts. No opaque test handle is submitted
 // to Vulkan or Streamline; the SDK's UV reconstruction supplies the oracle.
 #include "dlss_runtime_inputs.h"
+#include "dlss_status.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -49,6 +50,74 @@ glm::vec3 screen_from_gl(const glm::vec4& clip) {
             0.5f - 0.5f * clip.z / clip.w};
 }
 
+bool run_dlss_status_tests() {
+    FrameGenerationState state;
+    state.request(FrameGenerationMode::Dlss);
+    state.set_capability({FrameGenerationMode::Dlss, true, "Native inputs ready"});
+    state.record_real_frame(true);
+    state.record_real_frame(true);
+    auto snapshot = state.status();
+    const auto epoch = snapshot.history_epoch;
+    DlssProviderStatus provider;
+    provider.initialized = true;
+    provider.available = true;
+    provider.enabled = true;
+    provider.total_sdk_presented_frames = 12;
+    apply_dlss_provider_status(state, snapshot, provider);
+    bool success = check(snapshot.effective == FrameGenerationMode::Dlss &&
+        snapshot.history_ready && snapshot.history_epoch == epoch &&
+        snapshot.sdk_presented_frames == 12 &&
+        !snapshot.counters.generated_frames_available &&
+        !snapshot.counters.presentation_submissions_available,
+        "healthy provider changed activation/history or invented exact split counts");
+
+    provider.available = provider.enabled = false;
+    provider.reason = "Asynchronous native presentation failed";
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.effective == FrameGenerationMode::Off &&
+        !snapshot.capability.available && !snapshot.history_ready &&
+        snapshot.reason == provider.reason && snapshot.history_epoch == epoch + 1 &&
+        snapshot.counters.real_frames == 2 && snapshot.sdk_presented_frames == 12 &&
+        state.status().effective == FrameGenerationMode::Off,
+        "asynchronous provider failure left active state or usable history");
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.history_epoch == epoch + 1,
+        "repeated provider failure repeatedly invalidated history");
+    provider.available = true;
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.effective == FrameGenerationMode::Off,
+        "provider recovery bypassed native temporal-input validation");
+
+    state.set_capability({FrameGenerationMode::Dlss, false, "Transparent coverage incomplete"});
+    snapshot = state.status();
+    provider.available = false;
+    provider.reason = "Provider suspended";
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.reason == "Transparent coverage incomplete",
+        "provider status overwrote the stricter application coverage reason");
+    provider.initialized = false;
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(!snapshot.sdk_presented_frames, "uninitialized SDK retained a measured total");
+    provider.initialized = true;
+    provider.total_sdk_presented_frames = 0;
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.sdk_presented_frames == 0,
+        "measured SDK zero was confused with unavailable coverage");
+
+    state.request(FrameGenerationMode::Fsr3);
+    state.set_capability({FrameGenerationMode::Fsr3, true, "FSR ready"});
+    snapshot = state.status();
+    apply_dlss_provider_status(state, snapshot, provider);
+    success &= check(snapshot.effective == FrameGenerationMode::Fsr3 &&
+        snapshot.reason == "FSR ready" && !snapshot.sdk_presented_frames,
+        "DLSS failure changed the selected FSR provider");
+    state.request(FrameGenerationMode::Off);
+    snapshot = state.status();
+    apply_dlss_provider_status(state, snapshot, provider);
+    return check(snapshot.effective == FrameGenerationMode::Off && snapshot.reason == "Disabled",
+        "DLSS failure changed an explicit Off request") && success;
+}
+
 bool run_dlss_runtime_bridge_tests() {
     constexpr float near_plane = 0.5f;
     constexpr float aspect = 16.0f / 9.0f;
@@ -65,7 +134,8 @@ bool run_dlss_runtime_bridge_tests() {
     const auto previous_vp = projection * previous_view;
     const auto constants = dlss_runtime_detail::camera_constants(glm::inverse(view), projection,
         current_vp, previous_vp, near_plane, std::numeric_limits<float>::max(), fov, aspect, false);
-    bool success = check(constants.has_value(), "actual infinite-far camera rejected");
+    bool success = run_dlss_status_tests();
+    success &= check(constants.has_value(), "actual infinite-far camera rejected");
     if (!constants) return false;
 
     const std::array world_points{glm::vec4{0,2,1,1}, glm::vec4{-2,1,2,1},
