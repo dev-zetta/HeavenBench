@@ -97,10 +97,12 @@ std::string contents(const fs::path& path) {
 void no_live_resources() {
     require(buffers.empty() && memories.empty(), "Capture resources leaked after drain/destruction");
 }
-void options(const fs::path& destination, const std::string& start = "1", bool ui = true) {
+void options(const fs::path& destination, const std::string& start = "1", bool ui = true,
+        const std::string& pair_limit = "") {
     environment("HEAVEN_FG_CAPTURE_DIR", destination.string());
     environment("HEAVEN_FG_CAPTURE_START_SOURCE", start);
     environment("HEAVEN_FG_CAPTURE_UI_INPUTS", ui ? "1" : "");
+    environment("HEAVEN_FG_CAPTURE_PAIRS", pair_limit);
 }
 constexpr VkExtent2D size{4,4};
 const auto device = fake_handle<VkDevice>(1);
@@ -118,11 +120,38 @@ void record(heaven::FrameGenerationCapture& capture, uint64_t source) {
     require(capture.record_ui_inputs(commands, before_image, ui_image), "UI input copies failed");
     require(capture.commit_ui_inputs(source), "UI source commit failed");
 }
-void pair(heaven::FrameGenerationCapture& capture, uint64_t source) {
-    record(capture, source);
+void pair(heaven::FrameGenerationCapture& capture, uint64_t source, bool ui = true) {
+    if (ui) record(capture, source);
     require(capture.begin_pair(device, physical, size, VK_FORMAT_B8G8R8A8_UNORM, source), "Matching pair rejected");
     capture.record_generated(commands, generated_image); capture.record_real(commands, real_image);
     require(capture.finish_pair(fence, 10, 20), "Pair completion failed");
+}
+void verify_pair_metadata(const fs::path& directory, unsigned expected_limit, bool ui) {
+    unsigned receipts = 0, images_count = 0;
+    std::vector<bool> indices(expected_limit);
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        const auto& path = entry.path();
+        if (path.extension() == ".json") {
+            const auto data = contents(path);
+            const auto pair_begin = path.filename().string().find("-pair") + 5;
+            const auto pair_index = std::stoul(path.filename().string().substr(pair_begin));
+            require(pair_index < expected_limit && !indices[pair_index], "Pair index duplicated or exceeds configured limit");
+            indices[pair_index] = true;
+            require(data.find("\"configured_pair_limit\": " + std::to_string(expected_limit) + ",") != std::string::npos,
+                "Configured pair limit missing from receipt");
+            require(data.find("\"pair_index\": " + std::to_string(pair_index) + ",") != std::string::npos,
+                "Receipt pair index does not match filename");
+            require((data.find("ui_inputs_source_frame") != std::string::npos) == ui,
+                "Configured capture changed UI-input mode");
+            ++receipts;
+        } else {
+            require(path.extension() == ".ppm" || (ui && path.extension() == ".pam"),
+                "Configured capture produced a partial or unexpected file");
+            ++images_count;
+        }
+    }
+    require(receipts == expected_limit && images_count == expected_limit * (ui ? 4u : 2u),
+        "Configured capture file count differs");
 }
 } // namespace
 
@@ -135,6 +164,7 @@ int main(int argc, char** argv) {
         install_fakes();
         environment("HEAVEN_FG_CAPTURE_DIR", ""); environment("HEAVEN_FG_CAPTURE_UI_INPUTS", "1");
         environment("HEAVEN_FG_CAPTURE_START_SOURCE", "bad");
+        environment("HEAVEN_FG_CAPTURE_PAIRS", "invalid");
         {
             heaven::FrameGenerationCapture capture;
             require(!capture.enabled() && !capture.wants_source(1) && !prepare(capture, 1), "Capture active without directory");
@@ -143,6 +173,14 @@ int main(int argc, char** argv) {
             options(destination, invalid);
             heaven::FrameGenerationCapture capture;
             require(!capture.enabled() && !capture.last_error().empty(), "Invalid source gate accepted or silently ignored");
+        }
+        for (const auto* invalid : {"0", "33", "4294967296", "18446744073709551616", "-1", "+1", " 1", "1 ",
+                "1x", "01", "032", "004", "00", "bad"}) {
+            options(destination, "1", true, invalid);
+            heaven::FrameGenerationCapture capture;
+            require(!capture.enabled() && !capture.wants_source(1) && !prepare(capture, 1) &&
+                capture.last_error().find("HEAVEN_FG_CAPTURE_PAIRS") != std::string::npos,
+                "Invalid pair limit accepted or silently ignored");
         }
         options(destination, "90");
         {
@@ -259,7 +297,51 @@ int main(int argc, char** argv) {
             } else require(false,"Unexpected partial or extra capture file");
         }
         require(receipts == 4 && ppms == 12 && pams == 4 && waits - successful_waits_start == 4, "Capture file/fence counts differ");
-        std::printf("Capture contract PASS: disabled/gated paths, options, allocation failures/cap, staged source isolation, fence/export failures, four fenced pairs, RGBA/BGRA/PAM bytes; no GPU execution\n");
+        for (const auto& entry : fs::directory_iterator(destination)) {
+            if (entry.path().extension() != ".json") continue;
+            const auto data = contents(entry.path());
+            require(data.find("\"configured_pair_limit\": 4,") != std::string::npos,
+                "Default pair limit changed or receipt omitted it");
+            const auto name = entry.path().filename().string();
+            const auto pair_index = std::stoul(name.substr(name.find("-pair") + 5));
+            require(data.find("\"pair_index\": " + std::to_string(pair_index) + ",") != std::string::npos,
+                "Default receipt pair index differs");
+        }
+        // The option is captured once per diagnostic instance. All pairs reuse
+        // two/four buffers; an explicit drain frees storage, not the completed
+        // pair budget. No Vulkan work may happen after that budget is exhausted.
+        for (const auto limit : {1u, 32u}) for (const bool ui : {false, true}) {
+            const auto configured_destination = destination / ("limit-" + std::to_string(limit) + (ui ? "-ui" : "-plain"));
+            options(configured_destination, "1", ui, std::to_string(limit));
+            const auto allocations_before = allocation_calls;
+            const auto waits_before = waits;
+            {
+                heaven::FrameGenerationCapture capture;
+                environment("HEAVEN_FG_CAPTURE_PAIRS", "invalid-after-construction");
+                for (uint64_t source = 1; source <= limit; ++source) {
+                    require(capture.enabled() && capture.wants_source(source), "Configured capture stopped before its pair limit");
+                    pair(capture, source, ui);
+                    if (source == 16) {
+                        capture.release_after_drain();
+                        no_live_resources();
+                        require(capture.enabled() && capture.wants_source(17), "Drain disabled unfinished configured capture");
+                    }
+                }
+                const auto calls_at_limit = api_calls;
+                require(!capture.enabled() && !capture.wants_source(limit + 1) && !prepare(capture, limit + 1) &&
+                    !capture.begin_pair(device, physical, size, VK_FORMAT_B8G8R8A8_UNORM, limit + 1),
+                    "Configured capture exceeded its pair limit");
+                require(api_calls == calls_at_limit && capture.last_error().empty(), "Exhausted capture called Vulkan or failed provider");
+                capture.release_after_drain();
+                require(!capture.enabled() && !capture.wants_source(limit + 1), "Drain reset completed capture budget");
+            }
+            no_live_resources();
+            require(waits - waits_before == limit, "Configured capture fence count differs");
+            require(allocation_calls - allocations_before == (ui ? 4u : 2u) * (limit == 32 ? 2u : 1u),
+                "Configured pairs did not reuse bounded staging storage");
+            verify_pair_metadata(configured_destination, limit, ui);
+        }
+        std::printf("Capture contract PASS: disabled/gated paths, canonical1..32/default4 options, allocation failures/cap, staged source isolation, fence/export failures, reused buffers/drain budgets, RGBA/BGRA/PAM bytes; no GPU execution\n");
         return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"Capture contract FAIL: %s\n",error.what()); return 1;

@@ -10,7 +10,11 @@
 namespace heaven {
 
 // Explicit diagnostic readback, never part of ordinary performance captures.
-// HEAVEN_FG_CAPTURE_DIR opts in to at most four native generated/real pairs.
+// HEAVEN_FG_CAPTURE_DIR opts in to native generated/real diagnostic pairs.
+// HEAVEN_FG_CAPTURE_PAIRS selects 1..32 pairs (default 4); canonical decimal
+// digits only, without leading zeros. Invalid options disable only diagnostics.
+// Completed pairs retain their budget across release_after_drain(); storage is
+// reused for every pair, within the same allocation limit.
 // HEAVEN_FG_CAPTURE_START_SOURCE selects the first eligible source (default 1).
 // HEAVEN_FG_CAPTURE_UI_INPUTS=1 additionally retains the exact pre-UI generated
 // image and raw UI layer, within the same 128 MiB diagnostic allocation limit.

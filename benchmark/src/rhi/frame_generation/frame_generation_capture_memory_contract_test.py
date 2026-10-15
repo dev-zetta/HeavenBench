@@ -100,7 +100,9 @@ def source_contract(source):
         "coherence_uses_selected_flags": "buffer.coherent=(buffer.property_flags&VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)!=0;" in compact,
         "noncoherent_invalidate_retained": "if(!buffers[index].coherent){" in compact and "vkInvalidateMappedMemoryRanges(device,1,&range)" in compact and "range.size=VK_WHOLE_SIZE;" in compact,
         "actual_allocation_cap_retained": "requirements.size>capture_limit-allocated_bytes" in compact and "capture_limit=128ull*1024*1024" in compact,
-        "default_four_pair_limit_retained": "impl_->pairs<4" in compact,
+        "default_four_pair_limit_retained": "uint32_tpair_limit=4;" in compact,
+        "configured_pair_limit_bounded": "impl_->pairs<impl_->pair_limit" in compact and
+            "impl_->pair_limit=parse_pair_limit(limit)" in compact and "parsed>32/10" in compact and "if(parsed>32)" in compact,
         "same_two_or_four_buffers": "constsize_tcount=ui_requested?4:2;" in compact,
     }
     order = [source.index(token) for token in (

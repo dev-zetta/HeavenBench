@@ -28,6 +28,19 @@ bool native_format_supported(VkFormat format) {
     return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB ||
         format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB;
 }
+uint32_t parse_pair_limit(const char* text) {
+    const std::string_view value(text);
+    constexpr auto reason = "HEAVEN_FG_CAPTURE_PAIRS must be canonical decimal digits in 1..32 (no leading zeros)";
+    if (value.empty() || value.front() == '0') throw std::runtime_error(reason);
+    uint32_t parsed = 0;
+    for (const char digit : value) {
+        if (digit < '0' || digit > '9' || parsed > 32 / 10)
+            throw std::runtime_error(reason);
+        parsed = parsed * 10 + static_cast<uint32_t>(digit - '0');
+        if (parsed > 32) throw std::runtime_error(reason);
+    }
+    return parsed;
+}
 uint64_t parse_start_source(const char* text) {
     const std::string_view value(text);
     uint64_t parsed = 0;
@@ -70,6 +83,7 @@ struct FrameGenerationCapture::Impl {
     uint64_t ui_source = 0;
     uint64_t pair_ui_source = 0;
     uint32_t pairs = 0;
+    uint32_t pair_limit = 4;
     std::array<bool, 2> native_recorded{};
     bool ui_requested = false;
     bool ui_recorded = false;
@@ -235,6 +249,10 @@ FrameGenerationCapture::FrameGenerationCapture() {
         impl_->prefix = "native-" + std::to_string(now_ns());
         const auto* ui = std::getenv("HEAVEN_FG_CAPTURE_UI_INPUTS");
         impl_->ui_requested = ui && std::string_view(ui) == "1";
+        if (const auto* limit = std::getenv("HEAVEN_FG_CAPTURE_PAIRS")) {
+            try { impl_->pair_limit = parse_pair_limit(limit); }
+            catch (const std::exception& error) { impl_->fail(error.what()); }
+        }
         if (const auto* start = std::getenv("HEAVEN_FG_CAPTURE_START_SOURCE")) {
             try { impl_->start_source = parse_start_source(start); }
             catch (const std::exception& error) {
@@ -245,7 +263,7 @@ FrameGenerationCapture::FrameGenerationCapture() {
 }
 FrameGenerationCapture::~FrameGenerationCapture() { if (impl_) impl_->release(); }
 bool FrameGenerationCapture::enabled() const noexcept {
-    return impl_ && !impl_->directory.empty() && !impl_->disabled && impl_->pairs < 4;
+    return impl_ && !impl_->directory.empty() && !impl_->disabled && impl_->pairs < impl_->pair_limit;
 }
 bool FrameGenerationCapture::wants_source(uint64_t source_frame) const noexcept {
     return enabled() && source_frame >= impl_->start_source;
@@ -382,7 +400,9 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
         const auto temporary = metadata.string() + ".tmp";
         std::ofstream stream(temporary, std::ios::trunc);
         stream.exceptions(std::ios::badbit | std::ios::failbit);
-        stream << "{\n  \"source_frame\": " << p.source << ",\n  \"width\": " << p.extent.width
+        stream << "{\n  \"source_frame\": " << p.source
+            << ",\n  \"configured_pair_limit\": " << p.pair_limit << ",\n  \"pair_index\": " << p.pairs
+            << ",\n  \"width\": " << p.extent.width
             << ",\n  \"height\": " << p.extent.height << ",\n  \"vk_format\": " << p.format
             << ",\n  \"generated_present_return_cpu_monotonic_ns\": " << generated_present_ns
             << ",\n  \"real_present_return_cpu_monotonic_ns\": " << real_present_ns
