@@ -14,6 +14,8 @@ namespace heaven {
 // HEAVEN_FG_CAPTURE_START_SOURCE selects the first eligible source (default 1).
 // HEAVEN_FG_CAPTURE_UI_INPUTS=1 additionally retains the exact pre-UI generated
 // image and raw UI layer, within the same 128 MiB diagnostic allocation limit.
+// Readback prefers CPU-cached eligible memory. Receipts retain selected flags,
+// consumer-fence wait and synchronous image-export times; these are host clocks.
 class FrameGenerationCapture final {
 public:
     FrameGenerationCapture();

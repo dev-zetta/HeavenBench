@@ -1,4 +1,5 @@
 #include "frame_generation_capture.h"
+#include "frame_generation_capture_memory_type.h"
 
 #include <array>
 #include <chrono>
@@ -46,7 +47,15 @@ uint64_t parse_start_source(const char* text) {
 } // namespace
 
 struct FrameGenerationCapture::Impl {
-    struct Buffer { VkBuffer handle{}; VkDeviceMemory memory{}; bool coherent = false; };
+    struct Buffer {
+        VkBuffer handle{};
+        VkDeviceMemory memory{};
+        VkDeviceSize allocation_bytes = 0;
+        uint32_t memory_type_index = UINT32_MAX;
+        VkMemoryPropertyFlags property_flags = 0;
+        uint32_t memory_type_bits = 0;
+        bool coherent = false;
+    };
     std::filesystem::path directory;
     std::string prefix;
     std::string error;
@@ -125,19 +134,14 @@ struct FrameGenerationCapture::Impl {
             vkGetBufferMemoryRequirements(device, buffer.handle, &requirements);
             if (requirements.size > capture_limit - allocated_bytes)
                 throw std::runtime_error("Native capture exceeds the 128 MiB diagnostic allocation limit");
-            uint32_t selected = UINT32_MAX;
-            for (uint32_t type = 0; type < memory.memoryTypeCount; ++type) {
-                if (memory.memoryTypes[type].propertyFlags & (VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD |
-                    VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)) continue;
-                if (!(requirements.memoryTypeBits & (1u << type)) ||
-                        !(memory.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) continue;
-                if (selected == UINT32_MAX) selected = type;
-                if (memory.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
-                    selected = type; break;
-                }
-            }
+            const auto selected = select_frame_generation_readback_memory_type(
+                memory, requirements.memoryTypeBits);
             if (selected == UINT32_MAX) throw std::runtime_error("No host-visible capture memory");
-            buffer.coherent = (memory.memoryTypes[selected].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+            buffer.memory_type_index = selected;
+            buffer.property_flags = memory.memoryTypes[selected].propertyFlags;
+            buffer.memory_type_bits = requirements.memoryTypeBits;
+            buffer.allocation_bytes = requirements.size;
+            buffer.coherent = (buffer.property_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
             VkMemoryAllocateInfo allocation{}; allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocation.allocationSize = requirements.size;
             allocation.memoryTypeIndex = selected;
@@ -357,6 +361,7 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
         if (!real_consumer || !p.native_recorded[0] || !p.native_recorded[1] ||
                 (p.ui_requested && p.pair_ui_source != p.source))
             throw std::runtime_error("Native capture lacks a complete source-matched consumer/readback set");
+        const auto wait_begin = now_ns();
         require(vkWaitForFences(p.device, 1, &real_consumer, VK_TRUE, UINT64_MAX), "Wait native readback consumer");
         const auto completed = now_ns();
         const auto stem = p.prefix + "-pair" + std::to_string(p.pairs) + "-source" + std::to_string(p.source);
@@ -370,6 +375,7 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
             p.write_image(2, VK_FORMAT_R8G8B8A8_UNORM, false, p.directory / before_ui);
             p.write_image(3, VK_FORMAT_R8G8B8A8_UNORM, true, p.directory / ui_layer);
         }
+        const auto images_export_completed = now_ns();
         // Publish the receipt last. Partial file output cannot look like a
         // successful source-matched pair after an export failure.
         const auto metadata = p.directory / (stem + ".json");
@@ -380,9 +386,25 @@ bool FrameGenerationCapture::finish_pair(VkFence real_consumer, uint64_t generat
             << ",\n  \"height\": " << p.extent.height << ",\n  \"vk_format\": " << p.format
             << ",\n  \"generated_present_return_cpu_monotonic_ns\": " << generated_present_ns
             << ",\n  \"real_present_return_cpu_monotonic_ns\": " << real_present_ns
+            << ",\n  \"readback_wait_begin_cpu_monotonic_ns\": " << wait_begin
             << ",\n  \"readback_fence_completed_cpu_monotonic_ns\": " << completed
+            << ",\n  \"images_export_completed_cpu_monotonic_ns\": " << images_export_completed
+            << ",\n  \"readback_wait_duration_ns\": " << completed - wait_begin
+            << ",\n  \"images_export_duration_ns\": " << images_export_completed - completed
+            << ",\n  \"capture_allocated_bytes\": " << p.allocated_bytes
             << ",\n  \"diagnostic_gpu_wait_enabled\": true,\n  \"display_scanout_verified\": false,\n"
             << R"(  "generated": ")" << generated << "\",\n  \"real\": \"" << real << '"';
+        stream << ",\n  \"readback_buffers\": [";
+        const size_t buffer_count = p.ui_requested ? 4 : 2;
+        for (size_t index = 0; index < buffer_count; ++index) {
+            const auto& buffer = p.buffers[index];
+            if (index) stream << ',';
+            stream << "{\"memory_type_index\":" << buffer.memory_type_index
+                << ",\"property_flags\":" << buffer.property_flags
+                << ",\"memory_type_bits\":" << buffer.memory_type_bits
+                << ",\"allocation_bytes\":" << buffer.allocation_bytes << '}';
+        }
+        stream << ']';
         if (p.ui_requested) {
             stream << ",\n  \"ui_inputs_source_frame\": " << p.pair_ui_source
                 << ",\n  \"generated_before_ui_vk_format\": " << VK_FORMAT_R8G8B8A8_UNORM

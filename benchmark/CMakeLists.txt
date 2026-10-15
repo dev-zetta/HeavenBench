@@ -1035,6 +1035,13 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_frame_generation_capture_memory_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/frame_generation_capture_memory_contract_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --vulkan-include "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/capture-memory-contract")
+        set_tests_properties(heaven_frame_generation_capture_memory_contract PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_filament_linear_staging_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_linear_staging_test.py
