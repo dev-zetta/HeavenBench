@@ -58,6 +58,8 @@
 #include <SDL2/SDL_vulkan.h>
 #ifdef __ANDROID__
 #include "engine/preview_frame_pacing.h"
+#endif
+#if defined(__ANDROID__) || (defined(_WIN32) && HEAVEN_HAS_DLSS)
 #include <SDL2/SDL_syswm.h>
 #endif
 #include <algorithm>

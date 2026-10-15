@@ -1058,7 +1058,8 @@ endif()
 # are failures on a machine that advertises a display.
 add_test(NAME heaven_benchmark_smoke COMMAND heaven_benchmark_smoke)
 add_test(NAME heaven_temporal_input_contract
-    COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/temporal_input_contract_test.py")
+    COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/temporal_input_contract_test.py"
+            --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}")
 set_tests_properties(heaven_benchmark_smoke PROPERTIES
     SKIP_RETURN_CODE 77
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
