@@ -6,3 +6,7 @@ patches/filament/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
 
 # Bash entry points must also run from Git for Windows checkouts.
 *.sh text eol=lf
+
+# Pinned SDK notices must match their upstream archive bytes on every platform.
+packaging/licenses/FidelityFX-SDK.txt -text
+packaging/licenses/SPIRV-Reflect.txt -text

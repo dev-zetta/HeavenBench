@@ -145,6 +145,86 @@ class PackageMetadataTest(unittest.TestCase):
         notice.unlink()
         with self.assertRaises(FileNotFoundError): self.write()
 
+    def test_git_autocrlf_checkout_keeps_exact_pinned_fsr_notices(self):
+        """Real Git/collector/notice comparison; SDK provenance remains mocked."""
+        notices = [
+            ('LICENSE.txt', 'FidelityFX-SDK.txt',
+             '82cf74fc23885107c7f69249ac3f1dac55898ff68320eb2c753984cae6b2d78a'),
+            ('sdk/tools/ffx_shader_compiler/libs/SPIRV-Reflect/LICENSE', 'SPIRV-Reflect.txt',
+             'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4')]
+        spec = importlib.util.spec_from_file_location('notice_collector', ROOT / 'scripts/collect_licenses.py')
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        checkout = self.root / 'Git checkout'; checkout.mkdir()
+
+        def git(*args):
+            return subprocess.run(['git', '-C', str(checkout), *args],
+                                  check=True, capture_output=True, text=True, timeout=30)
+
+        git('init', '-q'); git('config', 'core.autocrlf', 'true'); git('config', 'core.safecrlf', 'false')
+        attributes = (ROOT / '.gitattributes').read_bytes()
+        exact_rules = {('packaging/licenses/' + name + ' -text').encode() for _, name, _ in notices}
+        original_policy = b''.join(line for line in attributes.splitlines(keepends=True)
+                                   if line.strip() not in exact_rules)
+        (checkout / '.gitattributes').write_bytes(original_policy)
+        pinned = {}
+        for relative, name, expected_hash in notices:
+            content = (ROOT / 'packaging/licenses' / name).read_bytes()
+            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_hash)
+            pinned[name] = content
+            path = checkout / 'packaging/licenses' / name
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+            path = self.sdk / relative
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+        git('add', '.gitattributes', 'packaging/licenses')
+
+        # Minimal collector prerequisites; its real byte-copy path is unchanged.
+        (checkout / 'LICENSE').write_text('Fixture project license\n')
+        for vendor in collector.VENDORS:
+            path = checkout / 'lib' / vendor
+            path.mkdir(parents=True, exist_ok=True)
+            (path / 'LICENSE').write_text('Fixture dependency license\n')
+        for relative in ('lib/lz4/lz4.c', 'lib/filament/third_party/mikktspace/src/mikktspace.c'):
+            path = checkout / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('/* Copyright fixture */\n')
+        path = checkout / 'benchmark/third_party/stb_vorbis.c'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('/* This software is available under 2 licenses. Copyright fixture */\n')
+
+        paths = ['packaging/licenses/' + name for _, name, _ in notices]
+        for label, policy, exact in [('original', original_policy, False), ('current', attributes, True)]:
+            with self.subTest(policy=label):
+                (checkout / '.gitattributes').write_bytes(policy)
+                for relative in paths: (checkout / relative).unlink()
+                git('checkout-index', '-f', '--', *paths)
+                collected = self.root / ('collected-' + label)
+                with mock.patch.object(collector, 'ROOT', checkout):
+                    collector.collect(collected, [])
+                for _, name, _ in notices:
+                    checked_out = (checkout / 'packaging/licenses' / name).read_bytes()
+                    copied = (collected / 'repository/packaging/licenses' / name).read_bytes()
+                    self.assertEqual(copied, checked_out)
+                    if exact:
+                        self.assertEqual(copied, pinned[name])
+                    else:
+                        self.assertEqual(copied, pinned[name].replace(b'\n', b'\r\n'))
+                    (self.licenses / 'repository/packaging/licenses' / name).write_bytes(copied)
+                if exact:
+                    self.write()
+                else:
+                    with self.assertRaisesRegex(ValueError, 'notice differs.*FidelityFX-SDK.txt'):
+                        self.write()
+
+        # Each pinned notice remains a strict byte comparison after the fix.
+        for _, name, _ in notices:
+            with self.subTest(tampered_notice=name):
+                notice = self.licenses / 'repository/packaging/licenses' / name
+                notice.write_bytes(pinned[name] + b' ')
+                with self.assertRaisesRegex(ValueError, 'notice differs.*' + name): self.write()
+                notice.write_bytes(pinned[name])
+
+
     def test_unvalidated_or_incomplete_shader_permutations_fail(self):
         shader = self.build / 'src/rhi/frame_generation/fsr31_shader_blobs.json'
         for receipt in [{'spirv_validated': False, 'shaders': [{}] * 102}, {'spirv_validated': True, 'shaders': [{}] * 101}]:
