@@ -73,6 +73,16 @@ class FetchFsr31Test(unittest.TestCase):
         self.fetch()
         self.assertEqual(marker.read_bytes(), before)
 
+    def test_missing_data_filter_rejected_before_filesystem_or_download(self):
+        self.archive = self.root / "uncreated download directory" / "fixture.tar.gz"
+        with mock.patch.dict(vars(tarfile)):
+            vars(tarfile).pop("data_filter", None)
+            with self.assertRaisesRegex(SystemExit, "tarfile.data_filter.*Python 3.10.12"):
+                self.fetch()
+        self.assertFalse(self.archive.parent.exists())
+        self.assertFalse(self.output.exists())
+        self.assertFalse((self.output / "heavenbench-source.json").exists())
+
     def test_windows_and_posix_manifest_keys(self):
         for path_type in (PureWindowsPath, PurePosixPath):
             self.assertEqual(FETCHER.manifest_key(path_type("sdk/include/FidelityFX/host/ffx_types.h")),

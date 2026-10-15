@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Experimental packaging policy tests; no SDK download, renderer build or GPU."""
+import ast
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -15,6 +17,37 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('package_metadata', ROOT / 'scripts/frame_generation_package_metadata.py')
 metadata = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(metadata)
+
+
+class HashCompatibilityTest(unittest.TestCase):
+    def test_helpers_stream_exact_hashes_without_python311_api(self):
+        helpers = [('scripts/fetch_fsr31.py', 'sha256_file'),
+                   ('benchmark/src/rhi/frame_generation/verify_fsr31_source.py', 'sha256_file'),
+                   ('benchmark/src/rhi/frame_generation/dlss_fetch_sdk.py', 'digest'),
+                   ('scripts/frame_generation_package_metadata.py', 'sha')]
+        large = bytes(range(256)) * 10000
+        vectors = [(b'', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'),
+                   (b'abc', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'),
+                   (large, hashlib.sha256(large).hexdigest())]
+
+        class BoundedReader(io.BytesIO):
+            def read(self, size=-1):
+                if not 0 < size <= 1024 * 1024:
+                    raise AssertionError('SDK digest read was not bounded')
+                return super().read(size)
+
+        with mock.patch.dict(vars(hashlib)):
+            vars(hashlib).pop('file_digest', None)
+            for relative, function in helpers:
+                with self.subTest(helper=relative):
+                    path = ROOT / relative
+                    ast.parse(path.read_text(), filename=str(path), feature_version=(3, 10))
+                    spec = importlib.util.spec_from_file_location(path.stem + '_compat', path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    for content, expected in vectors:
+                        with mock.patch.object(Path, 'open', return_value=BoundedReader(content)):
+                            self.assertEqual(getattr(module, function)(Path('fixture.bin')), expected)
 
 
 class PackageMetadataTest(unittest.TestCase):

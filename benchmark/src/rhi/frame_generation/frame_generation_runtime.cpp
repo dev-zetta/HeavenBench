@@ -65,7 +65,7 @@ struct FrameGenerationRuntime::Native {
     VkExtent2D size{};
     bool initialized_layout = false;
     uint64_t frame_id = 0;
-    std::chrono::steady_clock::time_point previous_callback;
+    FrameGenerationHistoryClock::time_point previous_callback;
     uint64_t previous_pacing_wait = 0;
     double unpaced_interval_ns = 16'666'667.0;
     std::atomic<bool> failed{false};
@@ -176,13 +176,14 @@ struct FrameGenerationRuntime::Native {
         std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
         auto& self=*packet->native;
         auto& owner=self.owner;
-        const auto callback_time=std::chrono::steady_clock::now();
+        const auto callback_time=FrameGenerationHistoryClock::now();
         // A prepared packet can remain queued across process suspension. The
         // frontend's gap check cannot see that delay, so invalidate here too.
         const bool callback_gap=frame_generation_callback_gap(self.previous_callback,callback_time);
         const bool reset=self.history.should_reset(packet->reset,owner.platform_->history_epoch()) || callback_gap;
         const auto total_pacing=owner.platform_->presentation_status().pacing_wait_ns;
-        if(self.previous_callback.time_since_epoch().count()) {
+        if(FrameGenerationHistoryClock::valid(self.previous_callback) &&
+                FrameGenerationHistoryClock::valid(callback_time) && callback_time >= self.previous_callback) {
             const auto interval=std::chrono::duration<double,std::nano>(callback_time-self.previous_callback).count();
             const auto waits=total_pacing-self.previous_pacing_wait;
             const auto unpaced=std::clamp(interval-static_cast<double>(waits),1'000'000.0,100'000'000.0);
@@ -485,9 +486,9 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
         const auto old_model=glm::inverse(previous_camera_->view_matrix());
         const auto new_model=glm::inverse(camera.view_matrix());
         const auto angular=glm::dot(glm::vec3(old_model[2]),glm::vec3(new_model[2]));
-        const auto gap=std::chrono::steady_clock::now()-previous_source_;
+        const bool gap=frame_generation_callback_gap(previous_source_,FrameGenerationHistoryClock::now());
         if(glm::distance(previous_camera_->position,camera.position)>5.0f || angular<0.5f ||
-           std::abs(previous_camera_->fov-camera.fov)>0.01f || gap>std::chrono::milliseconds(250))
+           std::abs(previous_camera_->fov-camera.fov)>0.01f || gap)
             invalidate_history();
     }
     if(config.hdr || config.features.dynamic_resolution) {
@@ -649,7 +650,7 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
         // owners take over; rejected submissions never release this ticket.
         dlss_frame_.accept();
         previous_clip_=current_clip_; previous_camera_=camera;
-        previous_source_=std::chrono::steady_clock::now();
+        previous_source_=FrameGenerationHistoryClock::now();
         temporal_->commit_accepted(); if(grass_) grass_->commit_accepted();
         if(effects_) effects_->commit_accepted();
         reset_=false;
@@ -661,8 +662,9 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
     dlss_frame_.cancel();
 #if HEAVEN_HAS_FSR3
     if(active_) {
-        const auto now=std::chrono::steady_clock::now();
-        const auto dt=previous_source_.time_since_epoch().count()?std::chrono::duration<float,std::milli>(now-previous_source_).count():16.667f;
+        const auto now=FrameGenerationHistoryClock::now();
+        const auto dt=FrameGenerationHistoryClock::valid(previous_source_) && FrameGenerationHistoryClock::valid(now) &&
+            now >= previous_source_ ? std::chrono::duration<float,std::milli>(now-previous_source_).count() : 16.667f;
         previous_source_=now;
         previous_camera_=camera;
         previous_clip_=current_clip_;

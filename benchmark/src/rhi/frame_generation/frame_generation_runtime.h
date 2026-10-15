@@ -2,6 +2,7 @@
 #define HEAVEN_FRAME_GENERATION_RUNTIME_H
 
 #include "engine/frame_generation.h"
+#include "frame_generation_history.h"
 #include "rhi/backend_core.h"
 #include "rhi/rhi.h"
 #include <memory>
@@ -81,7 +82,7 @@ private:
     bool active_ = false;
     bool reset_ = true;
     [[maybe_unused]] int width_ = 0, height_ = 0;
-    std::chrono::steady_clock::time_point previous_source_;
+    FrameGenerationHistoryClock::time_point previous_source_;
     std::optional<Camera> previous_camera_;
     glm::mat4 projection_{1.0f};
     glm::mat4 current_clip_{1.0f};

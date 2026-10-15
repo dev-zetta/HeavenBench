@@ -20,7 +20,7 @@ Docker packages appear under `build/release/linux-<arch>/` or `build/release/and
 
 ## Native Linux development
 
-For incremental development outside Docker, use CMake 3.25 or newer, Ninja, a C++23 compiler, Python 3.10 or newer and zlib development headers. The asset builder and renderer require a Clang-compatible compiler with libc++ and GLM headers, plus Git to obtain pinned dependencies. The renderer additionally requires SDL2, Vulkan and X11/Wayland development packages. The [Dockerfile](../docker/Dockerfile) owns the complete release build package list and compiler selection.
+For incremental development outside Docker, use CMake 3.25 or newer, Ninja, a C++23 compiler, Python 3.10 or newer and zlib development headers. Optional FSR SDK fetching also requires `tarfile.data_filter`, available in Python 3.10.12+, 3.11.4+, 3.12+ or an equivalent vendor backport; the helper rejects unsupported extraction before downloading or creating files. The asset builder and renderer require a Clang-compatible compiler with libc++ and GLM headers, plus Git to obtain pinned dependencies. The renderer additionally requires SDL2, Vulkan and X11/Wayland development packages. The [Dockerfile](../docker/Dockerfile) owns the complete release build package list and compiler selection.
 
 ```bash
 ./scripts/fetch_dependencies.sh

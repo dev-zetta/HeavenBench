@@ -16,19 +16,28 @@ def manifest_key(path: PurePath) -> str:
     return path.as_posix()
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--output", type=Path, default=Path("build/dependencies/fidelityfx-sdk-1.1.4"))
     p.add_argument("--archive", type=Path)
     a = p.parse_args()
+    if not callable(getattr(tarfile, "data_filter", None)):
+        raise SystemExit("FSR SDK extraction requires tarfile.data_filter (Python 3.10.12+, 3.11.4+, 3.12+, or equivalent backport)")
     archive = a.archive or a.output.parent / "fidelityfx-sdk-1.1.4.tar.gz"
     archive.parent.mkdir(parents=True, exist_ok=True)
     if not archive.exists():
         temporary = archive.with_suffix(".download")
         urllib.request.urlretrieve(URL, temporary)
         temporary.replace(archive)
-    with archive.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    digest = sha256_file(archive)
     if digest != SHA256:
         raise SystemExit(f"FSR SDK archive checksum mismatch: {digest}")
     marker = a.output / "heavenbench-source.json"
@@ -43,8 +52,7 @@ def main():
             path = a.output / relative
             if not path.is_file() or path.is_symlink():
                 raise SystemExit(f"Missing or replaced SDK source: {relative}")
-            with path.open("rb") as stream:
-                actual = hashlib.file_digest(stream, "sha256").hexdigest()
+            actual = sha256_file(path)
             if actual != expected:
                 raise SystemExit(f"Modified SDK source: {relative}")
         actual_files = {manifest_key(path.relative_to(a.output)) for path in a.output.rglob("*") if path.is_file() and path != marker}
@@ -74,8 +82,7 @@ def main():
     file_hashes = {}
     for path in sorted(a.output.rglob("*")):
         if path.is_file():
-            with path.open("rb") as stream:
-                file_hashes[manifest_key(path.relative_to(a.output))] = hashlib.file_digest(stream, "sha256").hexdigest()
+            file_hashes[manifest_key(path.relative_to(a.output))] = sha256_file(path)
     marker.write_text(json.dumps({"sdk_version": "1.1.4", "fsr_version": "3.1.4",
         "commit": COMMIT, "archive_sha256": SHA256, "url": URL,
         "files_sha256": file_hashes}, indent=2) + "\n")

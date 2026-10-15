@@ -997,6 +997,11 @@ if(Python3_Interpreter_FOUND)
                     ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/frame_generation_process_pause_test.py
                     --self-test --work-dir "${CMAKE_CURRENT_BINARY_DIR}/frame-generation-pause-controller")
         set_tests_properties(heaven_frame_generation_pause_controller PROPERTIES TIMEOUT 30)
+        add_test(NAME heaven_frame_generation_suspend_controller
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/frame_generation_system_suspend_test.py
+                    --self-test --work-dir "${CMAKE_CURRENT_BINARY_DIR}/frame-generation-suspend-controller")
+        set_tests_properties(heaven_frame_generation_suspend_controller PROPERTIES TIMEOUT 30)
     endif()
     add_test(NAME heaven_fsr31_source_contract
         COMMAND ${Python3_EXECUTABLE}

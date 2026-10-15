@@ -22,17 +22,20 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if HEAVEN_HAS_FSR3 && defined(__linux__)
 #include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
+#include <ctime>
 #include <unistd.h>
 #endif
 
@@ -52,7 +55,7 @@ void require(bool condition, const char* reason) {
 class ProcessPauseGate {
 public:
     enum class Mode { Control, Pause };
-    ProcessPauseGate() : state_(std::make_shared<State>()) {
+    explicit ProcessPauseGate(bool system_suspend) : state_(std::make_shared<State>()), system_suspend_(system_suspend) {
         const char* value = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE_FD");
         require(value && *value, "process pause requires the maintained pipe controller");
         const std::string_view input(value);
@@ -68,12 +71,13 @@ public:
         ++serial_; source_ = source; mode_ = mode; armed_ = true; queued_ = false;
         state_->frontend.store(-1); state_->failure.store(0); state_->done.store(false);
         state_->held_ns.store(0);
+        state_->awake_ns.store(0); state_->sleep_ns.store(0); state_->clocks_valid.store(false);
     }
     bool armed() const noexcept { return armed_; }
     bool queued() const noexcept { return queued_; }
     void enqueue(filament::Renderer& renderer) {
         require(armed_ && !queued_, "process gate queued more than once");
-        auto packet = std::make_unique<Packet>(Packet{state_, serial_, source_, mode_});
+        auto packet = std::make_unique<Packet>(Packet{state_, serial_, source_, mode_, system_suspend_});
         renderer.nativeCommand(nullptr, nullptr, nullptr, nullptr, callback, packet.get());
         packet.release(); queued_ = true; armed_ = false;
     }
@@ -87,6 +91,9 @@ public:
     }
     bool completed() const noexcept { return state_->done.load() && state_->failure.load() == 0; }
     uint64_t held_ns() const noexcept { return state_->held_ns.load(); }
+    uint64_t awake_ns() const noexcept { return state_->awake_ns.load(); }
+    uint64_t sleep_ns() const noexcept { return state_->sleep_ns.load(); }
+    bool clocks_valid() const noexcept { return state_->clocks_valid.load(); }
     void cancel() noexcept { state_->cancelled.store(true); }
 private:
     struct State {
@@ -95,16 +102,33 @@ private:
         std::atomic<int> frontend{-1}, failure{0};
         std::atomic<bool> done{false}, cancelled{false};
         std::atomic<uint64_t> held_ns{0};
+        std::atomic<uint64_t> awake_ns{0}, sleep_ns{0};
+        std::atomic<bool> clocks_valid{false};
     };
     struct Packet {
         std::shared_ptr<State> state;
         uint64_t serial, source;
         Mode mode;
+        bool system_suspend;
     };
+    static bool clock_sample(clockid_t clock_id, uint64_t& result) noexcept {
+        timespec value{};
+        constexpr uint64_t billion = 1000000000;
+        if (::clock_gettime(clock_id, &value) != 0 || value.tv_sec < 0 || value.tv_nsec < 0 ||
+                std::cmp_greater_equal(value.tv_nsec, billion)) return false;
+        const auto seconds = static_cast<uint64_t>(value.tv_sec);
+        const auto nanos = static_cast<uint64_t>(value.tv_nsec);
+        if (seconds > (std::numeric_limits<uint64_t>::max() - nanos) / billion) return false;
+        result = seconds * billion + nanos;
+        return true;
+    }
     static void callback(void* data, [[maybe_unused]] const void* native_context) noexcept {
         const std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
         auto& state = *packet->state;
         const auto start = std::chrono::steady_clock::now();
+        uint64_t boot_before = 0, mono_before = 0;
+        const bool clocks_before = !packet->system_suspend ||
+            (clock_sample(CLOCK_BOOTTIME, boot_before) && clock_sample(CLOCK_MONOTONIC, mono_before));
         std::printf("[smoke_frame_generation_process_pause] gate-enter serial=%llu source=%llu mode=%s\n",
             static_cast<unsigned long long>(packet->serial), static_cast<unsigned long long>(packet->source),
             packet->mode == Mode::Pause ? "pause" : "control");
@@ -113,7 +137,8 @@ private:
         int failure = 0;
         while (!release && !failure) {
             if (state.cancelled.load()) { failure = 1; break; }
-            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
+            const auto limit = packet->system_suspend ? std::chrono::seconds(60) : std::chrono::seconds(10);
+            if (std::chrono::steady_clock::now() - start > limit) {
                 failure = 2; break;
             }
             pollfd input{state.descriptor, POLLIN, 0};
@@ -132,6 +157,23 @@ private:
         const auto held = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - start).count();
         state.held_ns.store(static_cast<uint64_t>(held));
+        if (packet->system_suspend) {
+            uint64_t boot_after = 0, mono_after = 0;
+            const bool valid = clocks_before && clock_sample(CLOCK_BOOTTIME, boot_after) &&
+                clock_sample(CLOCK_MONOTONIC, mono_after) && boot_after >= boot_before && mono_after >= mono_before;
+            const uint64_t awake = valid ? mono_after - mono_before : 0;
+            const uint64_t elapsed = valid ? boot_after - boot_before : 0;
+            const uint64_t slept = valid && elapsed > awake ? elapsed - awake : 0;
+            state.awake_ns.store(awake); state.sleep_ns.store(slept); state.clocks_valid.store(valid);
+            std::printf("[smoke_frame_generation_system_suspend] clock-proof serial=%llu source=%llu valid=%d "
+                "boot_before_ns=%llu boot_after_ns=%llu mono_before_ns=%llu mono_after_ns=%llu "
+                "awake_ns=%llu slept_ns=%llu awake_under_250ms=%d\n",
+                static_cast<unsigned long long>(packet->serial), static_cast<unsigned long long>(packet->source),
+                valid ? 1 : 0, static_cast<unsigned long long>(boot_before), static_cast<unsigned long long>(boot_after),
+                static_cast<unsigned long long>(mono_before), static_cast<unsigned long long>(mono_after),
+                static_cast<unsigned long long>(awake), static_cast<unsigned long long>(slept),
+                valid && awake < 250000000 ? 1 : 0);
+        }
         state.failure.store(failure); state.done.store(true);
         std::printf("[smoke_frame_generation_process_pause] gate-release serial=%llu source=%llu held_ns=%llu failure=%d\n",
             static_cast<unsigned long long>(packet->serial), static_cast<unsigned long long>(packet->source),
@@ -141,6 +183,7 @@ private:
     std::shared_ptr<State> state_;
     uint64_t serial_ = 0, source_ = 0;
     Mode mode_ = Mode::Control;
+    bool system_suspend_ = false;
     bool armed_ = false, queued_ = false;
 };
 #endif
@@ -255,7 +298,9 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
     const auto* ui_oracle_setting = std::getenv("HEAVEN_SMOKE_FG_UI_ORACLE");
     const bool ui_oracle = ui_oracle_setting && std::string_view(ui_oracle_setting) == "1";
     const char* process_setting = std::getenv("HEAVEN_SMOKE_FG_PROCESS_PAUSE");
-    const bool process_pause = process_setting && std::string_view(process_setting) == "1";
+    const char* system_setting = std::getenv("HEAVEN_SMOKE_FG_SYSTEM_SUSPEND");
+    const bool system_suspend = system_setting && std::string_view(system_setting) == "1";
+    const bool process_pause = system_suspend || (process_setting && std::string_view(process_setting) == "1");
     const char* broken_setting = std::getenv("HEAVEN_SMOKE_FG_BROKEN_CHAIN_ORACLE");
     const bool broken_chain_oracle = broken_setting && std::string_view(broken_setting) == "1";
 #ifdef __linux__
@@ -273,7 +318,7 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
 #ifdef __linux__
         if (process_pause) {
             require(!ui_oracle && original.renderer, "process pause requires ordinary lifecycle UI and renderer");
-            process_gate = std::make_unique<ProcessPauseGate>();
+            process_gate = std::make_unique<ProcessPauseGate>(system_suspend);
         }
 #else
         require(!process_pause, "process pause controller requires native Linux");
@@ -478,7 +523,8 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                     original.engine->getTextureCount(), original.engine->getRenderTargetCount()};
             };
             asynchronous_frames = true;
-            const auto async_before = frames(128, "process pause asynchronous ring warmup");
+            const auto async_before = frames(128, system_suspend ? "system suspend asynchronous ring warmup" :
+                "process pause asynchronous ring warmup");
             require_active(async_before);
             const auto owner_baseline = owners();
             asynchronous_frames = false;
@@ -489,9 +535,19 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                     control.counters.generated_presented_frames == async_before.counters.generated_presented_frames + 1,
                     "no-pause queued gate did not interpolate exactly one source");
             gate_mode = ProcessPauseGate::Mode::Pause;
-            const auto suspended = frames(1, "queued source after process SIGCONT");
-            require(process_gate->held_ns() >= 500000000,
-                    "process pause did not exceed the independent half-second minimum");
+            const auto suspended = frames(1, system_suspend ? "queued source after system resume" :
+                "queued source after process SIGCONT");
+            if (system_suspend) {
+                require(process_gate->clocks_valid() && process_gate->sleep_ns() >= 5000000000,
+                        "system suspend did not prove five seconds of physical sleep");
+                std::printf("[smoke_frame_generation_system_suspend] sleep-integration source=%llu awake_ns=%llu "
+                    "slept_ns=%llu awake_under_250ms=%d\n", static_cast<unsigned long long>(suspended.counters.real_frames),
+                    static_cast<unsigned long long>(process_gate->awake_ns()),
+                    static_cast<unsigned long long>(process_gate->sleep_ns()), process_gate->awake_ns() < 250000000 ? 1 : 0);
+            } else {
+                require(process_gate->held_ns() >= 500000000,
+                        "process pause did not exceed the independent half-second minimum");
+            }
             require(suspended.counters.real_frames == control.counters.real_frames + 1 &&
                     suspended.counters.real_presented_frames == control.counters.real_presented_frames + 1,
                     "queued process pause lost or duplicated its real source");
@@ -504,16 +560,21 @@ CaseResult run_frame_generation_case(const CaseContext& ctx) {
                     suspended.counters.generated_frames == control.counters.generated_frames &&
                     suspended.counters.generated_presented_frames == control.counters.generated_presented_frames,
                     "queued callback interpolated across OS process suspension");
-            const auto recovered = frames(5, "queued process pause recovery");
+            const auto recovered = frames(5, system_suspend ? "queued system suspend recovery" :
+                "queued process pause recovery");
             require_active(recovered);
             require(recovered.counters.generated_frames > suspended.counters.generated_frames &&
                     recovered.counters.generated_presented_frames > suspended.counters.generated_presented_frames,
                     "process-pause history did not recover within five accepted sources");
             asynchronous_frames = true;
-            require_active(frames(128, "process pause asynchronous ring recovery"));
+            require_active(frames(128, system_suspend ? "system suspend asynchronous ring recovery" :
+                "process pause asynchronous ring recovery"));
             asynchronous_frames = false;
             require(owners() == owner_baseline, "process-pause asynchronous phases leaked Filament owners");
-            std::printf("[smoke_frame_generation_process_pause] PASS: same queued source reset, five-source recovery, 256 asynchronous sources and exact owner counts\n");
+            if (system_suspend)
+                std::printf("[smoke_frame_generation_system_suspend] PASS: physical sleep, same queued source reset, five-source recovery, 256 asynchronous sources and exact owner counts\n");
+            else
+                std::printf("[smoke_frame_generation_process_pause] PASS: same queued source reset, five-source recovery, 256 asynchronous sources and exact owner counts\n");
         }
 #endif
 

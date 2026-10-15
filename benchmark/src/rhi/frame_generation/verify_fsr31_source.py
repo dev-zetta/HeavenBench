@@ -10,6 +10,14 @@ def manifest_key(path: PurePath) -> str:
     return path.as_posix()
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def verify_source(sdk: Path, lock: Path) -> int:
     expected = {}
     for line in lock.read_text().splitlines():
@@ -18,8 +26,7 @@ def verify_source(sdk: Path, lock: Path) -> int:
         path = sdk / relative
         if not path.is_file() or path.is_symlink():
             raise SystemExit(f"Pinned FSR source missing/replaced: {relative}")
-        with path.open("rb") as stream:
-            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        actual = sha256_file(path)
         if actual != digest:
             raise SystemExit(f"Pinned FSR source modified: {relative}")
     # Catch newly injected headers/shaders in any locked source directory as well.

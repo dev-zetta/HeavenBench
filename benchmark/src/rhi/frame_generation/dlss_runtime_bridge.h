@@ -2,6 +2,7 @@
 #define HEAVEN_DLSS_RUNTIME_BRIDGE_H
 
 #include "dlss_provider.h"
+#include "frame_generation_history.h"
 
 #include <glm/glm.hpp>
 
@@ -70,7 +71,7 @@ private:
     DlssPlatform& platform_;
     std::shared_ptr<FrameGenerationOutput> output_;
     std::optional<uint64_t> previous_logical_frame_;
-    std::chrono::steady_clock::time_point previous_native_callback_;
+    FrameGenerationHistoryClock::time_point previous_native_callback_;
     uint64_t swapchain_epoch_ = 0;
 };
 

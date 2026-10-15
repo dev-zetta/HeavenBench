@@ -50,7 +50,7 @@ VkResult DlssRuntimeBridge::drain_generation() {
 std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
         const filament::backend::VulkanCommandContext& context,
         const Camera& camera, const DlssRuntimeFrame& frame) {
-    const auto callback_time = std::chrono::steady_clock::now();
+    const auto callback_time = FrameGenerationHistoryClock::now();
     const auto fail = [this](std::string reason) -> std::expected<void, std::string> {
         suspend_generation();
         return std::unexpected(std::move(reason));
