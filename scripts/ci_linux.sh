@@ -37,7 +37,7 @@ exec > >(tee "$OUTPUT_DIR/logs/linux-build.log") 2>&1
 "$SCRIPT_DIR/fetch_dependencies.sh"
 targets=(--target heaven_benchmark --target heaven_asset_packer)
 configuration=(--cmake-arg -DHEAVEN_ENABLE_FSR3=OFF --cmake-arg -DHEAVEN_ENABLE_DLSS=OFF)
-package_options=()
+package_options=(--skip-build --cpu-arch "$CPU_ARCH" --output-dir "$OUTPUT_DIR")
 if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
     command -v glslangValidator >/dev/null || { echo 'glslangValidator is required for experimental FSR' >&2; exit 1; }
     command -v spirv-val >/dev/null || { echo 'spirv-val is required for experimental FSR packaging' >&2; exit 1; }
@@ -45,7 +45,7 @@ if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
     python3 "$SCRIPT_DIR/fetch_fsr31.py" --output "$sdk"
     configuration=(--cmake-arg -DHEAVEN_ENABLE_FSR3=ON --cmake-arg -DHEAVEN_ENABLE_DLSS=OFF \
         --cmake-arg "-DHEAVEN_FSR31_SOURCE=$sdk" --cmake-arg -DHEAVEN_FSR31_NATIVE_TEST=OFF)
-    package_options=(--experimental-fsr3 --source-manifest "$SOURCE_MANIFEST")
+    package_options+=(--experimental-fsr3 --source-manifest "$SOURCE_MANIFEST")
     mkdir -p "$OUTPUT_DIR/metadata"
     cp "$sdk/heavenbench-source.json" "$OUTPUT_DIR/metadata/fidelityfx-source.json"
 fi
@@ -73,7 +73,7 @@ if [[ "$CPU_ARCH" == portable ]]; then
     ctest --test-dir "$HEAVEN_BUILD_ROOT/renderer" --output-on-failure --timeout 30 \
         --tests-regex '^heaven_benchmark_smoke$'
 fi
-"$SCRIPT_DIR/package_appimage.sh" --skip-build --cpu-arch "$CPU_ARCH" --output-dir "$OUTPUT_DIR" "${package_options[@]}"
+"$SCRIPT_DIR/package_appimage.sh" "${package_options[@]}"
 if [[ "$CPU_ARCH" == portable ]]; then
     artifacts=("$OUTPUT_DIR/"*portable.AppImage)
     if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then artifacts=("$OUTPUT_DIR/"*portable-experimental-fsr3-*.AppImage); fi

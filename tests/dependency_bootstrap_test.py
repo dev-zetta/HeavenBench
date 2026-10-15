@@ -104,6 +104,8 @@ class DependencyBootstrapTest(unittest.TestCase):
             '#!/usr/bin/env bash\nset -euo pipefail\n'
             'if [[ "${1:-}" == --heaven-fixture-command-probe ]]; then\n'
             '  printf "heaven-fixture-git\\n"; exit 0\nfi\n'
+            'if [[ "${1:-}" == --heaven-fixture-argv-probe ]]; then\n'
+            '  shift; printf "%s\\0" "$@"; exit 0\nfi\n'
             f'if [[ "${{1:-}}" == -C && "${{3:-}}" == fetch && "$2" == */{dependency} ]]; then\n'
             f'  count=0; if [[ -f {shlex.quote(count.as_posix())} ]]; then read -r count < {shlex.quote(count.as_posix())}; fi\n'
             '  count=$((count + 1))\n'
@@ -121,16 +123,16 @@ class DependencyBootstrapTest(unittest.TestCase):
         sleep.chmod(0o755)
         # Git Bash can rewrite startup PATH and prefer git.exe to an
         # extensionless shim. Noninteractive Bash sources this fixture-only
-        # entry point after startup; absolute Bash/script paths also avoid
-        # Windows executable-extension and shebang selection differences.
+        # entry point after startup. Source the absolute wrappers in isolated
+        # subshells, retaining exec/exit semantics without forwarding arguments
+        # through another native Windows Bash launcher.
         entry = project / "fault-entry.bash"
         entry.write_text(
-            'git() { "$HEAVEN_FIXTURE_BASH" "$HEAVEN_FIXTURE_GIT_WRAPPER" "$@"; }\n'
-            'sleep() { "$HEAVEN_FIXTURE_BASH" "$HEAVEN_FIXTURE_SLEEP_WRAPPER" "$@"; }\n',
+            'git() ( source "$HEAVEN_FIXTURE_GIT_WRAPPER" "$@" )\n'
+            'sleep() ( source "$HEAVEN_FIXTURE_SLEEP_WRAPPER" "$@" )\n',
             newline="\n")
         environment = {**self.environment,
                        "BASH_ENV": entry.as_posix(),
-                       "HEAVEN_FIXTURE_BASH": Path(BASH).as_posix(),
                        "HEAVEN_FIXTURE_GIT_WRAPPER": wrapper.as_posix(),
                        "HEAVEN_FIXTURE_SLEEP_WRAPPER": sleep.as_posix()}
         probe = subprocess.run([BASH, "-c",
@@ -142,7 +144,27 @@ class DependencyBootstrapTest(unittest.TestCase):
         self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
         self.assertEqual(probe.stdout.splitlines(),
                          ["function", "function", "heaven-fixture-git", "heaven-fixture-sleep"])
+        arguments = ["HEAD^{tree}", "path with spaces", ""]
+        fidelity = subprocess.run([BASH, "-c", 'git --heaven-fixture-argv-probe "$@"',
+                                   "fixture-argv", *arguments],
+                                  env=environment, capture_output=True, check=False, timeout=10)
+        self.assertEqual(fidelity.returncode, 0, fidelity.stderr.decode(errors="replace"))
+        self.assertEqual(fidelity.stdout, b"".join(argument.encode() + b"\0" for argument in arguments))
         return environment, count, attempts, sleeps
+
+    def test_fault_wrapper_preserves_revision_and_argument_bytes(self):
+        project = self.project()
+        environment, count, _, sleeps = self.fetch_fault(project, "filament", 0, "unused failure")
+        self.require_success(self.run_bootstrap(project, environment))
+        directory = project / "lib/filament"
+        revision = subprocess.run([BASH, "-c", 'git -C "$1" rev-parse "$2"',
+                                   "fixture-revision", directory.as_posix(), "HEAD^{tree}"],
+                                  env=environment, text=True, capture_output=True,
+                                  check=False, timeout=10)
+        self.require_success(revision)
+        self.assertEqual(revision.stdout.strip(), self.tree)
+        self.assertEqual(count.read_text().strip(), "1")
+        self.assertFalse(sleeps.exists())
 
     def test_fault_selection_survives_shell_path_normalization(self):
         startup = subprocess.run([BASH, "-c", 'printf "%s" "$PATH"'],

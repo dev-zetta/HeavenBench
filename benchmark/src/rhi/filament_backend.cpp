@@ -2208,14 +2208,19 @@ FrameResult FilamentBackend::render_frame(
         }
     }
     bool coherent_heat = false;
+    bool scene_capture_reserved = false;
     if (particle_feature_) {
         particle_feature_->set_temporal_distortion_enabled(false);
         FrameContext capture_frame;
         capture_frame.camera = &camera;
         capture_frame.viewport_w = viewport_w;
         capture_frame.viewport_h = viewport_h;
+        // Preserve ordinary capture arbitration before temporal distortion
+        // replaces the heat-haze composite. Releasing its physical target must
+        // not silently enable an SSGI bounce that ordinary rendering skips.
+        scene_capture_reserved = particle_feature_->wants_scene_capture(capture_frame);
         coherent_heat = frame_generation_ && frame_generation_->scene_target() &&
-            config_.features.heat_haze && particle_feature_->wants_scene_capture(capture_frame);
+            config_.features.heat_haze && scene_capture_reserved;
         particle_feature_->set_temporal_distortion_enabled(coherent_heat);
     }
     if (coherent_heat) {
@@ -2230,10 +2235,10 @@ FrameResult FilamentBackend::render_frame(
     if (startup_scene_frame) {
         ScopedStartupTimer timer("first-frame render views");
         result.presented =
-            render_views(camera, viewport_w, viewport_h, need_depth_pass);
+            render_views(camera, viewport_w, viewport_h, need_depth_pass, scene_capture_reserved);
     } else {
         result.presented =
-            render_views(camera, viewport_w, viewport_h, need_depth_pass);
+            render_views(camera, viewport_w, viewport_h, need_depth_pass, scene_capture_reserved);
     }
     result.timings.render_submit_ms = elapsed_ms(stage_start);
 
@@ -2557,7 +2562,7 @@ bool FilamentBackend::prepare_overlay(int viewport_w, int viewport_h) {
 
 bool FilamentBackend::render_views(const Camera& camera,
                                    int viewport_w, int viewport_h,
-                                   bool need_depth_pass)
+                                   bool need_depth_pass, bool scene_capture_reserved)
 {
     profile::Scope profile_scope("Submit views", "Rendering");
     // Depth pre-pass setup: aim the depth camera and pull post-effect
@@ -2615,8 +2620,9 @@ bool FilamentBackend::render_views(const Camera& camera,
         }
 
         // Scene-colour capture path (SSGI). Active only when a feature wants the
-        // rendered scene colour AND the heat-haze composite is NOT claiming the
-        // main-view render target this frame (only one thing can redirect it).
+        // rendered scene colour and ordinary capture arbitration permits it.
+        // A temporal heat field retains the ordinary composite's reservation
+        // even though it no longer redirects the main-view render target.
         // The main view renders CLEAN (the SSGI quad lives in the feature's own
         // composite view, not the main scene) into a stable capture texture,
         // which we blit to the swap chain; SSGI then composites its bounce OVER
@@ -2624,7 +2630,7 @@ bool FilamentBackend::render_views(const Camera& camera,
         // target for the next frame. That keeps SSGI out of the history it
         // gathers from and avoids alternating the main view's render target
         // under Filament's temporal post-processing.
-        scene_color_active = want_scene_color_ && !capture_feature &&
+        scene_color_active = want_scene_color_ && !capture_feature && !scene_capture_reserved &&
                              scene_color_capture_->valid();
         if (scene_color_active) {
             for (auto& f : render_features_) {

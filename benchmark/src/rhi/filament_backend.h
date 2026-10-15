@@ -587,7 +587,7 @@ private:
     // and the main + composite view renders inside one begin/endFrame.
     [[nodiscard]] bool render_views(const Camera& camera,
                                     int viewport_w, int viewport_h,
-                                    bool need_depth_pass);
+                                    bool need_depth_pass, bool scene_capture_reserved);
 
     // Apply the weather-dependent Filament state for `weather`: the
     // lighting/bloom setup, the distance-fog override (the
