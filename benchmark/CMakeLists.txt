@@ -344,6 +344,7 @@ set(RHI_SOURCES
     src/rhi/frame_generation/frame_generation_runtime.cpp
     src/rhi/frame_generation/frame_generation_output.cpp
     src/rhi/frame_generation/temporal_scene.cpp
+    src/rhi/frame_generation/temporal_effects.cpp
     src/rhi/frame_generation/temporal_grass.cpp
     src/rhi/filament_util.cpp
     src/rhi/post_process.cpp
@@ -408,7 +409,8 @@ if(HEAVEN_ENABLE_FSR3)
     endif()
     add_subdirectory(src/rhi/frame_generation)
     list(APPEND RHI_SOURCES src/rhi/frame_generation/frame_generation_platform.cpp
-        src/rhi/frame_generation/frame_generation_capture.cpp)
+        src/rhi/frame_generation/frame_generation_capture.cpp
+        src/rhi/frame_generation/frame_generation_present_trace.cpp)
     set(fg_ui_spirv "${CMAKE_CURRENT_BINARY_DIR}/fg_ui.spv")
     set(fg_ui_header "${CMAKE_CURRENT_BINARY_DIR}/fg_ui_spirv.h")
     add_custom_command(OUTPUT "${fg_ui_header}"
@@ -887,6 +889,17 @@ add_executable(heaven_frame_generation_history_tests
     src/rhi/frame_generation/frame_generation_history_test.cpp)
 target_compile_features(heaven_frame_generation_history_tests PRIVATE cxx_std_17)
 add_test(NAME heaven_frame_generation_history_tests COMMAND heaven_frame_generation_history_tests)
+find_package(Threads REQUIRED)
+add_executable(heaven_frame_generation_present_trace_tests
+    src/rhi/frame_generation/frame_generation_present_trace_test.cpp
+    src/rhi/frame_generation/frame_generation_present_trace.cpp)
+heaven_configure_owned_cpp_target(heaven_frame_generation_present_trace_tests)
+target_include_directories(heaven_frame_generation_present_trace_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../lib/nlohmann")
+target_link_libraries(heaven_frame_generation_present_trace_tests PRIVATE Threads::Threads)
+add_test(NAME heaven_frame_generation_present_trace_tests
+    COMMAND heaven_frame_generation_present_trace_tests
+            "${CMAKE_CURRENT_BINARY_DIR}/present-trace-tests")
 if(HEAVEN_ENABLE_FSR3)
     add_executable(heaven_frame_generation_capture_contract_tests
         src/rhi/frame_generation/frame_generation_capture_contract_test.cpp
@@ -969,6 +982,8 @@ add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME heaven_frame_generation_present_analysis
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_present_analysis_test.py)
     add_test(NAME heaven_fsr31_fetch_contract
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../tests/fetch_fsr31_test.py)
@@ -1015,6 +1030,20 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_filament_linear_staging_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_linear_staging_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --vulkan-include "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/linear-staging-contract")
+        set_tests_properties(heaven_filament_linear_staging_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_frame_generation_present_trace_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_present_trace_contract_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --vulkan-include "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/present-trace-contract")
+        set_tests_properties(heaven_frame_generation_present_trace_contract PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_frame_generation_recovery_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_recovery_contract_test.py
@@ -1073,6 +1102,7 @@ if(TARGET heaven_benchmark_tests)
         heaven_profiler_trace_tests
         heaven_capture_camera_motion_tests
         heaven_frame_generation_history_tests
+        heaven_frame_generation_present_trace_tests
         heaven_filament_ssr_variant_tests
         heaven_vulkan_pipeline_lifetime_tests
         heaven_dlss_contract_tests

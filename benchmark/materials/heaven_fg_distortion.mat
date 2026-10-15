@@ -1,0 +1,64 @@
+// Optional FG-only coherent scene warp and its inverse-consistent SDK field.
+material {
+    name : heaven_fg_distortion,
+    shadingModel : unlit,
+    vertexDomain : device,
+    blending : opaque,
+    doubleSided : true,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : sampler2d, name : coarseField, precision : high },
+        { type : sampler2d, name : distortionField, precision : high },
+        { type : sampler2d, name : sceneTexture, precision : high },
+        { type : float, name : fieldBound, precision : high },
+        { type : bool, name : extractField }
+    ]
+}
+fragment {
+    highp float2 fieldOffset(highp float2 topLeftUv) {
+        highp float2 uv = uvToRenderTargetUV(float2(topLeftUv.x, 1.0-topLeftUv.y));
+        int2 size = textureSize(materialParams_coarseField, 0);
+        highp float2 position = clamp(uv*float2(size)-0.5, float2(0.0), float2(size-1));
+        int2 first = int2(floor(position));
+        int2 last = min(first+1, size-1);
+        highp float2 weight = position-float2(first);
+        highp float2 low = float2(-materialParams.fieldBound);
+        highp float2 high = float2(materialParams.fieldBound);
+        // Hardware half-texture filtering can quantize coordinates and
+        // intermediate results. Explicit FP32 interpolation preserves the
+        // continuous contraction used by the inverse solver.
+        highp float2 a = clamp(texelFetch(materialParams_coarseField,first,0).xy,low,high);
+        highp float2 b = clamp(texelFetch(materialParams_coarseField,int2(last.x,first.y),0).xy,low,high);
+        highp float2 c = clamp(texelFetch(materialParams_coarseField,int2(first.x,last.y),0).xy,low,high);
+        highp float2 d = clamp(texelFetch(materialParams_coarseField,last,0).xy,low,high);
+        return mix(mix(a,b,weight.x),mix(c,d,weight.x),weight.y);
+    }
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        highp float2 logicalUv = getNormalizedViewportCoord().xy;
+        highp float2 topLeftUv = float2(logicalUv.x,1.0-logicalUv.y);
+        if (materialParams.extractField) {
+            highp float2 inverseUv = topLeftUv;
+            // Component-bounded coarse nodes imply a global bilinear L-infinity
+            // contraction <=0.4. Check the pre-storage float residual below;
+            // RGBA16F displacement rounding adds a size-dependent allowance.
+            for (int iteration = 0; iteration < 12; ++iteration)
+                inverseUv = topLeftUv-fieldOffset(inverseUv);
+            highp float2 forward = fieldOffset(topLeftUv);
+            highp float2 residual = inverseUv+fieldOffset(inverseUv)-topLeftUv;
+            bool valid = all(lessThan(abs(residual),float2(2e-6))) &&
+                all(lessThan(abs(forward),float2(1.0))) &&
+                all(lessThan(abs(inverseUv),float2(1e30)));
+            material.baseColor = valid ? float4(forward,inverseUv-topLeftUv) : float4(0.0);
+        } else {
+            highp float2 fieldUv = uvToRenderTargetUV(logicalUv);
+            // The real HUDless color uses exactly the stored field tagged to
+            // the SDK, including its signed-half quantization at this pixel.
+            highp float2 offset = texture(materialParams_distortionField,fieldUv).xy;
+            highp float2 sourceUv = topLeftUv+offset;
+            material.baseColor = texture(materialParams_sceneTexture,
+                uvToRenderTargetUV(float2(sourceUv.x,1.0-sourceUv.y)));
+        }
+    }
+}

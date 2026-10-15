@@ -31,6 +31,7 @@
 #include "engine/render_test_scene_catalog.h"
 #include "rhi/frame_timing.h"
 #include "rhi/frame_generation/frame_generation_runtime.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #if HEAVEN_HAS_FSR3
 #include "rhi/frame_generation/frame_generation_platform.h"
 #endif
@@ -2200,7 +2201,28 @@ FrameResult FilamentBackend::render_frame(
             if(grass_feature_) grass_feature_->append_temporal_patches(patches);
             if(massive_foliage_feature_) massive_foliage_feature_->append_temporal_patches(patches);
             frame_generation_->prepare_grass(patches,instances,camera,render_time_);
+            std::vector<TemporalEffectDraw> effects;
+            for(const auto& feature : render_features_)
+                if(feature->enabled()) feature->append_temporal_draws(effects);
+            frame_generation_->prepare_effects(effects,camera,render_time_);
         }
+    }
+    bool coherent_heat = false;
+    if (particle_feature_) {
+        particle_feature_->set_temporal_distortion_enabled(false);
+        FrameContext capture_frame;
+        capture_frame.camera = &camera;
+        capture_frame.viewport_w = viewport_w;
+        capture_frame.viewport_h = viewport_h;
+        coherent_heat = frame_generation_ && frame_generation_->scene_target() &&
+            config_.features.heat_haze && particle_feature_->wants_scene_capture(capture_frame);
+        particle_feature_->set_temporal_distortion_enabled(coherent_heat);
+    }
+    if (coherent_heat) {
+        coherent_heat = particle_feature_->prepare_temporal_distortion(render_ctx_, viewport_w, viewport_h);
+        if (!frame_generation_->prepare_distortion(coherent_heat ?
+                particle_feature_->temporal_distortion_texture() : nullptr, true)) coherent_heat = false;
+        particle_feature_->set_temporal_distortion_enabled(coherent_heat);
     }
 
     // Depth pre-pass → main view → composite, inside one begin/endFrame.
@@ -2647,7 +2669,6 @@ bool FilamentBackend::render_views(const Camera& camera,
     bool presented = false;
     prepare_screenshot_target(viewport_w, viewport_h);
     if (renderer_->beginFrame(swapchain_, capture_frame_timestamp())) {
-        if(generating) frame_generation_->render_temporal();
         if (need_depth_pass) {
             // Render the depth pre-pass while the post-effect quads are
             // removed from the scene.
@@ -2656,6 +2677,10 @@ bool FilamentBackend::render_views(const Camera& camera,
                 if (f->enabled()) f->on_depth_prepass_end(render_ctx_);
             }
             depth_quads_pulled = false;
+        }
+        if(generating) {
+            if (particle_feature_) particle_feature_->render_temporal_distortion(render_ctx_);
+            frame_generation_->render_temporal();
         }
 
         // Render the main view. The post-effect quads are back in the
@@ -2732,7 +2757,16 @@ void FilamentBackend::present() {
 void FilamentBackend::request_frame_generation(FrameGenerationMode mode) {
     config_.frame_generation=mode;
     if(!core_.engine) return;
-    if(!frame_generation_ && mode!=FrameGenerationMode::Off) {
+    bool trace_requested=false;
+#if HEAVEN_HAS_FSR3
+    trace_requested=frame_generation_platform_ &&
+        engine_->getPlatform()==frame_generation_platform_.get() &&
+        frame_generation_platform_->presentation_trace_requested();
+#endif
+    // An explicit presentation diagnostic also needs accepted real-source IDs
+    // while generation is Off. The existing Runtime's inactive path queues only
+    // that native attribution callback; ordinary Off creates no Runtime.
+    if(!frame_generation_ && (mode!=FrameGenerationMode::Off || trace_requested)) {
         // A Streamline-created device is tied to that provider until backend
         // recreation. Never also interpose the FSR swap chain on its resources.
         const auto select_fsr_platform = [&]() -> FrameGenerationPlatform* {

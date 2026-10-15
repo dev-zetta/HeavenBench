@@ -110,6 +110,13 @@ def validate(platform, bridge, runtime):
             prepare.find("output_->ensure(width,height)"),
             "target resize can occur before the drain boundary")
 
+    native = body(bridge, "std::expected<void, std::string> DlssRuntimeBridge::prepare_native(")
+    require(0 <= native.find("dlss_runtime_detail::owned_distortion_input(inputs, context)") <
+            native.find("validate_dlss_present_inputs(inputs,"),
+            "actual bridge does not validate/bind the owned optional distortion input before SDK validation")
+    require("return fail(std::string(distortion.error()));" in native,
+            "malformed owned distortion is silently dropped instead of suspending generation")
+
 
 class DlssLifecycleContract(unittest.TestCase):
     @classmethod
@@ -189,6 +196,17 @@ class DlssLifecycleContract(unittest.TestCase):
         altered = self.runtime.replace(resize, resize.replace("drain();", ""))
         with self.assertRaisesRegex(AssertionError, "resizing output omits"):
             validate(self.platform, self.bridge, altered)
+
+    def test_missing_owned_distortion_binding_is_rejected(self):
+        altered = self.bridge.replace("dlss_runtime_detail::owned_distortion_input(inputs, context)",
+                                      "unvalidated_distortion_input(inputs, context)")
+        with self.assertRaisesRegex(AssertionError, "optional distortion input"):
+            validate(self.platform, altered, self.runtime)
+
+    def test_malformed_distortion_cannot_be_ignored(self):
+        altered = self.bridge.replace("return fail(std::string(distortion.error()));", "return {};")
+        with self.assertRaisesRegex(AssertionError, "malformed owned distortion"):
+            validate(self.platform, altered, self.runtime)
 
 
 def compiled_contracts(compiler, directory):

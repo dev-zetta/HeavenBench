@@ -1,0 +1,68 @@
+// FG-only coherent heat field; ordinary heat haze retains its original composite.
+material {
+    name : heaven_heat_haze_field,
+    requires : [ uv0, custom0, custom1 ],
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : float, name : fieldBound },
+        { type : float2, name : fieldGridSize },
+        { type : float2, name : sourceViewportSize },
+        { type : sampler2d, name : sceneDepth },
+        { type : float,     name : time },
+        { type : float,     name : spawnInterval },
+        { type : float,     name : strength },
+        // Fadeout distance: heat haze is only visible up close in
+        // the original benchmark. Beyond `fadeFar` the alpha is
+        // zero; below `fadeNear` it's at full strength; in between
+        // it ramps linearly. Both are world-space metres.
+        { type : float,     name : fadeNear },
+        { type : float,     name : fadeFar },
+        { type : float4,    name : hazeShapeTuning }
+    ],
+    variables : [
+        ageInfo  // .x = t01,.y = slot,.z = eye-space dist (m),.w = unused
+    ]
+}
+
+vertex {
+    #include "includes/effect_heat_haze_vertex.glsl"
+    void materialVertex(inout MaterialVertexInputs material) { hazeVertex(material); }
+}
+fragment {
+    #include "includes/effect_heat_haze_fragment.glsl"
+    bool influenceVisible() {
+        float2 uv = uvToRenderTargetUV(getNormalizedViewportCoord().xy);
+        int2 size = textureSize(materialParams_sceneDepth, 0);
+        // A bilinear coarse node can influence one grid spacing each side.
+        // Include downstream full/half-resolution field filtering as well as
+        // the source depth sampler's complete linear texel footprint.
+        float2 radius = 1.0 / materialParams.fieldGridSize + 2.0 / materialParams.sourceViewportSize;
+        int2 first = clamp(int2(floor((uv-radius)*float2(size)-0.5)), int2(0), size-1);
+        int2 last = clamp(int2(floor((uv+radius)*float2(size)-0.5))+1, int2(0), size-1);
+        float distance = variable_ageInfo.z - 0.05;
+        for (int y=first.y; y<=last.y; ++y) {
+            for (int x=first.x; x<=last.x; ++x) {
+                float depth = texelFetch(materialParams_sceneDepth,int2(x,y),0).r;
+                if (depth>0.0 && depth<distance) return false;
+            }
+        }
+        return true;
+    }
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float4 haze = hazeSample();
+        if (!influenceVisible()) discard;
+        // Canonical top-left image coordinates, independent of render API.
+#if !defined(TARGET_VULKAN_ENVIRONMENT) && !defined(TARGET_METAL_ENVIRONMENT) && !defined(TARGET_WEBGPU_ENVIRONMENT)
+        haze.y = -haze.y;
+#endif
+        float alpha = clamp(haze.a, 0.0, 1.0);
+        float2 offset = clamp(haze.xy, float2(-materialParams.fieldBound), float2(materialParams.fieldBound));
+        material.baseColor = float4(offset * alpha, 0.0, alpha);
+    }
+}

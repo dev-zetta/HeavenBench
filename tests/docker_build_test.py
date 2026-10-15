@@ -111,6 +111,20 @@ class DockerBuildTest(unittest.TestCase):
                 self.assertEqual(self.argument(command, "--output"),
                                  "type=local,dest=" + str(self.source / f"build/release/android-{abi}"))
 
+    def test_experimental_fsr_uses_separate_artifacts_and_keeps_analysis(self):
+        self.require_success(self.run_wrapper("linux", "--experimental-fsr3"))
+        [command] = self.invocations()
+        self.assertEqual(self.argument(command, "--target"), "linux-fsr3-artifacts")
+        self.assertEqual(self.argument(command, "--output"),
+                         "type=local,dest=" + str(self.source / "build/release/linux-experimental-fsr3"))
+        self.assertEqual(self.build_arguments(command)["RUN_ANALYSIS"], "1")
+        self.assertEqual(self.build_arguments(command)["CPU_ARCH"], "portable")
+
+    def test_experimental_fsr_rejects_android_and_nonportable(self):
+        for arguments in (("android", "--experimental-fsr3"), ("linux", "--experimental-fsr3", "--cpu-arch", "zen3")):
+            self.assertNotEqual(self.run_wrapper(*arguments).returncode, 0)
+        self.assertEqual(self.invocations(), [])
+
     def test_output_spaces_and_shell_metacharacters_remain_literal(self):
         name = "packages $(touch EXPANDED) `touch EVALUATED` $HOME; output"
         self.require_success(self.run_wrapper("linux", "--output-dir", name))
@@ -202,10 +216,14 @@ class LinuxPipelineTest(unittest.TestCase):
                    "if name == 'package_appimage.sh':\n"
                    "    directory = pathlib.Path(args[args.index('--output-dir') + 1])\n"
                    "    architecture = args[args.index('--cpu-arch') + 1]\n"
-                   "    (directory / f'fixture-{architecture}.AppImage').write_bytes(b'fixture')\n")
-        for directory, names in ((executables, ("cmake", "ctest")),
+                   "    suffix = '-experimental-fsr3-123456789abc' if '--experimental-fsr3' in args else ''\n"
+                   "    (directory / f'fixture-{architecture}{suffix}.AppImage').write_bytes(b'fixture')\n"
+                   "if name == 'fetch_fsr31.py':\n"
+                   "    directory = pathlib.Path(args[args.index('--output') + 1]); directory.mkdir(parents=True, exist_ok=True)\n"
+                   "    (directory / 'heavenbench-source.json').write_text('{}')\n")
+        for directory, names in ((executables, ("cmake", "ctest", "glslangValidator", "spirv-val")),
                                  (scripts, ("fetch_dependencies.sh", "build_asset_tools.sh", "build.sh",
-                                            "check_modern_cpp.sh", "package_appimage.sh", "verify_appimage.py"))):
+                                            "check_modern_cpp.sh", "package_appimage.sh", "verify_appimage.py", "fetch_fsr31.py"))):
             for name in names:
                 path = directory / name
                 path.write_text(command)
@@ -215,9 +233,9 @@ class LinuxPipelineTest(unittest.TestCase):
                             "HEAVEN_BUILD_ROOT": str(self.directory / "build"),
                             "FIXTURE_LINUX_CALLS": str(self.calls)}
 
-    def run_pipeline(self, architecture="portable", **settings):
+    def run_pipeline(self, architecture="portable", arguments=(), **settings):
         result = subprocess.run([BASH, str(self.directory / "scripts/ci_linux.sh"),
-                                 "--cpu-arch", architecture, "--output-dir", str(self.directory / "artifacts")],
+                                 "--cpu-arch", architecture, "--output-dir", str(self.directory / "artifacts"), *map(str, arguments)],
                                 env={**self.environment, **settings}, text=True,
                                 capture_output=True, check=False, timeout=15)
         return result, [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -257,6 +275,30 @@ class LinuxPipelineTest(unittest.TestCase):
         self.assertIn("heaven_profiler_trace_tests", build)
         self.assert_host_and_smoke_gates(calls)
         self.assertTrue(any(call["name"] == "verify_appimage.py" for call in calls))
+        self.assertIn('-DHEAVEN_ENABLE_FSR3=OFF', build)
+        self.assertIn('-DHEAVEN_ENABLE_DLSS=OFF', build)
+
+    def test_experimental_pipeline_preserves_all_gates_and_labels_package(self):
+        manifest = self.directory / 'source-manifest.json'; manifest.write_text('{}')
+        result, calls = self.run_pipeline(arguments=('--experimental-fsr3', '--source-manifest', manifest))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [build] = [call['arguments'] for call in calls if call['name'] == 'build.sh']
+        self.assertIn('-DHEAVEN_ENABLE_FSR3=ON', build)
+        self.assertIn('-DHEAVEN_ENABLE_DLSS=OFF', build)
+        self.assertIn('-DHEAVEN_FSR31_NATIVE_TEST=OFF', build)
+        self.assert_host_and_smoke_gates(calls)
+        [package] = [call['arguments'] for call in calls if call['name'] == 'package_appimage.sh']
+        self.assertIn('--experimental-fsr3', package)
+        self.assertEqual(package[package.index('--source-manifest') + 1], str(manifest))
+        self.assertTrue(any(call['name'] == 'check_modern_cpp.sh' for call in calls))
+        self.assertTrue(any(call['name'] == 'verify_appimage.py' and 'experimental-fsr3' in call['arguments'][0] for call in calls))
+
+    def test_experimental_host_failure_prevents_package(self):
+        manifest = self.directory / 'source-manifest.json'; manifest.write_text('{}')
+        result, calls = self.run_pipeline(arguments=('--experimental-fsr3', '--source-manifest', manifest),
+            FIXTURE_CTEST_FAILURE='heaven_fsr31_view_retirement_test')
+        self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assertFalse(any(call['name'] == 'package_appimage.sh' for call in calls))
 
     def test_architecture_package_keeps_host_tests_on_portable_only(self):
         result, calls = self.run_pipeline("zen1")

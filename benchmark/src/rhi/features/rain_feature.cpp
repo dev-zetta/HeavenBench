@@ -10,6 +10,7 @@
  * while Rain_Intensity is 0.
  */
 #include "rhi/features/rain_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/render_test_scene_assets.h"
 #include "engine/feature_assets.h"
 #include "rhi/filament_bounds.h"
@@ -650,6 +651,15 @@ void RainFeature::destroy(RenderContext& ctx) {
     splash_tex_  = nullptr;
     bound_depth_ = nullptr;
     built_       = false;
+}
+
+
+void RainFeature::append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const {
+    if (!enabled_ || !in_scene_ || !rain_entity_ || !rain_mi_) return;
+    draws.push_back({.identity = rain_entity_.getId(), .kind = TemporalEffectKind::Rain,
+        .source_entity = rain_entity_, .vertices = rain_vb_, .indices = rain_ib_, .source = rain_mi_});
+    // Depth-projected splashes change the underlying surface's shading. Keep
+    // that surface's depth/vector instead of inventing a fullscreen layer.
 }
 
 } // namespace heaven

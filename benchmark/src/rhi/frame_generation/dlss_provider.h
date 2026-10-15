@@ -109,6 +109,13 @@ struct DlssPresentInputs {
     // Premultiplied UI RGB + alpha, with exact zero outside UI. Optional only
     // when the entire backbuffer is already HUDless.
     DlssImage ui_color_alpha;
+    // Optional post-process warp. RG maps distorted output UV to undistorted
+    // scene UV; BA is the corresponding inverse offset. Depth/MV stay unwarped.
+    DlssImage bidirectional_distortion;
+    bool distortion_active = false;
+    bool distortion_field_valid = false;
+    bool depth_motion_undistorted = false;
+    bool hudless_distortion_matches_backbuffer = false;
     VkFormat backbuffer_format = VK_FORMAT_UNDEFINED;
     uint32_t backbuffer_width = 0;
     uint32_t backbuffer_height = 0;

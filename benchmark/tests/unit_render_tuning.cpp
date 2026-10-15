@@ -169,7 +169,7 @@ bool test_render_tuning() {
                            "type : float4[16], name : lightPosRadius");
     ok &= require_contains(materials / "heaven_volumetric_fog.mat",
                            "const int MAX_STEPS = 32");
-    ok &= require_contains(materials / "heaven_volumetric_clouds.mat",
+    ok &= require_contains(materials / "includes" / "effect_volumetric_clouds_fragment.glsl",
                            "), 128)");
 
     const std::filesystem::path binders(MATERIAL_TUNING_BINDINGS_SRC_PATH);

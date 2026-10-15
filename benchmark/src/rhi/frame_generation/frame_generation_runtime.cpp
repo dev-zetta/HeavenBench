@@ -1,4 +1,5 @@
 #include "rhi/frame_generation/frame_generation_runtime.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/frame_generation/frame_generation_output.h"
 #include "rhi/frame_generation/frame_generation_history.h"
 #include "rhi/frame_generation/temporal_scene.h"
@@ -235,6 +236,11 @@ struct FrameGenerationRuntime::Native {
                 return Fsr31VulkanImage{image.image,image.format,image.extent,image.usage,image.layout};
             };
             frame.hudless_color=input(0); frame.depth=input(1); frame.motion_vectors=input(2);
+            if(context.images[4].image) {
+                if(context.images[4].image==context.images[3].image)
+                    throw std::runtime_error("Coherent distortion aliases the UI image");
+                frame.distortion_field=input(4);
+            }
             frame.generated_output={self.generated,VK_FORMAT_R8G8B8A8_UNORM,self.size,
                 VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_LAYOUT_GENERAL};
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
@@ -323,7 +329,7 @@ FrameGenerationRuntime::~FrameGenerationRuntime() {
     } catch (...) {
         std::fputs("Frame generation final diagnostics unavailable\n",stderr);
     }
-    native_.reset(); dlss_.reset(); output_.reset(); grass_.reset(); temporal_.reset();
+    native_.reset(); dlss_.reset(); output_.reset(); grass_.reset(); effects_.reset(); temporal_.reset();
     if(motion_) core_.engine->destroy(motion_);
     if(masked_) core_.engine->destroy(masked_);
     if(grass_material_) core_.engine->destroy(grass_material_);
@@ -354,8 +360,11 @@ void FrameGenerationRuntime::drain() {
 void FrameGenerationRuntime::request(FrameGenerationMode mode) {
     drain();
     active_=false;
+    // Detach borrowed field resources before the feature can resize them.
+    output_->prepare_distortion(nullptr);
     temporal_->invalidate_history();
     if(grass_) grass_->invalidate_history();
+    if(effects_) effects_->invalidate_history();
     std::scoped_lock lock(mutex_);
     state_.request(mode);
     std::string reason;
@@ -458,6 +467,7 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
     const bool was_active=active_;
 #endif
     active_=false;
+    output_->prepare_distortion(nullptr);
 #if HEAVEN_HAS_FSR3 || HEAVEN_HAS_DLSS
     const auto requested=status().requested;
     bool usable=false;
@@ -484,27 +494,20 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
         if(was_active) drain();
         temporal_->invalidate_history();
         if(grass_) grass_->invalidate_history();
+        if(effects_) effects_->invalidate_history();
         reset_=true;
         std::scoped_lock lock(mutex_);
         state_.set_capability({requested,false,"Frame generation currently requires SDR output and fixed resolution"});
         return false;
     }
 #if HEAVEN_HAS_DLSS
-    // Those effects do not yet provide a matching temporal participant. Keep
-    // the strict SDK integration scoped to the measured opaque/masked path.
-    // FSR optical flow remains an experimental option for the complete scene.
-    if(requested==FrameGenerationMode::Dlss &&
-       (config.features.particles || config.features.heat_haze ||
-        config.features.clouds || config.features.volumetric_clouds ||
-        config.features.god_rays || config.features.volumetric_fog ||
-        config.features.lens_flares || config.features.refraction ||
-        (config.features.rain && config.weather.rain_intensity>0.0f))) {
+    // Scene geometry, dominant effect layers and coherent heat distortion are
+    // checked by their actual preparation paths below. Fog/light shafts retain
+    // underlying ray motion; refractive glass retains its representative surface.
+    // Debug arrows have no temporal participant and are outside scene coverage.
+    if(requested==FrameGenerationMode::Dlss && config.wind_debug) {
         if(was_active) drain();
-        std::scoped_lock lock(mutex_);
-        state_.set_capability({requested,false,
-            "DLSS temporal coverage currently requires particles, heat haze, cloud layers, god rays, volumetric fog, lens flares, refraction and active rain disabled"});
-        reset_=true;
-        return false;
+        return unavailable("DLSS temporal inputs do not cover debug wind arrows");
     }
 #endif
     if(width_!=width || height_!=height) {
@@ -538,7 +541,8 @@ bool FrameGenerationRuntime::prepare([[maybe_unused]] MeshStore& meshes, [[maybe
         coverage.missing_current_positions==0 &&
         (reset_ || coverage.incomplete_history_primitives==0);
     has_ui_=has_ui;
-    output_->prepare(temporal_->packed_texture(),width,height,has_ui);
+    output_->prepare(temporal_->packed_texture(),width,height,has_ui,
+        {temporal_->current_clip(),temporal_->previous_clip(),temporal_->history_valid()});
     active_=true;
 #endif
     return active_;
@@ -561,11 +565,34 @@ void FrameGenerationRuntime::prepare_grass(std::span<const TemporalGrassPatch> p
     temporal_coverage_complete_ &= grass_->coverage().unavailable_ranges==0 &&
         (reset_ || grass_->coverage().incomplete_history_ranges==0);
 }
+void FrameGenerationRuntime::prepare_effects(std::span<const TemporalEffectDraw> draws,
+        const Camera& camera, float time) {
+    if(!active_) return;
+    if(!effects_ && !draws.empty()) effects_=std::make_unique<TemporalEffects>(core_);
+    if(effects_) {
+        if(!effects_->ensure(width_,height_) || !effects_->prepare(draws,camera,time,current_clip_)) {
+            unavailable("Frame-generation scene-effect inputs could not be prepared");
+            return;
+        }
+        temporal_coverage_complete_ &= effects_->coverage().unavailable_draws==0;
+    }
+    output_->prepare(temporal_->packed_texture(),width_,height_,has_ui_,
+        {temporal_->current_clip(),temporal_->previous_clip(),temporal_->history_valid()},
+        effects_ && effects_->coverage().draws ? effects_->packed_texture() : nullptr);
+}
 bool FrameGenerationRuntime::unavailable(std::string reason) {
     active_=false; reset_=true;
     std::scoped_lock lock(mutex_);
     state_.set_capability({state_.status().requested,false,std::move(reason)});
     return false;
+}
+bool FrameGenerationRuntime::prepare_distortion(filament::Texture* coarse_field, bool required) {
+    if (!active_) return false;
+    if (required && !coarse_field)
+        return unavailable("Frame-generation coherent distortion input is unavailable");
+    if (!output_->prepare_distortion(coarse_field))
+        return unavailable("Frame-generation coherent distortion targets are unavailable");
+    return true;
 }
 filament::RenderTarget* FrameGenerationRuntime::scene_target() const { return active_?output_->scene_rt():nullptr; }
 void FrameGenerationRuntime::render_temporal() {
@@ -576,7 +603,9 @@ void FrameGenerationRuntime::render_temporal() {
             dlss_->mark(token,marker);
         });
 #endif
-    core_.renderer->render(temporal_->view()); output_->render_extract();
+    core_.renderer->render(temporal_->view());
+    if(effects_ && effects_->coverage().draws) core_.renderer->render(effects_->view());
+    output_->render_extract();
 }
 void FrameGenerationRuntime::render_composite() { if(active_) output_->render_composite(); }
 void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera& camera) {
@@ -594,6 +623,7 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
         struct Packet { FrameGenerationRuntime* owner; Camera camera; DlssRuntimeFrame frame; };
         auto* packet=new Packet{this,camera,frame};
         core_.renderer->nativeCommand(output_->color_texture(),output_->depth_texture(),output_->motion_texture(),output_->ui_texture(),
+            output_->distortion_texture(),
             [](void* data,const void* context) noexcept {
                 std::unique_ptr<Packet> packet(static_cast<Packet*>(data));
                 auto& owner=*packet->owner;
@@ -621,6 +651,7 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
         previous_clip_=current_clip_; previous_camera_=camera;
         previous_source_=std::chrono::steady_clock::now();
         temporal_->commit_accepted(); if(grass_) grass_->commit_accepted();
+        if(effects_) effects_->commit_accepted();
         reset_=false;
         return;
     }
@@ -637,9 +668,11 @@ void FrameGenerationRuntime::submit(bool accepted,[[maybe_unused]] const Camera&
         previous_clip_=current_clip_;
         auto* packet=new Native::Packet{native_.get(),camera,reset_,std::clamp(dt,0.01f,1000.0f),
             static_cast<float>(core_.camera->getNear())};
-        core_.renderer->nativeCommand(output_->color_texture(),output_->depth_texture(),output_->motion_texture(),output_->ui_texture(),Native::callback,packet);
+        core_.renderer->nativeCommand(output_->color_texture(),output_->depth_texture(),output_->motion_texture(),output_->ui_texture(),
+            output_->distortion_texture(),Native::callback,packet);
         temporal_->commit_accepted(); reset_=false;
         if(grass_) grass_->commit_accepted();
+        if(effects_) effects_->commit_accepted();
         return;
     }
 #endif
@@ -673,6 +706,7 @@ void FrameGenerationRuntime::set_positions(uint64_t handle,std::span<const Verte
 void FrameGenerationRuntime::invalidate_history() {
     temporal_->invalidate_history(); reset_=true; previous_source_={}; previous_camera_.reset();
     if(grass_) grass_->invalidate_history();
+    if(effects_) effects_->invalidate_history();
     std::scoped_lock lock(mutex_); state_.invalidate_history();
 }
 }

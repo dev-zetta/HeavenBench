@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 #include <stdexcept>
 #include <string>
 
@@ -53,6 +54,7 @@ class RenderTarget;
 namespace heaven {
 
 class RenderTestSceneAssets;
+struct TemporalEffectDraw;
 
 // ── Scene light info (read-only view for features) ──────────────
 
@@ -252,6 +254,11 @@ public:
 
     //Per-frame uniform / transform update. Only called while enabled.
     virtual void update(RenderContext& /*ctx*/, const FrameContext& /*frame*/) {}
+
+    // Export persistent geometry and current source parameters only when the
+    // optional temporal runtime asks. The runtime owns accepted-frame history;
+    // rejected application attempts must not advance feature correspondence.
+    virtual void append_temporal_draws(std::vector<TemporalEffectDraw>& /*draws*/) const {}
 
     // Called for every feature, including disabled ones, before shared render
     // targets are resized. Replace borrowed samplers with stable placeholders

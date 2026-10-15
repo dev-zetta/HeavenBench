@@ -37,85 +37,16 @@ material {
 }
 
 vertex {
-    float hash11(float x) {
-        x = fract(x * 0.1031);
-        x *= x + 33.33;
-        x *= x + x;
-        return fract(x);
-    }
-
+    #include "includes/effect_glow_vertex.glsl"
     void materialVertex(inout MaterialVertexInputs material) {
-        float3 emitter_origin = material.worldPosition.xyz;
-        float2 corner         = material.uv0.xy * 2.0 - 1.0;
-        float4 c0             = getCustom0();
-        float4 c1             = getCustom1();
-        float  slot           = c0.x;
-        float  base_radius    = c0.y;
-        float  growth         = c0.z;
-        float  velocity       = c0.w;
-        float  lifetime       = c1.x;
-
-        float total_cycle = lifetime + materialParams.spawnInterval;
-        float slot_phase  = slot * materialParams.spawnInterval;
-        float age = mod(materialParams.time - slot_phase, total_cycle);
-        float alive = step(age, lifetime);
-
-        float r1 = hash11(slot * 1.7);
-        float r2 = hash11(slot * 3.1 + 4.0);
-
-        // Halo is anchored at the emitter — barely moves, just pulses.
-        // A small upward drift keeps successive halos slightly offset
-        // so the bloom doesn't sample the exact same pixel every time.
-        float t01    = age / lifetime;
-        float rise =
-            velocity * age * materialParams.particleShapeTuning.x;
-        float3 pos_local = float3(
-            (r1 - 0.5) * 0.05,
-            (r2 - 0.5) * 0.05,
-            rise);
-
-        // Radius grows generously over life — the glow expands as it
-        // fades, that's the visual signature.
-        float radius = (base_radius + growth * age) * alive;
-
-        // Pure camera-aligned billboard (this is a halo, not a flame —
-        // we don't want a vertical bias).
-        float3 cam_right = float3(frameUniforms.worldFromViewMatrix[0].xyz);
-        float3 cam_up    = float3(frameUniforms.worldFromViewMatrix[1].xyz);
-        float3 right = cam_right * radius;
-        float3 up    = cam_up    * radius;
-
-        float3 world = emitter_origin + pos_local
-                     + corner.x * right + corner.y * up;
-        material.worldPosition = float4(world, 1.0);
-
-        material.ageNorm = float4(t01, slot, rise, 0.0);
+        effectVertex(material, materialParams.time,
+            float3(frameUniforms.worldFromViewMatrix[0].xyz),
+            float3(frameUniforms.worldFromViewMatrix[1].xyz),
+            getWorldCameraPosition(), (getUserWorldFromWorldMatrix() * float4(getWorldCameraPosition(), 1.0)).xyz);
     }
 }
 
 fragment {
-    void material(inout MaterialInputs material) {
-        prepareMaterial(material);
-
-        float t    = variable_ageNorm.x;
-        float2 uv  = getUV0();
-
-        // Fetch the soft halo. The texture is a radial gradient — bright
-        // at the centre, fading to zero at the edges — so we just use
-        // the red channel directly as the alpha shape.
-        float halo = texture(materialParams_glowTex, uv).r;
-
-        // Lifetime envelope: gentle fade in and out, peak in the middle.
-        float fade_in  = clamp(t / 0.20, 0.0, 1.0);
-        float fade_out = clamp(1.0 - (t - 0.30) / 0.70, 0.0, 1.0);
-        float life_alpha = fade_in * fade_out;
-
-        float a = halo * life_alpha * materialParams.alphaScale;
-
-        // HDR colour for bloom response.
-        float3 rgb =
-            materialParams.tint * materialParams.particleShapeTuning.w;
-
-        material.baseColor = float4(rgb * a, a);
-    }
+    #include "includes/effect_glow_fragment.glsl"
+    void material(inout MaterialInputs material) { effectShade(material); }
 }

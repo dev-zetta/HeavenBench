@@ -29,6 +29,7 @@ public:
 
     void init(RenderContext& ctx, const AppConfig& config) override;
     void update(RenderContext& ctx, const FrameContext& frame) override;
+    void append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const override;
     void destroy(RenderContext& ctx);
 
 protected:

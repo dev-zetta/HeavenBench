@@ -6,6 +6,7 @@
  * ensure_scene_capture and the composite section of render_frame.
  */
 #include "rhi/features/particle_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/render_test_scene_assets.h"
 #include "engine/feature_assets.h"
 #include "rhi/filament_bounds.h"
@@ -363,6 +364,8 @@ void ParticleFeature::build_emitters(RenderContext& ctx) {
         const bool is_flame = (m == "fire_flame") && flame_material_;
         const bool is_glow  = (m == "fire_glow") && glow_material_ && glow_tex_;
         const bool is_firefly = (m == "flies") && firefly_material_ && glow_tex_;
+        se.temporal_kind = is_flame ? TemporalEffectKind::Flame :
+            is_glow ? TemporalEffectKind::Glow : is_firefly ? TemporalEffectKind::Firefly : TemporalEffectKind::Smoke;
 
         filament::math::float3 tint{0.55f, 0.45f, 0.40f};
         float alpha_scale = 0.10f;
@@ -484,6 +487,8 @@ void ParticleFeature::build_emitters(RenderContext& ctx) {
             Emitter haze;
             haze.vb = nullptr;  // shared with smoke emitter
             haze.ib = nullptr;
+            haze.borrowed_vb = se.vb;
+            haze.borrowed_ib = se.ib;
             haze.mi = heat_haze_material_->createInstance();
             if (haze.mi) {
                 material_tuning::bind_heat_haze(*haze.mi);
@@ -523,6 +528,7 @@ void ParticleFeature::build_emitters(RenderContext& ctx) {
 
                 haze.entity = utils::EntityManager::get().create();
                 haze.origin = origin;
+                haze.floating_group = src.floating_group;
                 filament::RenderableManager::Builder(1)
                     .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                               emitters_.back().vb,
@@ -559,6 +565,10 @@ void ParticleFeature::release_shared_targets(RenderContext& ctx) {
         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
     for (auto& entry : haze_emitters_) {
         if (entry.mi) entry.mi->setParameter("sceneDepth",
+            ctx.resources->placeholder_depth_texture(), sampler);
+    }
+    for (auto& emitter : field_emitters_) {
+        if (emitter.material) emitter.material->setParameter("sceneDepth",
             ctx.resources->placeholder_depth_texture(), sampler);
     }
     bound_depth_ = nullptr;
@@ -603,18 +613,20 @@ void ParticleFeature::update(RenderContext& ctx, const FrameContext& frame) {
     // so we move the *entity transform* by Z to follow the island.
     if (!frame.floating_offsets.empty()) {
         auto& tcm = ctx.engine->getTransformManager();
-        for (auto& se : emitters_) {
-            if (se.floating_group < 0 || !se.entity) continue;
-            float z_off = 0.0f;
-            for (const auto& [g, z] : frame.floating_offsets) {
-                if (g == se.floating_group) { z_off = z; break; }
+        const auto update_anchors = [&](auto& emitters) {
+            for (auto& emitter : emitters) {
+                if (emitter.floating_group < 0 || !emitter.entity) continue;
+                float z_offset = 0.0f;
+                for (const auto& [group, offset] : frame.floating_offsets) {
+                    if (group == emitter.floating_group) { z_offset = offset; break; }
+                }
+                if (const auto instance = tcm.getInstance(emitter.entity); instance)
+                    tcm.setTransform(instance, filament::math::mat4f::translation(
+                        filament::math::float3{0.0f, 0.0f, z_offset}));
             }
-            if (auto ti = tcm.getInstance(se.entity); ti) {
-                filament::math::mat4f mm = filament::math::mat4f::translation(
-                    filament::math::float3{0.0f, 0.0f, z_off});
-                tcm.setTransform(ti, mm);
-            }
-        }
+        };
+        update_anchors(emitters_);
+        update_anchors(haze_emitters_);
     }
 }
 
@@ -686,6 +698,7 @@ bool ParticleFeature::wants_scene_capture(const FrameContext& frame) const {
     // RGBA16F texture and re-blits it. Only enable it when at least
     // one chimney is within the haze visibility radius; otherwise skip
     // both the capture and the composite render and stay free.
+    if (temporal_distortion_enabled_ && field_target_) return false;
     if (!enabled_ || !composite_view_ || !blit_mi_) return false;
     if (haze_emitters_.empty()) return false;
     constexpr float kHazeFadeFar =
@@ -747,6 +760,151 @@ void ParticleFeature::render_composite(RenderContext& ctx) {
     }
 }
 
+void ParticleFeature::set_temporal_distortion_enabled(bool enabled) {
+    temporal_distortion_enabled_ = enabled;
+}
+
+bool ParticleFeature::prepare_temporal_distortion(RenderContext& ctx, int width, int height) {
+    if (!temporal_distortion_enabled_ || width <= 0 || height <= 0) return false;
+    auto& engine = *ctx.engine;
+    const int grid_width = std::min(width, 64);
+    const int grid_height = std::min(height, 64);
+    if (!field_material_) {
+        field_material_ = filament::Material::Builder()
+            .package(k_heaven_heat_haze_field_filamat, k_heaven_heat_haze_field_filamat_size).build(engine);
+        field_scene_ = engine.createScene();
+        field_view_ = engine.createView();
+        field_clear_ = filament::Skybox::Builder().color({0.0f, 0.0f, 0.0f, 0.0f}).build(engine);
+        if (!field_material_ || !field_scene_ || !field_view_ || !field_clear_) return false;
+        field_scene_->setSkybox(field_clear_);
+        field_view_->setScene(field_scene_);
+        field_view_->setCamera(ctx.camera);
+        field_view_->setPostProcessingEnabled(false);
+        field_view_->setShadowingEnabled(false);
+        // The zero skybox must remain visible to replace disabled field data.
+        field_view_->setVisibleLayers(0xff, 0xff);
+    }
+    if (!field_material_ || !field_scene_ || !field_view_ || !field_clear_) return false;
+    if (!field_target_ || field_width_ != grid_width || field_height_ != grid_height) {
+        field_view_->setRenderTarget(nullptr);
+        if (field_target_) engine.destroy(field_target_);
+        if (field_texture_) engine.destroy(field_texture_);
+        field_target_ = nullptr;
+        field_texture_ = nullptr;
+        // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+        constexpr auto usage = static_cast<filament::Texture::Usage>(
+            std::to_underlying(filament::Texture::Usage::COLOR_ATTACHMENT) |
+            std::to_underlying(filament::Texture::Usage::SAMPLEABLE) |
+            std::to_underlying(filament::Texture::Usage::BLIT_SRC));
+        field_texture_ = filament::Texture::Builder().width(static_cast<uint32_t>(grid_width))
+            .height(static_cast<uint32_t>(grid_height)).levels(1).usage(usage)
+            .format(filament::Texture::InternalFormat::RGBA16F).build(engine);
+        if (!field_texture_) return false;
+        field_target_ = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR0, field_texture_).build(engine);
+        if (!field_target_) return false;
+        field_width_ = grid_width;
+        field_height_ = grid_height;
+        field_view_->setRenderTarget(field_target_);
+        field_view_->setViewport({0, 0, static_cast<uint32_t>(grid_width), static_cast<uint32_t>(grid_height)});
+    }
+    if (field_emitters_.size() != haze_emitters_.size()) {
+        for (auto& emitter : field_emitters_) {
+            field_scene_->remove(emitter.entity);
+            engine.destroy(emitter.entity);
+            utils::EntityManager::get().destroy(emitter.entity);
+            engine.destroy(emitter.material);
+        }
+        field_emitters_.clear();
+        auto& renderables = engine.getRenderableManager();
+        for (const auto& haze : haze_emitters_) {
+            if (!haze.borrowed_vb || !haze.borrowed_ib || !haze.mi || !haze.entity) return false;
+            auto* material = field_material_->createInstance();
+            if (!material) return false;
+            const auto entity = utils::EntityManager::get().create();
+            const auto box = renderables.getAxisAlignedBoundingBox(renderables.getInstance(haze.entity));
+            const auto result = filament::RenderableManager::Builder(1)
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, haze.borrowed_vb, haze.borrowed_ib)
+                .material(0, material).boundingBox(box).culling(false).castShadows(false).receiveShadows(false)
+                .build(engine, entity);
+            if (result != filament::RenderableManager::Builder::Success) {
+                engine.destroy(material);
+                utils::EntityManager::get().destroy(entity);
+                return false;
+            }
+            engine.getTransformManager().create(entity);
+            field_scene_->addEntity(entity);
+            field_emitters_.push_back({entity, material});
+        }
+    }
+    // Every node's component is bounded by a. Bilinear differences therefore
+    // give Lip(infinity) <= 2*a*(gridWidth+gridHeight) <= 0.4. Round the shader
+    // bound down to an exactly half-representable value, with blending margin.
+    const float maximum = 0.1f / static_cast<float>(std::max(grid_width, grid_height));
+    int exponent = 0;
+    std::frexp(maximum, &exponent);
+    const float half_step = std::ldexp(1.0f, exponent - 11);
+    const float bound = std::floor(maximum * 0.999f / half_step) * half_step;
+    auto& transforms = engine.getTransformManager();
+    auto& renderables = engine.getRenderableManager();
+    const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::NEAREST,
+        filament::TextureSampler::MagFilter::NEAREST, filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    for (size_t index = 0; index < field_emitters_.size(); ++index) {
+        auto& field = field_emitters_[index];
+        const auto& haze = haze_emitters_[index];
+        for (const auto* name : {"time", "spawnInterval", "strength", "fadeNear", "fadeFar"})
+            field.material->setParameter(name, haze.mi->getParameter<float>(name));
+        field.material->setParameter("hazeShapeTuning",
+            haze.mi->getParameter<filament::math::float4>("hazeShapeTuning"));
+        field.material->setParameter("fieldBound", bound);
+        field.material->setParameter("fieldGridSize", filament::math::float2{
+            static_cast<float>(grid_width), static_cast<float>(grid_height)});
+        field.material->setParameter("sourceViewportSize", filament::math::float2{
+            static_cast<float>(width), static_cast<float>(height)});
+        field.material->setParameter("sceneDepth", bound_depth_ ? bound_depth_ :
+            ctx.resources->placeholder_depth_texture(), sampler);
+        transforms.setTransform(transforms.getInstance(field.entity),
+            transforms.getWorldTransform(transforms.getInstance(haze.entity)));
+        renderables.setLayerMask(renderables.getInstance(field.entity), 0xff,
+            enabled_ && heat_haze_enabled_ ? 0xff : 0);
+    }
+    return true;
+}
+
+void ParticleFeature::render_temporal_distortion(RenderContext& ctx) {
+    if (temporal_distortion_enabled_ && field_target_ && field_view_) ctx.renderer->render(field_view_);
+}
+
+filament::Texture* ParticleFeature::temporal_distortion_texture() const noexcept {
+    return temporal_distortion_enabled_ ? field_texture_ : nullptr;
+}
+
+void ParticleFeature::destroy_temporal_distortion(RenderContext& ctx) {
+    auto& engine = *ctx.engine;
+    if (field_view_) field_view_->setRenderTarget(nullptr);
+    for (auto& emitter : field_emitters_) {
+        if (field_scene_) field_scene_->remove(emitter.entity);
+        engine.destroy(emitter.entity);
+        utils::EntityManager::get().destroy(emitter.entity);
+        engine.destroy(emitter.material);
+    }
+    field_emitters_.clear();
+    if (field_target_) engine.destroy(field_target_);
+    if (field_texture_) engine.destroy(field_texture_);
+    if (field_view_) engine.destroy(field_view_);
+    if (field_clear_) engine.destroy(field_clear_);
+    if (field_scene_) engine.destroy(field_scene_);
+    if (field_material_) engine.destroy(field_material_);
+    field_target_ = nullptr;
+    field_texture_ = nullptr;
+    field_view_ = nullptr;
+    field_clear_ = nullptr;
+    field_scene_ = nullptr;
+    field_material_ = nullptr;
+    field_width_ = field_height_ = 0;
+    temporal_distortion_enabled_ = false;
+}
+
 void ParticleFeature::on_enabled_changed(RenderContext& ctx, bool on) {
     if (!built_) return;   // build_emitters honours enabled_ when it runs
     if (on && !in_scene_) {
@@ -760,6 +918,19 @@ void ParticleFeature::on_enabled_changed(RenderContext& ctx, bool on) {
 
 void ParticleFeature::destroy(RenderContext& ctx) {
     auto* engine_ = ctx.engine;
+    destroy_temporal_distortion(ctx);
+
+    // Retire heat-haze borrowers before the owning smoke VB/IB; only the
+    // entity + MaterialInstance are theirs.
+    for (auto& he : haze_emitters_) {
+        if (he.entity) {
+            if (composite_scene_) composite_scene_->remove(he.entity);
+            engine_->destroy(he.entity);
+            utils::EntityManager::get().destroy(he.entity);
+        }
+        if (he.mi) engine_->destroy(he.mi);
+    }
+    haze_emitters_.clear();
 
     // Smoke/flame/glow/firefly emitters own their VB/IB.
     for (auto& se : emitters_) {
@@ -774,17 +945,6 @@ void ParticleFeature::destroy(RenderContext& ctx) {
     }
     emitters_.clear();
 
-    // Heat-haze emitters share the smoke VB/IB (already destroyed
-    // above); only the entity + MaterialInstance are theirs.
-    for (auto& he : haze_emitters_) {
-        if (he.entity) {
-            if (composite_scene_) composite_scene_->remove(he.entity);
-            engine_->destroy(he.entity);
-            utils::EntityManager::get().destroy(he.entity);
-        }
-        if (he.mi) engine_->destroy(he.mi);
-    }
-    haze_emitters_.clear();
 
     // Composite pipeline.
     if (blit_entity_) {
@@ -814,6 +974,21 @@ void ParticleFeature::destroy(RenderContext& ctx) {
     if (firefly_material_) { engine_->destroy(firefly_material_); firefly_material_ = nullptr; }
     // glow_tex_ is owned by the resource cache.
     glow_tex_ = nullptr;
+}
+
+
+void ParticleFeature::append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const {
+    if (!enabled_ || !in_scene_) return;
+    const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    for (const auto& emitter : emitters_) {
+        TemporalEffectDraw draw{.identity = emitter.entity.getId(),
+            .kind = emitter.temporal_kind, .source_entity = emitter.entity,
+            .vertices = emitter.vb, .indices = emitter.ib, .source = emitter.mi};
+        if (draw.kind == TemporalEffectKind::Glow || draw.kind == TemporalEffectKind::Firefly)
+            draw.textures[0] = {"glowTex", glow_tex_, sampler};
+        draws.push_back(draw);
+    }
 }
 
 } // namespace heaven

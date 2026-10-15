@@ -68,10 +68,10 @@ index 7392178b014fb84e817a589cde967c242aae0bbc..f9fde6e180501337c51030872c52eb2d
  static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
 diff --git a/filament/backend/include/backend/NativeCommand.h b/filament/backend/include/backend/NativeCommand.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..256b6f58fa9d3c0d89dc9a28cd1978da9b973cbc
+index 0000000000000000000000000000000000000000..0ee355ad89c0328ed247ce50f814e1523832a689
 --- /dev/null
 +++ b/filament/backend/include/backend/NativeCommand.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,28 @@
 +/*
 + * Copyright (C) 2026 HeavenBench contributors
 + * Licensed under the Apache License, Version 2.0.
@@ -80,6 +80,7 @@ index 0000000000000000000000000000000000000000..256b6f58fa9d3c0d89dc9a28cd1978da
 +#define TNT_BACKEND_NATIVE_COMMAND_H
 +
 +#include <array>
++#include <cstddef>
 +#include <cstdint>
 +
 +namespace filament::backend {
@@ -88,8 +89,11 @@ index 0000000000000000000000000000000000000000..256b6f58fa9d3c0d89dc9a28cd1978da
 +// outside a render pass, and must not call frontend Filament APIs. The owner
 +// drains the engine before retiring callback data or an external GPU resource.
 +struct NativeCommand {
++    static constexpr size_t TEXTURE_COUNT = 5;
 +    using Callback = void (*)(void* user, void const* vulkanContext) noexcept;
-+    std::array<uint32_t, 4> textures{UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
++    // color, depth, motion, UI and optional bidirectional distortion field.
++    std::array<uint32_t, TEXTURE_COUNT> textures{
++        UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
 +    Callback callback = nullptr;
 +    void* user = nullptr;
 +};
@@ -98,10 +102,10 @@ index 0000000000000000000000000000000000000000..256b6f58fa9d3c0d89dc9a28cd1978da
 +#endif
 diff --git a/filament/backend/include/backend/VulkanCommandContext.h b/filament/backend/include/backend/VulkanCommandContext.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..bc29cfb41506da08d84ee19068dd612095e815bc
+index 0000000000000000000000000000000000000000..814a1ccdbfc5d69f9c3da6255efd666dad863045
 --- /dev/null
 +++ b/filament/backend/include/backend/VulkanCommandContext.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,48 @@
 +/*
 + * Copyright (C) 2026 HeavenBench contributors
 + * Licensed under the Apache License, Version 2.0.
@@ -110,6 +114,7 @@ index 0000000000000000000000000000000000000000..bc29cfb41506da08d84ee19068dd6120
 +#define TNT_BACKEND_VULKAN_COMMAND_CONTEXT_H
 +
 +#include <bluevk/BlueVK.h>
++#include <backend/NativeCommand.h>
 +#include <array>
 +
 +namespace filament::backend {
@@ -140,7 +145,7 @@ index 0000000000000000000000000000000000000000..bc29cfb41506da08d84ee19068dd6120
 +    VkDevice device = VK_NULL_HANDLE;
 +    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
 +    uint32_t queueFamily = UINT32_MAX;
-+    std::array<VulkanCommandImage, 4> images{};
++    std::array<VulkanCommandImage, NativeCommand::TEXTURE_COUNT> images{};
 +    // SDK work is isolated in a secondary command buffer. Set this on any
 +    // recording failure to discard every native command, including partial
 +    // initialization/history writes. A successful history seed still commits.
@@ -150,19 +155,21 @@ index 0000000000000000000000000000000000000000..bc29cfb41506da08d84ee19068dd6120
 +} // namespace filament::backend
 +#endif
 diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
-index cf1d04ba3d67c5c5fe3379e9491d52f182c0b0fb..425a516b1696c7f05a24dc6e7b3e47dbc59c7eca 100644
+index cf1d04ba3d67c5c5fe3379e9491d52f182c0b0fb..88cb154c5fc1d9e6b67b4a8439f0ac39af2ddaec 100644
 --- a/filament/backend/include/backend/platforms/VulkanPlatform.h
 +++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
-@@ -107,6 +107,8 @@ public:
+@@ -107,6 +107,10 @@ public:
          VkFormat colorFormat = VK_FORMAT_UNDEFINED;
          VkFormat depthFormat = VK_FORMAT_UNDEFINED;
          VkExtent2D extent = {0, 0};
 +        // Actual selected surface mode; headless/custom swapchains may be unknown.
 +        VkPresentModeKHR presentMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
++        // Borrowed native handle for opt-in presentation feedback; headless is null.
++        VkSwapchainKHR nativeSwapchain = VK_NULL_HANDLE;
          uint32_t layerCount = 1;
          bool isProtected = false;
      };
-@@ -155,6 +157,10 @@ public:
+@@ -155,6 +159,10 @@ public:
           */
          bool isSRGBSwapChainSupported = true;
  
@@ -173,6 +180,17 @@ index cf1d04ba3d67c5c5fe3379e9491d52f182c0b0fb..425a516b1696c7f05a24dc6e7b3e47db
          /**
           * When the platform window is resized, we will flush and wait on the command queues
           * before recreating the swapchain. Default is true.
+@@ -217,6 +225,10 @@ public:
+      */
+     virtual VkResult present(SwapChainPtr handle, uint32_t index, VkSemaphore finishedDrawing);
+ 
++    // Synchronous borrowed metadata. Ordinary present remains unchanged.
++    VkResult presentWithNext(SwapChainPtr handle, uint32_t index,
++            VkSemaphore finishedDrawing, void const* next);
++
+     /**
+      * Check if the surface size has changed.
+      * @param handle             The handle returned by createSwapChain()
 diff --git a/filament/backend/include/private/backend/DriverAPI.inc b/filament/backend/include/private/backend/DriverAPI.inc
 index 8f1199f27ab56c2ed17702d3c729fffcee242899..13d5cd0a705bb89a284396d4b33d6a689b4a3849 100644
 --- a/filament/backend/include/private/backend/DriverAPI.inc
@@ -921,7 +939,7 @@ index 2d4e0be49283fff9de744e8dcd5e7bd381e8acf3..865c915a71205d44fa5105aa3e6146be
  
  #endif
 diff --git a/filament/backend/src/vulkan/VulkanDriver.cpp b/filament/backend/src/vulkan/VulkanDriver.cpp
-index d804bfce16a22a0fc478d2364dd908a0605c2678..5fe694733e6d632b24441794e3fe22382e138baa 100644
+index d804bfce16a22a0fc478d2364dd908a0605c2678..f6dbcd5cf7db3a239ed292364ea328c17e4e0729 100644
 --- a/filament/backend/src/vulkan/VulkanDriver.cpp
 +++ b/filament/backend/src/vulkan/VulkanDriver.cpp
 @@ -15,6 +15,8 @@
@@ -1021,8 +1039,8 @@ index d804bfce16a22a0fc478d2364dd908a0605c2678..5fe694733e6d632b24441794e3fe2238
 +    context.device = mPlatform->getDevice();
 +    context.queueFamily = mPlatform->getGraphicsQueueFamilyIndex();
 +    context.commandBuffer = commands.buffer();
-+    std::array<resource_ptr<VulkanTexture>, 4> textures;
-+    std::array<VulkanLayout, 4> layouts{};
++    std::array<resource_ptr<VulkanTexture>, NativeCommand::TEXTURE_COUNT> textures;
++    std::array<VulkanLayout, NativeCommand::TEXTURE_COUNT> layouts{};
 +    bool hasTextures = false;
 +    for (size_t i = 0; i < textures.size(); ++i) {
 +        if (command.textures[i] == HandleBase::nullid) continue;
@@ -1385,6 +1403,90 @@ index 0000000000000000000000000000000000000000..f882225a09f45a96c8a9a1f0aecd24ec
 +} // namespace filament::backend
 +
 +#endif // TNT_FILAMENT_BACKEND_VULKANPIPELINELIFETIME_H
+diff --git a/filament/backend/src/vulkan/VulkanTexture.cpp b/filament/backend/src/vulkan/VulkanTexture.cpp
+index e30e0ae267dc9c36e344bf64afc04081545a0c8c..4fe1f8c67d412c7208d096c324ae53cc37b812bd 100644
+--- a/filament/backend/src/vulkan/VulkanTexture.cpp
++++ b/filament/backend/src/vulkan/VulkanTexture.cpp
+@@ -287,6 +287,38 @@ void adjustedMemcpy(void* mapped, PixelBufferDescriptor const& p, size_t width,
+     }
+ }
+ 
++VkDeviceSize copyToLinearImage(void* mapped, PixelBufferDescriptor const& p, size_t width,
++        size_t height, size_t depth, VkSubresourceLayout const& layout) {
++    size_t const pixelSize = PixelBufferDescriptor::computeDataSize(p.format, p.type, 1, 1, 1);
++    assert_invariant(pixelSize > 0 && width > 0 && height > 0 && depth > 0);
++    size_t const sourceStride = p.stride ? p.stride : width;
++    size_t const sourceRowSize =
++            PixelBufferDescriptor::computeDataSize(p.format, p.type, sourceStride, 1, p.alignment);
++    size_t const sourceHeight = p.size / sourceRowSize / depth;
++    size_t const sourceLayerSize = sourceRowSize * sourceHeight;
++    assert_invariant(sourceStride >= p.left + width);
++    assert_invariant(sourceHeight >= p.top && sourceHeight - p.top >= height);
++
++    VkDeviceSize const rowSize = VkDeviceSize(width) * pixelSize;
++    VkDeviceSize const rowCount = VkDeviceSize(height) * depth;
++    assert_invariant(layout.rowPitch >= rowSize);
++    VkDeviceSize const writtenSize = (rowCount - 1) * layout.rowPitch + rowSize;
++    assert_invariant(writtenSize <= layout.size);
++    auto const* source = static_cast<uint8_t const*>(p.buffer);
++    auto* destination = static_cast<uint8_t*>(mapped) + layout.offset;
++    for (size_t z = 0; z < depth; z++) {
++        for (size_t y = 0; y < height; y++) {
++            size_t const sourceOffset = z * sourceLayerSize + (y + p.top) * sourceRowSize +
++                    p.left * pixelSize;
++            VkDeviceSize const destinationOffset = (z * height + y) * layout.rowPitch;
++            memcpy(destination + destinationOffset, source + sourceOffset, rowSize);
++        }
++    }
++    // Flush the bounding range, including row padding but excluding untouched
++    // allocation prefix and trailing padding. VMA handles atom-size alignment.
++    return writtenSize;
++}
++
+ uint8_t getAlignmentForBufferToImageCopy(VkFormat format) {
+     // VUID-vkCmdCopyBufferToImage-dstImage-07978
+     if(fvkutils::isVkDepthFormat(format) || fvkutils::isVkStencilFormat(format)) {
+@@ -652,12 +684,6 @@ void VulkanTexture::updateImage(const PixelBufferDescriptor& data, uint32_t widt
+ void VulkanTexture::updateImageWithBlit(const PixelBufferDescriptor& data, uint32_t width,
+         uint32_t height, uint32_t depth, uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,
+         uint32_t miplevel) {
+-    // Otherwise, use vkCmdCopyBufferToImage.
+-    size_t const bpp = PixelBufferDescriptor::computeDataSize(data.format, data.type, 1, 1, 1);
+-    // Note: if bpp = 0, we're dealing with a compressed format; we should fall
+-    // back to the buffer's size.
+-    size_t const writeSize = bpp > 0 ? width * height * depth * bpp : data.size;
+-
+     uint32_t layer = 0;
+     uint32_t layerCount = 1;
+     uint32_t dstZOffset = zoffset;
+@@ -676,19 +702,22 @@ void VulkanTexture::updateImageWithBlit(const PixelBufferDescriptor& data, uint3
+     // This is because Vulkan staging images with VK_IMAGE_TILING_LINEAR strictly require
+     // arrayLayers == 1 and depth == 1. Rather than complicating VulkanStagePool to handle
+     // 3D staging allocations (which violates the linear tiling spec), we allocate a simple
+-    // 2D image tall enough to hold all slices vertically. The contiguous nature of
+-    // adjustedMemcpy perfectly matches this layout, allowing us to easily copy the chunks
+-    // into the 3D destination via multiple VkImageBlit regions.
++    // 2D image tall enough to hold all slices vertically. Its actual row pitch and
++    // subresource offset still come from Vulkan; they need not match packed pixels.
++    // Multiple VkImageBlit regions copy the vertically stacked slices into the destination.
+     uint32_t const numSlices = dstDepth > layerCount ? dstDepth : layerCount;
+     uint32_t const stagingHeight = height * numSlices;
+ 
+     void* mapped = nullptr;
+     fvkmemory::resource_ptr<VulkanStageImage::Resource> stage
+             = mState->mStagePool.acquireImage(data.format, data.type, width, stagingHeight);
++    VkImageSubresource const subresource{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
++    VkSubresourceLayout layout{};
++    vkGetImageSubresourceLayout(mState->mDevice, stage->image(), &subresource, &layout);
+     vmaMapMemory(mState->mAllocator, stage->memory(), &mapped);
+-    adjustedMemcpy(mapped, data, width, height, depth);
++    VkDeviceSize const writeSize = copyToLinearImage(mapped, data, width, height, depth, layout);
++    vmaFlushAllocation(mState->mAllocator, stage->memory(), layout.offset, writeSize);
+     vmaUnmapMemory(mState->mAllocator, stage->memory());
+-    vmaFlushAllocation(mState->mAllocator, stage->memory(), 0, writeSize);
+ 
+     VulkanCommandBuffer& commands = mState->mCommands->get();
+     VkCommandBuffer const cmdbuf = commands.buffer();
 diff --git a/filament/backend/src/vulkan/VulkanTexture.h b/filament/backend/src/vulkan/VulkanTexture.h
 index 611eb2fd085ab1cec3b942802f75e99ed8289919..60c5ab9072b57fced029aded02845d00447bdfa3 100644
 --- a/filament/backend/src/vulkan/VulkanTexture.h
@@ -1399,7 +1501,7 @@ index 611eb2fd085ab1cec3b942802f75e99ed8289919..60c5ab9072b57fced029aded02845d00
      VulkanLayout getLayout(uint32_t layer, uint32_t level) const;
  
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..c04d0c6db44c7ac0a8c3042498ffd2db3de59725 100644
+index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..cd2c0b81ae525deef2ae15d609536e4dd77f5217 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 @@ -244,7 +244,15 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
@@ -1419,7 +1521,21 @@ index 6534e1c1f6543fbc91dfe806e7da5e0219f72ded..c04d0c6db44c7ac0a8c3042498ffd2db
  #if defined(__APPLE__)
          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
  #endif
-@@ -1252,6 +1260,11 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+@@ -836,6 +844,13 @@ VkResult VulkanPlatform::present(SwapChainPtr handle, uint32_t index, VkSemaphor
+     return sw->present(index, finishedDrawing);
+ }
+ 
++VkResult VulkanPlatform::presentWithNext(SwapChainPtr handle, uint32_t index,
++        VkSemaphore finishedDrawing, void const* next) {
++    auto sw = static_cast<VulkanPlatformSwapChainBase*>(handle);
++    sw->setPresentationTime(mImpl->mPresentationTime);
++    return sw->presentWithNext(index, finishedDrawing, next);
++}
++
+ bool VulkanPlatform::hasResized(SwapChainPtr handle) {
+     return static_cast<VulkanPlatformSwapChainBase*>(handle)->hasResized();
+ }
+@@ -1252,6 +1267,11 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
          .textureCompressionBC = features.textureCompressionBC,
          .shaderClipDistance = features.shaderClipDistance,
      };
@@ -1595,7 +1711,7 @@ index 8874e079def3fd55f59b675c1a464242d0768f3c..1aed885a7f5796ec6bd8fdd27430013c
          extent.width = ptrval->width;
          extent.height = ptrval->height;
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
-index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..a3aa5b6007824f8b56fdbd585e1a8e3f27db7194 100644
+index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..71bf3504176e76cd7ac7c5887a3673f2808e3015 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 @@ -28,7 +28,7 @@
@@ -1748,19 +1864,76 @@ index 7c1e075eed4a9c5c60f47133cd017f8a79a3206b..a3aa5b6007824f8b56fdbd585e1a8e3f
      bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
                                              desiredPresentMode) != presentModes.end();
      FILAMENT_CHECK_POSTCONDITION(foundSuitablePresentMode)
-@@ -304,6 +389,7 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+@@ -303,7 +388,9 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+     }
  
      mSwapChainBundle.colors = fvkutils::enumerate(vkGetSwapchainImagesKHR, mDevice, mSwapchain);
++    mSwapChainBundle.nativeSwapchain = mSwapchain;
      mSwapChainBundle.colorFormat = surfaceFormat.format;
 +    mSwapChainBundle.presentMode = desiredPresentMode;
      mSwapChainBundle.depthFormat =
              selectDepthFormat(mContext.getAttachmentDepthStencilFormats(), mHasStencil);
      mSwapChainBundle.depth = createImage(mSwapChainBundle.extent,
+@@ -358,6 +445,11 @@ VkResult VulkanPlatformSurfaceSwapChain::acquire(VulkanPlatform::ImageSyncData*
+ }
+ 
+ VkResult VulkanPlatformSurfaceSwapChain::present(uint32_t index, VkSemaphore finished) {
++    return presentWithNext(index, finished, nullptr);
++}
++
++VkResult VulkanPlatformSurfaceSwapChain::presentWithNext(uint32_t index, VkSemaphore finished,
++        void const* next) {
+     if (UTILS_VERY_UNLIKELY(mSurfaceLost)) {
+         return VK_ERROR_SURFACE_LOST_KHR;
+     }
+@@ -372,12 +464,14 @@ VkResult VulkanPlatformSurfaceSwapChain::present(uint32_t index, VkSemaphore fin
+ 
+     VkPresentTimesInfoGOOGLE presentTimeInfoGoogle = {
+         .sType = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE,
++        .pNext = next,
+         .swapchainCount = 1,
+         .pTimes = &presentTime,
+     };
+ 
+     VkPresentInfoKHR presentInfo = {
+         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
++        .pNext = next,
+         .waitSemaphoreCount = 1,
+         .pWaitSemaphores = &finishedDrawing,
+         .swapchainCount = 1,
+@@ -534,6 +628,7 @@ void VulkanPlatformSurfaceSwapChain::destroy() {
+         vkDestroySwapchainKHR(mDevice, mSwapchain, VKALLOC);
+         mSwapchain = VK_NULL_HANDLE;
+     }
++    mSwapChainBundle.nativeSwapchain = VK_NULL_HANDLE;
+ }
+ 
+ VulkanPlatformHeadlessSwapChain::VulkanPlatformHeadlessSwapChain(VulkanContext const& context,
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
-index a44c62e75d0cefff11bb288444252286f529842e..267a496c7aa8069eba49cdce75427c358eace14b 100644
+index a44c62e75d0cefff11bb288444252286f529842e..bb275f67fde120d51c5111b16e74ac0d0482957d 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
-@@ -131,6 +131,8 @@ private:
+@@ -51,6 +51,10 @@ struct VulkanPlatformSwapChainBase : public Platform::SwapChain {
+ 
+     virtual VkResult present(uint32_t index, VkSemaphore finished) = 0;
+ 
++    virtual VkResult presentWithNext(uint32_t index, VkSemaphore finished, void const*) {
++        return present(index, finished);
++    }
++
+     virtual VkResult recreate() = 0;
+ 
+     virtual bool hasResized() const = 0;
+@@ -94,6 +98,8 @@ struct VulkanPlatformSurfaceSwapChain : public VulkanPlatformSwapChainBase {
+ 
+     virtual VkResult present(uint32_t index, VkSemaphore finished) override;
+ 
++    VkResult presentWithNext(uint32_t index, VkSemaphore finished, void const* next) override;
++
+     virtual VkResult recreate() override;
+ 
+     virtual bool hasResized() const override;
+@@ -131,6 +137,8 @@ private:
      uint32_t mCurrentImageReadyIndex;
  
      bool const mUsesRGB = false;
@@ -2199,7 +2372,7 @@ index 0000000000000000000000000000000000000000..188a6a36a43451da59a1bc3cdb658eff
 +    }
 +}
 diff --git a/filament/include/filament/Renderer.h b/filament/include/filament/Renderer.h
-index 5e1ba11de269899818a8a124bdc8e25b3bddca12..9292d938e8267f356918583a84ba495e248bac9a 100644
+index 5e1ba11de269899818a8a124bdc8e25b3bddca12..b1b369b991a2eed3bdc67075cfdfaac993f946f5 100644
 --- a/filament/include/filament/Renderer.h
 +++ b/filament/include/filament/Renderer.h
 @@ -20,9 +20,11 @@
@@ -2236,7 +2409,7 @@ index 5e1ba11de269899818a8a124bdc8e25b3bddca12..9292d938e8267f356918583a84ba495e
      /**
       * Use FrameRateOptions to set the desired frame rate and control how quickly the system
       * reacts to GPU load changes.
-@@ -439,6 +449,13 @@ public:
+@@ -439,6 +449,17 @@ public:
       */
      void setRenderingDeadline(std::chrono::steady_clock::time_point monotonic_clock);
  
@@ -2245,6 +2418,10 @@ index 5e1ba11de269899818a8a124bdc8e25b3bddca12..9292d938e8267f356918583a84ba495e
 +    // commands are allocated when this method is not called.
 +    void nativeCommand(Texture const* UTILS_NULLABLE color, Texture const* UTILS_NULLABLE depth,
 +            Texture const* UTILS_NULLABLE motion, Texture const* UTILS_NULLABLE ui,
++            backend::NativeCommand::Callback UTILS_NONNULL callback, void* UTILS_NULLABLE user);
++    void nativeCommand(Texture const* UTILS_NULLABLE color, Texture const* UTILS_NULLABLE depth,
++            Texture const* UTILS_NULLABLE motion, Texture const* UTILS_NULLABLE ui,
++            Texture const* UTILS_NULLABLE distortion,
 +            backend::NativeCommand::Callback UTILS_NONNULL callback, void* UTILS_NULLABLE user);
 +
      /**
@@ -2492,7 +2669,7 @@ index a778b612364feac390ee00eeae8ea6e6b67484fe..4d0a1ef419d44a3030a3cba5c8f3f8cc
      friend class RenderPassBuilder;
      friend class RenderPassBuilder;
 diff --git a/filament/src/Renderer.cpp b/filament/src/Renderer.cpp
-index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..3dad67b57f8dc9ab38ae2976e5d5e54b9faa3cff 100644
+index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..8969cbd82de2e509b1cd977ecdeca70e2f250b26 100644
 --- a/filament/src/Renderer.cpp
 +++ b/filament/src/Renderer.cpp
 @@ -20,10 +20,12 @@
@@ -2519,15 +2696,21 @@ index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..3dad67b57f8dc9ab38ae2976e5d5e54b
  using namespace math;
  using namespace backend;
  
-@@ -43,6 +49,28 @@ void Renderer::render(View const* view) {
+@@ -43,6 +49,34 @@ void Renderer::render(View const* view) {
      downcast(this)->render(downcast(view));
  }
  
 +void Renderer::nativeCommand(Texture const* color, Texture const* depth,
 +        Texture const* motion, Texture const* ui,
 +        backend::NativeCommand::Callback callback, void* user) {
++    nativeCommand(color, depth, motion, ui, nullptr, callback, user);
++}
++
++void Renderer::nativeCommand(Texture const* color, Texture const* depth,
++        Texture const* motion, Texture const* ui, Texture const* distortion,
++        backend::NativeCommand::Callback callback, void* user) {
 +    backend::NativeCommand command;
-+    Texture const* const textures[] = { color, depth, motion, ui };
++    Texture const* const textures[] = { color, depth, motion, ui, distortion };
 +    for (size_t i = 0; i < command.textures.size(); ++i) {
 +        if (textures[i]) command.textures[i] = downcast(textures[i])->getHwHandle().getId();
 +    }

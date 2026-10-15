@@ -1438,6 +1438,7 @@ private:
         // Seeded here, once config_ is final, so the first overlay
         // frame seeds its controls from the same values the renderer started with.
         working_config_ = config_;
+        bench_->set_presentation_trace_requested(presentation_trace_requested_);
         bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         overlay_ui_.set_application_build_info(kApplicationBuildInfo);
         active_gpu_telemetry_ = backend_->gpu_telemetry();
@@ -2821,6 +2822,7 @@ private:
                 cpu_stress_metrics_.aggregate_updates_per_second,
                 cpu_stress_metrics_.duration_seconds);
         }
+        bench_->set_presentation_trace_requested(presentation_trace_requested_);
         bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         if (!bench_->request_start()) {
             return false;
@@ -3131,6 +3133,10 @@ private:
     // completion, while this app instance is alive).
     LinuxHostInfoSource            host_info_source_;
     std::unique_ptr<BenchmarkSystem> bench_;
+    const bool presentation_trace_requested_ = [] {
+        const char* value = std::getenv("HEAVEN_FG_PRESENT_TRACE");
+        return value && *value;
+    }();
     OverlayUI                      overlay_ui_;
     OverlayIntents                 last_intents_;
     // In-UI configuration state. The

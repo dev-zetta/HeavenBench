@@ -5,12 +5,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 
 namespace heaven {
@@ -20,6 +23,17 @@ using namespace bluevk;
 using Clock = std::chrono::steady_clock;
 
 bool submitted(VkResult result) { return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR; }
+
+template<class Handle>
+uint64_t handle_bits(Handle handle) noexcept {
+    if constexpr (std::is_pointer_v<Handle>) return reinterpret_cast<uintptr_t>(handle);
+    else return static_cast<uint64_t>(handle);
+}
+template<class Handle>
+Handle handle_from_bits(uint64_t bits) noexcept {
+    if constexpr (std::is_pointer_v<Handle>) return std::bit_cast<Handle>(static_cast<uintptr_t>(bits));
+    else return static_cast<Handle>(bits);
+}
 
 void transition(VkCommandBuffer command, VkImage image, VkImageLayout from,
         VkImageLayout to, VkAccessFlags source, VkAccessFlags destination,
@@ -66,6 +80,7 @@ struct FrameGenerationPlatform::Impl {
         bool backup_initialized = false;
         bool surface = false;
         bool broken = false;
+        uint64_t trace_identity = 0;
         Clock::time_point last_real_present;
     };
     struct Armed {
@@ -88,6 +103,20 @@ struct FrameGenerationPlatform::Impl {
 #endif
     std::deque<FrameGenerationPresentEvent> events;
     FrameGenerationCapture capture;
+    FrameGenerationPresentTrace present_trace;
+    PFN_vkWaitForPresentKHR wait_for_present = nullptr;
+    VkDevice trace_device = VK_NULL_HANDLE;
+    uint64_t trace_chain_sequence = 0;
+    uint64_t trace_present_sequence = 0;
+
+    ~Impl() { present_trace.finish("Platform trace owner destroyed"); }
+
+    static int32_t wait_present(void* userdata, uint64_t chain, uint64_t present_id,
+            uint64_t timeout_ns) {
+        auto& state = *static_cast<Impl*>(userdata);
+        return state.wait_for_present(state.trace_device,
+            handle_from_bits<VkSwapchainKHR>(chain), present_id, timeout_ns);
+    }
 
     void capture_failed(uint64_t source, const char* reason) noexcept {
         const auto* message = reason && *reason ? reason : "Native diagnostic capture failed";
@@ -318,10 +347,86 @@ FrameGenerationPlatform::FrameGenerationPlatform() : impl_(std::make_unique<Impl
 }
 FrameGenerationPlatform::~FrameGenerationPlatform() = default;
 
+bool FrameGenerationPlatform::presentation_trace_requested() const noexcept {
+    return impl_->present_trace.requested();
+}
+
 FrameGenerationPlatform::Customization FrameGenerationPlatform::getCustomization() const noexcept {
     auto result = Base::getCustomization();
     result.enableFrameGenerationStorageImageFeatures = true;
     return result;
+}
+
+VkDevice FrameGenerationPlatform::createVkDevice(const VkDeviceCreateInfo& createInfo) noexcept {
+    if (!impl_->present_trace.requested()) return Base::createVkDevice(createInfo);
+    try {
+        auto unsupported = [&](const char* reason) {
+            impl_->present_trace.configure(false, reason);
+            return Base::createVkDevice(createInfo);
+        };
+        uint32_t count = 0;
+        auto result = vkEnumerateDeviceExtensionProperties(getPhysicalDevice(), nullptr, &count, nullptr);
+        if (result != VK_SUCCESS || count > 4096)
+            return unsupported("Vulkan presentation extension enumeration unavailable");
+        std::vector<VkExtensionProperties> properties(count);
+        result = vkEnumerateDeviceExtensionProperties(getPhysicalDevice(), nullptr, &count, properties.data());
+        if (result != VK_SUCCESS)
+            return unsupported("Vulkan presentation extension enumeration incomplete");
+        const auto supports = [&](const char* name) {
+            return std::ranges::any_of(properties, [&](const auto& property) {
+                return std::strcmp(property.extensionName, name) == 0;
+            });
+        };
+        if (!supports(VK_KHR_PRESENT_ID_EXTENSION_NAME) || !supports(VK_KHR_PRESENT_WAIT_EXTENSION_NAME))
+            return unsupported("VK_KHR_present_id and VK_KHR_present_wait are required");
+        VkPhysicalDevicePresentIdFeaturesKHR present_id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+        VkPhysicalDevicePresentWaitFeaturesKHR present_wait{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
+        present_id.pNext = &present_wait;
+        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        features.pNext = &present_id;
+        vkGetPhysicalDeviceFeatures2(getPhysicalDevice(), &features);
+        if (!present_id.presentId || !present_wait.presentWait)
+            return unsupported("KHR present-ID/wait features are unsupported");
+        for (auto* feature = static_cast<const VkBaseInStructure*>(createInfo.pNext);
+                feature; feature = feature->pNext) {
+            if (feature->sType == present_id.sType || feature->sType == present_wait.sType)
+                return unsupported("Existing Vulkan feature chain already owns KHR presentation features");
+        }
+        std::vector<const char*> extensions;
+        if (createInfo.enabledExtensionCount) extensions.assign(createInfo.ppEnabledExtensionNames,
+            createInfo.ppEnabledExtensionNames + createInfo.enabledExtensionCount);
+        for (const auto* name : {VK_KHR_PRESENT_ID_EXTENSION_NAME, VK_KHR_PRESENT_WAIT_EXTENSION_NAME}) {
+            if (std::ranges::none_of(extensions, [&](const char* existing) {
+                    return std::strcmp(existing, name) == 0;
+                })) extensions.push_back(name);
+        }
+        auto enabled = createInfo;
+        enabled.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        enabled.ppEnabledExtensionNames = extensions.data();
+        present_wait.pNext = const_cast<void*>(createInfo.pNext);
+        enabled.pNext = &present_id;
+        const auto device = Base::createVkDevice(enabled);
+        if (!device) return device;
+        // The device is already owned by Filament. Optional observer setup may
+        // allocate, but failure must not create a second device or lose this one.
+        try {
+            impl_->wait_for_present = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(device, "vkWaitForPresentKHR"));
+            impl_->trace_device = device;
+            impl_->present_trace.configure(impl_->wait_for_present != nullptr,
+                impl_->wait_for_present ? "VK_KHR_present_wait completion observation enabled" :
+                    "Enabled KHR presentation wait function is unavailable", Impl::wait_present, impl_.get());
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "Presentation trace observer setup failed: %s\n", error.what());
+        } catch (...) {
+            std::fputs("Presentation trace observer setup failed\n", stderr);
+        }
+        return device;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "Presentation trace capability setup failed: %s\n", error.what());
+    } catch (...) {
+        std::fputs("Presentation trace capability setup failed\n", stderr);
+    }
+    return Base::createVkDevice(createInfo);
 }
 
 bool FrameGenerationPlatform::arm_generated(VkImage output, VkFormat format, VkExtent2D extent,
@@ -493,6 +598,7 @@ FrameGenerationPlatform::SwapChainPtr FrameGenerationPlatform::createSwapChain(
         auto& chain = impl_->chains[handle];
         chain.bundle = Base::getSwapChainBundle(handle);
         chain.surface = nativeWindow && extent.width == 0 && extent.height == 0;
+        chain.trace_identity = ++impl_->trace_chain_sequence;
         if (chain.surface && native_swapchain_images_ready(chain.bundle)) impl_->unblock_after_recreation();
     }
     return handle;
@@ -510,13 +616,14 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         VkSemaphore finishedDrawing) {
     // Preserve the ordinary path: no tracing allocations, locking, waits or
     // extra submission when no generated image was supplied for this frame.
-    if (!impl_->armed.image && !impl_->armed.source) return Base::present(handle, index, finishedDrawing);
+    if (!impl_->armed.image && !impl_->armed.source)
+        return present_traced(handle, index, finishedDrawing, 0, PresentTraceKind::Unattributed);
     const auto armed = impl_->armed;
     impl_->clear_armed();
     const auto found = impl_->chains.find(handle);
     auto ordinary = [&] {
         impl_->capture.abandon_ui_inputs(armed.source);
-        const auto result = Base::present(handle, index, finishedDrawing);
+        const auto result = present_traced(handle, index, finishedDrawing, armed.source, PresentTraceKind::Real);
         if (!submitted(result) && found != impl_->chains.end())
             impl_->break_chain(found->second, "Native presentation failed: VkResult " + std::to_string(result));
         impl_->event(submitted(result) ? FrameGenerationPresentEventKind::RealSubmitted :
@@ -619,7 +726,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
     chain.backup_initialized = true;
     const auto half_interval = std::chrono::nanoseconds(armed.interval_ns / 2);
     if (chain.last_real_present != Clock::time_point{}) impl_->pace(chain.last_real_present + half_interval);
-    result = Base::present(handle, index, generated_work.present_ready);
+    result = present_traced(handle, index, generated_work.present_ready, armed.source, PresentTraceKind::Generated);
     impl_->event(submitted(result) ? FrameGenerationPresentEventKind::GeneratedSubmitted :
         FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result);
     if (!submitted(result)) {
@@ -671,7 +778,7 @@ VkResult FrameGenerationPlatform::present(SwapChainPtr handle, uint32_t index,
         return result;
     }
     impl_->pace(generated_present + half_interval);
-    result = Base::present(handle, sync.imageIndex, real_work.present_ready);
+    result = present_traced(handle, sync.imageIndex, real_work.present_ready, armed.source, PresentTraceKind::Real);
     impl_->event(submitted(result) ? FrameGenerationPresentEventKind::RealSubmitted :
         FrameGenerationPresentEventKind::SubmissionFailed, armed.source, result);
     if (submitted(result)) {
@@ -697,13 +804,20 @@ VkResult FrameGenerationPlatform::recreate(SwapChainPtr handle) {
     // The application may already have queued a packet with reset=false. The
     // driver's next native callback must see this before using SDK history.
     impl_->history.invalidate();
+    impl_->present_trace.finish("Swapchain recreation; unresolved IDs retired before native retirement");
     drain_generated();
     impl_->capture.release_after_drain();
-    if (const auto found = impl_->chains.find(handle); found != impl_->chains.end())
+    if (const auto found = impl_->chains.find(handle); found != impl_->chains.end()) {
         impl_->release_chain(getDevice(), found->second);
+        // Base recreation retires the old native chain even when creation
+        // fails. Never retain a waitable handle or reported mode across it.
+        found->second.bundle.nativeSwapchain = VK_NULL_HANDLE;
+        found->second.bundle.presentMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+    }
     const auto result = Base::recreate(handle);
     if (const auto found = impl_->chains.find(handle); found != impl_->chains.end() && result == VK_SUCCESS) {
         found->second.bundle = Base::getSwapChainBundle(handle);
+        found->second.trace_identity = ++impl_->trace_chain_sequence;
         found->second.broken = false;
         found->second.last_real_present = {};
         impl_->unblock_after_recreation();
@@ -716,6 +830,7 @@ VkResult FrameGenerationPlatform::recreate(SwapChainPtr handle) {
 }
 
 void FrameGenerationPlatform::destroy(SwapChainPtr handle) {
+    impl_->present_trace.finish("Swapchain destruction; unresolved IDs retired before native retirement");
     drain_generated();
     impl_->capture.release_after_drain();
     if (const auto found = impl_->chains.find(handle); found != impl_->chains.end()) {
@@ -726,6 +841,7 @@ void FrameGenerationPlatform::destroy(SwapChainPtr handle) {
 }
 
 void FrameGenerationPlatform::terminate() {
+    impl_->present_trace.finish("Device termination; unresolved IDs retired before native retirement");
     drain_generated();
     impl_->capture.release_after_drain();
     for (auto& entry : impl_->chains) {
@@ -733,6 +849,31 @@ void FrameGenerationPlatform::terminate() {
     }
     impl_->chains.clear();
     Base::terminate();
+}
+
+VkResult FrameGenerationPlatform::present_traced(SwapChainPtr handle, uint32_t index,
+        VkSemaphore finishedDrawing, uint64_t source_frame, PresentTraceKind kind) {
+    if (!impl_->present_trace.requested()) return Base::present(handle, index, finishedDrawing);
+    PresentTraceSubmission sample;
+    sample.kind = kind;
+    sample.source_frame = source_frame;
+    if (const auto found = impl_->chains.find(handle); found != impl_->chains.end()) {
+        sample.chain = found->second.trace_identity;
+        sample.native_chain = handle_bits(found->second.bundle.nativeSwapchain);
+        sample.present_mode = static_cast<int32_t>(found->second.bundle.presentMode);
+    }
+    if (impl_->present_trace.available() && sample.native_chain)
+        sample.present_id = ++impl_->trace_present_sequence;
+    VkPresentIdKHR present_id{VK_STRUCTURE_TYPE_PRESENT_ID_KHR};
+    present_id.swapchainCount = 1;
+    present_id.pPresentIds = &sample.present_id;
+    sample.submit_begin_ns = FrameGenerationPresentTrace::now_ns();
+    const auto result = sample.present_id ? Base::presentWithNext(handle, index, finishedDrawing, &present_id) :
+        Base::present(handle, index, finishedDrawing);
+    sample.submit_end_ns = FrameGenerationPresentTrace::now_ns();
+    sample.queue_result = result;
+    impl_->present_trace.submitted(sample);
+    return result;
 }
 
 } // namespace heaven

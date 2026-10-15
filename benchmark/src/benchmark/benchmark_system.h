@@ -178,6 +178,16 @@ public:
         set_frame_generation_requested(status.requested != FrameGenerationMode::Off);
     }
 
+    // Presentation observation is diagnostic even with generation Off. Its
+    // worker overhead cannot enter a scored tour or disappear after a toggle.
+    void set_presentation_trace_requested(bool requested) {
+        presentation_trace_requested_ = requested;
+        if (requested && state_ == BenchmarkState::Running) {
+            diagnostic_ = true;
+            diagnostic_presentation_trace_ = true;
+        }
+    }
+
     // Replace the provisional per-frame GPU samples with the backend's final,
     // deduplicated and benchmark-bounded set immediately before completion.
     void set_gpu_benchmark_times(std::vector<double> samples) {
@@ -232,6 +242,8 @@ private:
     bool                frame_generation_requested_ = false;
     bool                diagnostic_microprofile_ = false;
     bool                diagnostic_frame_generation_ = false;
+    bool                presentation_trace_requested_ = false;
+    bool                diagnostic_presentation_trace_ = false;
     FrameGenerationStatus frame_generation_status_;
 };
 

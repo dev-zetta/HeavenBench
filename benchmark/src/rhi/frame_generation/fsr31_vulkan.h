@@ -47,6 +47,12 @@ struct Fsr31VulkanFrame {
     Fsr31VulkanImage motion_vectors;
     Fsr31VulkanImage hudless_color;
     Fsr31VulkanImage generated_output;
+    // Optional signed top-left UV map F(u)-u, where F maps distorted color
+    // coordinates to undistorted depth/motion coordinates. Keep it alive until
+    // this record completes; the same-queue provider restores its input layout.
+    // Empty preserves the SDK identity map. Pixel/producer validity is an
+    // owner contract, independent of the metadata validation below.
+    Fsr31VulkanImage distortion_field;
     uint64_t frame_id = 0;
     bool reset = false;
     float frame_time_ms = 0.0f;

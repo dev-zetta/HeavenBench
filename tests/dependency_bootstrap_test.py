@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -92,6 +93,32 @@ class DependencyBootstrapTest(unittest.TestCase):
                               cwd=project, env=environment or self.environment, text=True,
                               capture_output=True, check=False, timeout=30)
 
+    def fetch_fault(self, project, dependency, failures, error, status=128):
+        binary = project / "fault-bin"
+        binary.mkdir()
+        count = project / "fetch-count.txt"
+        attempts = project / "fetch-attempts.txt"
+        sleeps = project / "fetch-sleeps.txt"
+        wrapper = binary / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env bash\nset -euo pipefail\n'
+            f'if [[ "${{1:-}}" == -C && "${{3:-}}" == fetch && "$2" == */{dependency} ]]; then\n'
+            f'  count=0; if [[ -f {shlex.quote(count.as_posix())} ]]; then read -r count < {shlex.quote(count.as_posix())}; fi\n'
+            '  count=$((count + 1))\n'
+            f'  printf "%s\\n" "$count" > {shlex.quote(count.as_posix())}\n'
+            f'  printf "%s\\n" "$@" >> {shlex.quote(attempts.as_posix())}\n'
+            f'  if [[ "$count" -le {failures} ]]; then\n'
+            f'    printf "%s\\n" {shlex.quote(error)} >&2\n    exit {status}\n  fi\nfi\n'
+            f'exec {shlex.quote(Path(GIT).as_posix())} "$@"\n', newline="\n")
+        wrapper.chmod(0o755)
+        sleep = binary / "sleep"
+        sleep.write_text('#!/bin/sh\n' +
+                         f'printf "%s\\n" "$@" >> {shlex.quote(sleeps.as_posix())}\n', newline="\n")
+        sleep.chmod(0o755)
+        environment = {**self.environment,
+                       "PATH": str(binary) + os.pathsep + self.environment["PATH"]}
+        return environment, count, attempts, sleeps
+
     def require_success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -128,6 +155,74 @@ class DependencyBootstrapTest(unittest.TestCase):
         script.write_text(script.read_text().replace(self.seed.as_posix(), "/absent/upstream"), newline="\n")
         self.require_success(self.run_bootstrap(first))
         self.assertEqual(self.git(directory, "rev-parse", "HEAD"), revision)
+
+    def test_transient_fetch_recovers_with_identical_pins(self):
+        for dependency, error in (
+                ("filament", "fatal: Could not resolve host: fixture.invalid"),
+                ("pocketfft", "fatal: Failed to connect to fixture.invalid:443 after 21223 ms: Could not connect to server")):
+            with self.subTest(dependency=dependency):
+                project = self.project()
+                environment, count, attempts, sleeps = self.fetch_fault(project, dependency, 1, error)
+                result = self.run_bootstrap(project, environment)
+                self.require_success(result)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(count.read_text().strip(), "2")
+                self.assertEqual(sleeps.read_text().splitlines(), ["2"])
+                arguments = attempts.read_text().splitlines()
+                self.assertEqual(len(arguments), 16)
+                self.assertEqual(arguments[:8], arguments[8:])
+                self.assertEqual(arguments[0], "-C")
+                self.assertTrue(arguments[1].replace("\\", "/").endswith("/lib/" + dependency))
+                self.assertEqual(arguments[2:8], ["fetch", "--quiet", "--depth", "1",
+                                                self.seed.as_posix(), self.base])
+                expected = self.tree if dependency == "filament" else self.base
+                expression = "HEAD^{tree}" if dependency == "filament" else "HEAD"
+                self.assertEqual(self.git(project / "lib" / dependency, "rev-parse", expression), expected)
+
+    def test_permanent_transport_failure_is_bounded_and_resumable(self):
+        project = self.project()
+        error = "fatal: The requested URL returned error: 503\nremote: retained diagnostic context"
+        environment, count, attempts, sleeps = self.fetch_fault(project, "pocketfft", 3, error, status=73)
+        result = self.run_bootstrap(project, environment)
+        self.assertEqual(result.returncode, 73, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count(error), 3)
+        self.assertEqual(count.read_text().strip(), "3")
+        self.assertEqual(sleeps.read_text().splitlines(), ["2", "4"])
+        self.assertEqual(attempts.read_text().splitlines().count(self.base), 3)
+        directory = project / "lib/pocketfft"
+        self.assertEqual(self.git(directory, "status", "--porcelain", "--untracked-files=all"), "")
+        self.assertFalse((project / "lib/bcdec").exists())
+        self.assertFalse((directory / ".git/index.lock").exists())
+        self.require_success(self.run_bootstrap(project))
+        self.assertEqual(self.git(directory, "rev-parse", "HEAD"), self.base)
+
+    def test_unavailable_revision_is_not_retried(self):
+        project = self.project()
+        error = f"fatal: couldn't find remote ref {self.base}"
+        environment, count, _, sleeps = self.fetch_fault(project, "pocketfft", 3, error)
+        result = self.run_bootstrap(project, environment)
+        self.assertEqual(result.returncode, 128, result.stdout + result.stderr)
+        self.assertIn(error, result.stderr)
+        self.assertEqual(count.read_text().strip(), "1")
+        self.assertFalse(sleeps.exists())
+
+    def test_existing_source_pin_mismatch_cannot_retry_into_acceptance(self):
+        project = self.project()
+        self.require_success(self.run_bootstrap(project))
+        directory = project / "lib/pocketfft"
+        (directory / "local.txt").write_text("keep local commit\n")
+        self.git(directory, "add", "local.txt")
+        self.git(directory, "commit", "--quiet", "-m", "Different source pin")
+        before = self.git(directory, "rev-parse", "HEAD")
+        environment, count, _, sleeps = self.fetch_fault(
+            project, "pocketfft", 0, "fatal: Failed to connect")
+        result = self.run_bootstrap(project, environment)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expected", result.stderr)
+        self.assertFalse(count.exists())
+        self.assertFalse(sleeps.exists())
+        self.assertEqual(self.git(directory, "rev-parse", "HEAD"), before)
+        self.assertEqual((directory / "local.txt").read_text(), "keep local commit\n")
 
     def test_existing_rebased_commit_is_accepted_by_exact_tree(self):
         project = self.project()

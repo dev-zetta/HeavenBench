@@ -50,8 +50,9 @@ bool native_swapchain_images_ready(const Base::SwapChainBundle& bundle) {
 MIDDLE = r'''
 }
 struct Impl {
-    struct Chain { Base::SwapChainBundle bundle; bool surface=false,broken=false; };
+    struct Chain { Base::SwapChainBundle bundle; bool surface=false,broken=false; uint64_t trace_identity=0; };
     std::unordered_map<SwapChainPtr,Chain> chains;
+    uint64_t trace_chain_sequence=0;
     std::atomic<bool> generation_blocked{true};
     struct History { unsigned epoch=0; void invalidate() { ++epoch; } } history;
     std::mutex status_mutex;

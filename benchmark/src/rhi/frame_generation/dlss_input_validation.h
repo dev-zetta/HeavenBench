@@ -57,6 +57,24 @@ inline std::string_view validate_dlss_present_inputs(
             input.ui_color_alpha.width != input.hudless_color.width ||
             input.ui_color_alpha.height != input.hudless_color.height))
         return "Full-resolution premultiplied UI color/alpha is required";
+    if (input.distortion_active) {
+        const auto& field = input.bidirectional_distortion;
+        if (!valid_image(field) ||
+                (field.format != VK_FORMAT_R16G16B16A16_SFLOAT &&
+                 field.format != VK_FORMAT_R32G32B32A32_SFLOAT))
+            return "Scene distortion requires a signed four-channel floating-point field";
+        if (field.width > input.hudless_color.width || field.height > input.hudless_color.height ||
+                uint64_t(field.width) * input.hudless_color.height !=
+                    uint64_t(field.height) * input.hudless_color.width)
+            return "Bidirectional distortion field and scene aspect/extents differ";
+        if (field.image == input.depth.image || field.image == input.motion.image ||
+                field.image == input.hudless_color.image ||
+                (input.backbuffer_has_ui && field.image == input.ui_color_alpha.image))
+            return "Bidirectional distortion field aliases another temporal input";
+        if (!input.distortion_field_valid || !input.depth_motion_undistorted ||
+                !input.hudless_distortion_matches_backbuffer)
+            return "Scene distortion needs a consistent inverse field, undistorted depth/motion and matching color";
+    }
 
     const auto finite = [](const auto& values) {
         return std::ranges::all_of(values, [](float value) { return std::isfinite(value); });

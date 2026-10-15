@@ -1,8 +1,10 @@
 // Host-only fault injection into the actual transformed SDK backend. No Vulkan
 // device, loader entry point, shader dispatch or queue submission is executed.
 #include "test_fake_handle.h"
+#include "fsr31_distortion_contract.h"
 
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -26,6 +28,64 @@ template<class T> uintptr_t identity(T handle) {
     else return static_cast<uintptr_t>(handle);
 }
 using heaven::test::fake_handle;
+
+void distortion_contract() {
+    heaven::Fsr31VulkanFrame frame;
+    frame.depth.image = fake_handle<VkImage>(1);
+    frame.motion_vectors.image = fake_handle<VkImage>(2);
+    frame.hudless_color.image = fake_handle<VkImage>(3);
+    frame.hudless_color.extent = {128, 96};
+    frame.generated_output.image = fake_handle<VkImage>(4);
+    const auto valid = [&](const char* reason) {
+        if (const auto* error = heaven::fsr31_distortion_error(frame))
+            throw std::runtime_error(std::string(reason) + ": " + error);
+    };
+    const auto invalid = [&](const auto& bad) {
+        if (!heaven::fsr31_distortion_error(bad)) throw std::runtime_error("Invalid distortion resource accepted");
+    };
+    valid("Optional absent field rejected");
+    frame.distortion_field = {fake_handle<VkImage>(5), VK_FORMAT_R16G16B16A16_SFLOAT, {128, 96},
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_LAYOUT_GENERAL};
+    valid("Signed half field rejected");
+    const auto half = frame;
+    frame.distortion_field.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    frame.distortion_field.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    frame.distortion_field.extent = {64, 48};
+    valid("Signed full-float lower-resolution field rejected");
+    frame = half;
+    for (const auto format : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16_SFLOAT}) {
+        auto bad = frame; bad.distortion_field.format = format; invalid(bad);
+    }
+    for (const auto extent : {VkExtent2D{0, 96}, VkExtent2D{128, 0}, VkExtent2D{256, 192},
+                              VkExtent2D{63, 48}, VkExtent2D{16385, 16385}}) {
+        auto bad = frame; bad.distortion_field.extent = extent; invalid(bad);
+    }
+    auto bad = frame; bad.distortion_field.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT; invalid(bad);
+    bad = frame; bad.distortion_field.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; invalid(bad);
+    for (const auto image : {frame.depth.image, frame.motion_vectors.image,
+                            frame.hudless_color.image, frame.generated_output.image}) {
+        bad = frame; bad.distortion_field.image = image; invalid(bad);
+    }
+    struct Dispatch { heaven::Fsr31VulkanImage distortionField; } dispatch;
+    unsigned conversions = 0;
+    const auto convert = [&](const heaven::Fsr31VulkanImage& image, const wchar_t* name) {
+        if (!name || !*name) throw std::runtime_error("Distortion resource lost its SDK label");
+        ++conversions;
+        return image;
+    };
+    heaven::fsr31_bind_distortion(dispatch, frame, convert);
+    const auto& actual = dispatch.distortionField;
+    const auto& expected = frame.distortion_field;
+    if (conversions != 1 || actual.image != expected.image || actual.format != expected.format ||
+        actual.extent.width != expected.extent.width || actual.extent.height != expected.extent.height ||
+        actual.layout != expected.layout || actual.usage != expected.usage)
+        throw std::runtime_error("Actual provider binding lost distortion image identity/metadata");
+    frame.distortion_field = {};
+    heaven::fsr31_bind_distortion(dispatch, frame, convert);
+    if (conversions != 1 || dispatch.distortionField.image)
+        throw std::runtime_error("Absent distortion retained a stale SDK resource or invoked conversion");
+    std::cout << "PASS: distortion optional/signed-format/extent/aspect/layout/nonalias contracts and SDK resource binding; no GPU\n";
+}
 template<class T> VkResult allocate(T* output, const char* kind) {
     if (++allocation_call == fail_call) { *output = VK_NULL_HANDLE; return VK_ERROR_OUT_OF_DEVICE_MEMORY; }
     *output = fake_handle<T>(++next_handle);
@@ -123,7 +183,7 @@ VKAPI_ATTR VkResult VKAPI_CALL buffer([[maybe_unused]] VkDevice device, [[maybe_
 VKAPI_ATTR void VKAPI_CALL destroy_buffer([[maybe_unused]] VkDevice device, VkBuffer object, [[maybe_unused]] const VkAllocationCallbacks* allocator) { retire(object, "buffer"); }
 VKAPI_ATTR VkResult VKAPI_CALL memory([[maybe_unused]] VkDevice device, [[maybe_unused]] const VkMemoryAllocateInfo* info, [[maybe_unused]] const VkAllocationCallbacks* allocator, VkDeviceMemory* out) { return allocate(out, "memory"); }
 VKAPI_ATTR void VKAPI_CALL free_memory([[maybe_unused]] VkDevice device, VkDeviceMemory object, [[maybe_unused]] const VkAllocationCallbacks* allocator) {
-    if (mapped_memory.count(identity(object))) throw std::runtime_error("Freed mapped memory without unmapping");
+    if (mapped_memory.contains(identity(object))) throw std::runtime_error("Freed mapped memory without unmapping");
     retire(object, "memory");
 }
 VKAPI_ATTR void VKAPI_CALL requirements([[maybe_unused]] VkDevice device, [[maybe_unused]] VkBuffer buffer, VkMemoryRequirements* out) { *out = {4096, 256, 3}; }
@@ -238,6 +298,7 @@ void exercise_upload(unsigned failure) {
 
 int main() {
     try {
+        distortion_contract();
         const auto calls = exercise(0);
         for (unsigned failure = 1; failure <= calls; ++failure) exercise(failure);
         exercise(calls, true);

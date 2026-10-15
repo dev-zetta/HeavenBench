@@ -511,14 +511,19 @@ bool DlssProvider::prepare_present([[maybe_unused]] const DlssPresentInputs& inp
     auto motion = make_resource(inputs.motion);
     auto hudless = make_resource(inputs.hudless_color);
     auto ui = make_resource(inputs.ui_color_alpha);
+    auto distortion = make_resource(inputs.bidirectional_distortion);
     const sl::Extent depth_extent{0, 0, inputs.depth.width, inputs.depth.height};
     const sl::Extent color_extent{0, 0, inputs.hudless_color.width, inputs.hudless_color.height};
+    const sl::Extent distortion_extent{0, 0, inputs.bidirectional_distortion.width,
+        inputs.bidirectional_distortion.height};
     const std::array tags{
         sl::ResourceTag{&depth, sl::kBufferTypeDepth, sl::eValidUntilPresent, &depth_extent},
         sl::ResourceTag{&motion, sl::kBufferTypeMotionVectors, sl::eValidUntilPresent, &depth_extent},
         sl::ResourceTag{&hudless, sl::kBufferTypeHUDLessColor, sl::eValidUntilPresent, &color_extent},
         sl::ResourceTag{inputs.backbuffer_has_ui ? &ui : nullptr,
-            sl::kBufferTypeUIColorAndAlpha, sl::eValidUntilPresent, &color_extent}};
+            sl::kBufferTypeUIColorAndAlpha, sl::eValidUntilPresent, &color_extent},
+        sl::ResourceTag{inputs.distortion_active ? &distortion : nullptr,
+            sl::kBufferTypeBidirectionalDistortionField, sl::eValidUntilPresent, &distortion_extent}};
     if (!impl_->accept(impl_->set_tags(frame, impl_->viewport, tags.data(),
             static_cast<uint32_t>(tags.size()), nullptr), "slSetTagForFrame")) {
         suspend(&inputs.token); return false;
@@ -621,7 +626,8 @@ bool DlssProvider::suspend([[maybe_unused]] const DlssFrameToken* token) {
             sl::ResourceTag{nullptr, sl::kBufferTypeDepth, sl::eValidUntilPresent},
             sl::ResourceTag{nullptr, sl::kBufferTypeMotionVectors, sl::eValidUntilPresent},
             sl::ResourceTag{nullptr, sl::kBufferTypeHUDLessColor, sl::eValidUntilPresent},
-            sl::ResourceTag{nullptr, sl::kBufferTypeUIColorAndAlpha, sl::eValidUntilPresent}};
+            sl::ResourceTag{nullptr, sl::kBufferTypeUIColorAndAlpha, sl::eValidUntilPresent},
+            sl::ResourceTag{nullptr, sl::kBufferTypeBidirectionalDistortionField, sl::eValidUntilPresent}};
         success &= impl_->accept(impl_->set_tags(*static_cast<sl::FrameToken*>(ticket->native_token),
             impl_->viewport, tags.data(), static_cast<uint32_t>(tags.size()), nullptr), "Clear DLSS resource tags");
     }

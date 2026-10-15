@@ -76,7 +76,9 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
             images[2].format != VK_FORMAT_R16G16_SFLOAT ||
             images[3].format != VK_FORMAT_R8G8B8A8_UNORM)
         return fail("DLSS requires the owned SDR color/depth/motion/UI target formats");
-    for (size_t i = 0; i != images.size(); ++i) {
+    // The first four resources are mandatory; the fifth is a separately
+    // validated optional scene-distortion field.
+    for (size_t i = 0; i != 4; ++i) {
         if (images[i].extent.width != swapchain.extent.width ||
                 images[i].extent.height != swapchain.extent.height ||
                 images[i].layout != VK_IMAGE_LAYOUT_GENERAL ||
@@ -108,6 +110,8 @@ std::expected<void, std::string> DlssRuntimeBridge::prepare_native(
     inputs.depth = dlss_runtime_detail::present_image(images[1]);
     inputs.motion = dlss_runtime_detail::present_image(images[2]);
     inputs.ui_color_alpha = dlss_runtime_detail::present_image(images[3]);
+    if (const auto distortion = dlss_runtime_detail::owned_distortion_input(inputs, context); !distortion)
+        return fail(std::string(distortion.error()));
     inputs.backbuffer_format = swapchain.format;
     inputs.backbuffer_width = swapchain.extent.width;
     inputs.backbuffer_height = swapchain.extent.height;

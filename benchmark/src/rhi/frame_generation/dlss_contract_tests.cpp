@@ -249,6 +249,36 @@ bool run_dlss_contract_tests() {
     full_resolution.depth.height = full_resolution.motion.height = 1080;
     full_resolution.motion.format = VK_FORMAT_R32G32_SFLOAT;
     success &= check(accepts(full_resolution), "full-resolution signed floating motion was rejected");
+    auto distorted = valid;
+    distorted.distortion_active = true;
+    distorted.distortion_field_valid = true;
+    distorted.depth_motion_undistorted = true;
+    distorted.hudless_distortion_matches_backbuffer = true;
+    distorted.bidirectional_distortion = test_image(960,540,VK_FORMAT_R16G16B16A16_SFLOAT);
+    distorted.bidirectional_distortion.image = handle<VkImage>(5);
+    distorted.bidirectional_distortion.view = handle<VkImageView>(6);
+    distorted.bidirectional_distortion.memory = handle<VkDeviceMemory>(7);
+    success &= check(accepts(distorted), "consistent half-resolution distortion field was rejected");
+    auto reject_distortion = [&](auto change, const char* label) {
+        auto input = distorted;
+        change(input);
+        success &= check(!accepts(input),label);
+    };
+    reject_distortion([](auto& in) { in.bidirectional_distortion = {}; }, "missing distortion field accepted");
+    reject_distortion([](auto& in) { in.bidirectional_distortion.format = VK_FORMAT_R16G16B16A16_UNORM; },
+        "unsigned distortion field accepted");
+    reject_distortion([](auto& in) { in.bidirectional_distortion.format = VK_FORMAT_R16G16_SFLOAT; },
+        "two-channel distortion field accepted without inverse mapping");
+    reject_distortion([](auto& in) { --in.bidirectional_distortion.height; },
+        "mismatched distortion aspect accepted");
+    reject_distortion([](auto& in) { in.bidirectional_distortion.image = in.motion.image; },
+        "aliased distortion field accepted");
+    reject_distortion([](auto& in) { in.distortion_field_valid = false; },
+        "unverified inverse distortion mapping accepted");
+    reject_distortion([](auto& in) { in.depth_motion_undistorted = false; },
+        "distorted depth/motion accepted alongside the inverse field");
+    reject_distortion([](auto& in) { in.hudless_distortion_matches_backbuffer = false; },
+        "inconsistent distorted HUDless color accepted");
     success &= check(!validate_dlss_present_inputs(valid, 1081, 1).empty(),
         "SDK minimum output dimension ignored");
 

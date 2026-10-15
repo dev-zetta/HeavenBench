@@ -42,6 +42,7 @@ public:
 
     void init(RenderContext& ctx, const AppConfig& config) override;   // graceful
     void update(RenderContext& ctx, const FrameContext& frame) override;
+    void append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const override;
     void release_shared_targets(RenderContext& ctx) override;
     void destroy(RenderContext& ctx);
 

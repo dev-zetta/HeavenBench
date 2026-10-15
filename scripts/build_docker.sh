@@ -12,6 +12,7 @@ Usage: scripts/build_docker.sh linux|android [options]
   --output-dir DIR                           Default build/release/<platform>-<target>
   --clean                                    Fresh layers and a new private build cache
   --skip-analysis                            Skip Linux clang-tidy (developer builds)
+  --experimental-fsr3                        SDK-enabled portable Linux artifact, separate cache
 
 Requires Docker with Buildx and Bash. DOCKER_CONTEXT selects the Docker daemon.
 Build hosts use linux/amd64; ARM hosts need Docker's x86-64 emulation.
@@ -26,6 +27,7 @@ JOBS=2
 OUTPUT_DIR=
 CLEAN=0
 RUN_ANALYSIS=1
+EXPERIMENTAL_FSR3=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cpu-arch|--abi|--jobs|--output-dir)
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
         --clean) CLEAN=1; shift ;;
         --skip-analysis) [[ "$PLATFORM" == linux ]] || { echo '--skip-analysis requires linux' >&2; exit 2; }; RUN_ANALYSIS=0; shift ;;
+        --experimental-fsr3) [[ "$PLATFORM" == linux ]] || { echo '--experimental-fsr3 requires linux' >&2; exit 2; }; EXPERIMENTAL_FSR3=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -47,6 +50,12 @@ case "$CPU_ARCH" in portable|zen[1-5]) ;; *) echo "Unsupported CPU architecture:
 case "$ABI" in arm64-v8a|x86_64) ;; *) echo "Unsupported Android ABI: $ABI" >&2; exit 2 ;; esac
 TARGET="$CPU_ARCH"
 [[ "$PLATFORM" != android ]] || TARGET="$ABI"
+ARTIFACT_STAGE="$PLATFORM-artifacts"
+if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
+    [[ "$CPU_ARCH" == portable ]] || { echo 'Experimental FSR distribution requires portable CPU' >&2; exit 2; }
+    TARGET=experimental-fsr3
+    ARTIFACT_STAGE=linux-fsr3-artifacts
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/release/$PLATFORM-$TARGET}"
 # Buildx's local exporter uses comma-separated options. Fail rather than
 # misinterpreting an output path as another exporter setting.
@@ -71,7 +80,7 @@ fi
 mkdir -p "$OUTPUT_DIR/logs"
 # Bash 3.2 treats an empty array as unset under nounset; preserve zero arguments.
 docker buildx build --platform linux/amd64 --file "$REPO_ROOT/docker/Dockerfile" \
-    --target "$PLATFORM-artifacts" --progress plain \
+    --target "$ARTIFACT_STAGE" --progress plain \
     --build-arg "JOBS=$JOBS" --build-arg "CPU_ARCH=$CPU_ARCH" \
     --build-arg "ANDROID_ABI=$ABI" --build-arg "CACHE_SCOPE=$CACHE_SCOPE" \
     --build-arg "RUN_ANALYSIS=$RUN_ANALYSIS" \

@@ -405,7 +405,11 @@ if [[ "$COMPILE_MATERIALS" -eq 1 ]]; then
                heaven_rain heaven_splash heaven_glass heaven_volumetric_clouds \
                heaven_ssgi heaven_hdr_encode heaven_depth heaven_depth_masked \
                heaven_grass_depth heaven_height_sample heaven_motion heaven_motion_masked \
-               heaven_motion_grass heaven_temporal_extract heaven_fg_composite; do
+               heaven_motion_grass heaven_temporal_extract heaven_fg_composite \
+               heaven_temporal_smoke heaven_temporal_flame heaven_temporal_glow \
+               heaven_temporal_firefly heaven_temporal_rain heaven_temporal_lens_flare \
+               heaven_temporal_clouds heaven_temporal_volumetric_clouds \
+               heaven_heat_haze_field heaven_fg_distortion; do
         src="$MATERIALS_DIR/$mat.mat"
         out="$MATERIALS_DIR/$mat.filamat"
         [[ -f "$src" ]] || continue

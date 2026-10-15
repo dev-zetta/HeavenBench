@@ -4,6 +4,7 @@
  * Moved verbatim out of FilamentBackend::init_clouds / update_clouds.
  */
 #include "rhi/features/cloud_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/render_test_scene_assets.h"
 #include "engine/feature_assets.h"
 #include "rhi/filament_bounds.h"
@@ -199,6 +200,19 @@ void CloudFeature::destroy(RenderContext& ctx) {
     if (ib_) { engine_->destroy(ib_); ib_ = nullptr; }
     // tex1_/tex2_/mask_ are owned by the resource provider's cache.
     tex1_ = tex2_ = mask_ = nullptr;
+}
+
+
+void CloudFeature::append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const {
+    if (!enabled_ || !in_scene_ || !entity_ || !mi_) return;
+    const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::REPEAT);
+    TemporalEffectDraw draw{.identity = entity_.getId(), .kind = TemporalEffectKind::CloudPlane,
+        .source_entity = entity_, .vertices = vb_, .indices = ib_, .source = mi_};
+    draw.textures[0] = {"cloudTex1", tex1_, sampler};
+    draw.textures[1] = {"cloudTex2", tex2_, sampler};
+    draw.textures[2] = {"cloudMask", mask_ ? mask_ : tex1_, sampler};
+    draws.push_back(draw);
 }
 
 } // namespace heaven

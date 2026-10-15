@@ -29,91 +29,16 @@ material {
 }
 
 vertex {
-    float hash11(float x) {
-        x = fract(x * 0.1031);
-        x *= x + 33.33;
-        x *= x + x;
-        return fract(x);
-    }
-
+    #include "includes/effect_firefly_vertex.glsl"
     void materialVertex(inout MaterialVertexInputs material) {
-        float3 emitter_origin = material.worldPosition.xyz;
-        float2 corner         = material.uv0.xy * 2.0 - 1.0;
-        float4 c0             = getCustom0();
-        float4 c1             = getCustom1();
-        float  slot           = c0.x;
-        float  base_radius    = c0.y;
-        float  velocity       = c0.w;
-        float  lifetime       = c1.x;
-
-        // Per-slot phase — fireflies don't all blink in sync.
-        float total_cycle = lifetime + materialParams.spawnInterval;
-        float slot_phase  = slot * materialParams.spawnInterval;
-        float age = mod(materialParams.time - slot_phase, total_cycle);
-        float alive = step(age, lifetime);
-
-        float r1 = hash11(slot * 1.7);
-        float r2 = hash11(slot * 3.1 + 4.0);
-        float r3 = hash11(slot * 5.3 + 9.0);
-
-        // Orbit: each firefly traces its own elliptical path with
-        // slot-deterministic radius (0.6 - 1.6 m), tilt and speed.
-        float orbit_r = materialParams.particleMotionTuning.x +
-                        r1 * materialParams.particleMotionTuning.y;
-        float orbit_speed = materialParams.particleMotionTuning.x +
-                            r2 * materialParams.particleMotionTuning.y;
-        float phase     = r3 * 6.28318530718;
-        float t         = materialParams.time * orbit_speed + phase;
-        // Centre the orbit around the emitter origin (which the
-        // node tree already places near the lantern). A very small
-        // Z bob keeps the swarm from looking like a flat plane.
-        float3 orbit = float3(
-            cos(t) * orbit_r,
-            sin(t) * orbit_r,
-            materialParams.particleMotionTuning.z *
-                sin(t * 0.7 + phase));
-
-        // Twinkle: smooth on/off envelope per particle so the swarm
-        // appears to blink rather than glow constantly.
-        float twinkle = 0.5 + 0.5 * sin(materialParams.time * 4.0 + slot * 7.7);
-
-        // Camera-aligned billboard.
-        float3 cam_right = float3(frameUniforms.worldFromViewMatrix[0].xyz);
-        float3 cam_up    = float3(frameUniforms.worldFromViewMatrix[1].xyz);
-        float radius = base_radius * alive;
-        float3 right_v = cam_right * radius;
-        float3 up_v    = cam_up    * radius;
-
-        float3 world = emitter_origin + orbit
-                     + corner.x * right_v + corner.y * up_v;
-        material.worldPosition = float4(world, 1.0);
-
-        material.ageNorm = float4(age / lifetime, twinkle, 0.0, 0.0);
+        effectVertex(material, materialParams.time,
+            float3(frameUniforms.worldFromViewMatrix[0].xyz),
+            float3(frameUniforms.worldFromViewMatrix[1].xyz),
+            getWorldCameraPosition(), (getUserWorldFromWorldMatrix() * float4(getWorldCameraPosition(), 1.0)).xyz);
     }
 }
 
 fragment {
-    void material(inout MaterialInputs material) {
-        prepareMaterial(material);
-
-        float t       = variable_ageNorm.x;
-        float twinkle = variable_ageNorm.y;
-        float2 uv     = getUV0();
-
-        // Sample the soft halo so the firefly has a smooth edge.
-        float halo = texture(materialParams_glowTex, uv).r;
-
-        // Lifetime envelope.
-        float fade_in  = clamp(t / 0.10, 0.0, 1.0);
-        float fade_out = clamp(1.0 - (t - 0.20) / 0.80, 0.0, 1.0);
-        float life_alpha = fade_in * fade_out;
-
-        // HDR additive — bloom turns the bright specks into glowing
-        // dots. Twinkle modulates per-frame brightness so the swarm
-        // appears alive.
-        float intensity = halo * life_alpha * twinkle * materialParams.alphaScale;
-        float3 rgb = materialParams.tint * intensity *
-                     materialParams.particleMotionTuning.w;
-        material.baseColor = float4(rgb, intensity);
-    }
+    #include "includes/effect_firefly_fragment.glsl"
+    void material(inout MaterialInputs material) { effectShade(material); }
 }

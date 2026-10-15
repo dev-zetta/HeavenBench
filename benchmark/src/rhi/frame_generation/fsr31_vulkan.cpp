@@ -1,5 +1,6 @@
 #include "fsr31_vulkan.h"
 #include "fsr31_prepare_scope.h"
+#include "fsr31_distortion_contract.h"
 
 #include <bit>
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
@@ -220,6 +221,7 @@ std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& fra
         (frame.depth.format != VK_FORMAT_D32_SFLOAT && frame.depth.format != VK_FORMAT_R32_SFLOAT)) {
         return std::unexpected("FSR 3.1 requires R32F/D32F depth, RG16F/RG32F velocity, transferable color and GENERAL storage output");
     }
+    if (const auto* error = fsr31_distortion_error(frame)) return std::unexpected(error);
     // Infinite projection uses the exact rendered near plane and the depth
     // flags. A finite sentinel avoids inf/inf in the SDK's unused finite
     // coefficient calculation and never substitutes the culling far plane.
@@ -309,6 +311,7 @@ std::expected<bool, std::string> Fsr31Vulkan::record(const Fsr31VulkanFrame& fra
     dispatch.dilatedDepth = state.resource(2);
     dispatch.dilatedMotionVectors = state.resource(3);
     dispatch.reconstructedPrevDepth = state.resource(4);
+    fsr31_bind_distortion(dispatch, frame, image_resource);
     result = ffxFrameInterpolationDispatch(state.interpolation.get(), &dispatch);
     if (result != FFX_OK) { state.force_reset = true; return std::unexpected(sdk_error("Interpolation dispatch", result)); }
     state.force_reset = false;

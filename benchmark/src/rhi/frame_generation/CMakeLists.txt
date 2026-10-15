@@ -146,7 +146,7 @@ target_compile_definitions(heaven_fsr31_pipeline_lifetime_test PRIVATE
     HEAVEN_FSR31_TEST_BACKEND_COPY="${CMAKE_CURRENT_BINARY_DIR}/ffx_vk_compute_test.inc")
 target_include_directories(heaven_fsr31_pipeline_lifetime_test PRIVATE
     "${fsr_sdk}/src/shared" "${fsr_sdk}/src/backends/shared")
-target_compile_features(heaven_fsr31_pipeline_lifetime_test PRIVATE cxx_std_17)
+target_compile_features(heaven_fsr31_pipeline_lifetime_test PRIVATE cxx_std_23)
 if(NOT WIN32)
     target_compile_options(heaven_fsr31_pipeline_lifetime_test PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/fsr31_portability.h")
 endif()

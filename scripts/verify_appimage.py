@@ -54,6 +54,29 @@ def main() -> None:
         run_checked([launcher, "--data", "relative assets.zip", "--write-config", config.name],
                     cwd=root, env=env, timeout=20)
         effective = json.loads(config.read_text())
+        experimental_path = appdir / 'usr/share/heavenbench/experimental-frame-generation.json'
+        if experimental_path.exists():
+            metadata = json.loads(experimental_path.read_text())
+            sources = json.loads((experimental_path.parent / 'experimental-source-manifest.json').read_text())
+            if (metadata.get('experimental') is not True or metadata.get('providers_built') != 'fsr3'
+                    or metadata.get('platform') != 'linux'
+                    or metadata.get('source_archive_sha256') != sources.get('source_sha256')
+                    or metadata.get('binary_sha256') != hashlib.sha256((appdir / 'usr/bin/heaven_benchmark').read_bytes()).hexdigest()
+                    or metadata.get('sdk', {}).get('fsr3', {}).get('spirv_validated') is not True
+                    or metadata.get('sdk', {}).get('fsr3', {}).get('shader_permutations') != 102):
+                raise SystemExit('Experimental FSR package metadata/source/binary validation failed')
+            if effective.get('frame_generation') != 'off':
+                raise SystemExit('Experimental package must default frame generation to off')
+            requested = root / 'experimental config.json'
+            run_checked([launcher, '--frame-generation', 'fsr3', '--write-config', str(requested)],
+                        cwd=root, env=env, timeout=20)
+            if json.loads(requested.read_text()).get('frame_generation') != 'fsr3':
+                raise SystemExit('Experimental package did not retain explicit FSR configuration')
+            for notice in ('FidelityFX-SDK.txt', 'SPIRV-Reflect.txt'):
+                if not (appdir / 'usr/share/licenses/HeavenBench/repository/packaging/licenses' / notice).is_file():
+                    raise SystemExit('Experimental FSR package notice missing: ' + notice)
+            if not (experimental_path.parent / 'EXPERIMENTAL-FRAME-GENERATION.txt').is_file():
+                raise SystemExit('Experimental package instructions missing')
         if effective["data_dir"] != "relative assets.zip":
             raise SystemExit("Launcher changed an explicit relative asset path")
         if Path(effective["tessellation.cache_file"]).parent != root / "user files/cache":

@@ -6,7 +6,9 @@ Stage a portable Windows x64 ZIP, including runtime DLLs, resources and licenses
 param(
     [string]$BuildDir = '',
     [string]$OutputDir = '',
-    [string]$Version = ''
+    [string]$Version = '',
+    [ValidateSet('', 'fsr3', 'dlss', 'both')][string]$ExperimentalProviders = '',
+    [string]$SourceManifest = ''
 )
 
 function Get-HeavenOptionalSdkNoticeArguments {
@@ -42,6 +44,17 @@ if ($cache -notmatch '(?m)^CMAKE_BUILD_TYPE:STRING=Release\r?$') { throw 'Only R
 if ($cache -notmatch '(?m)^HEAVEN_SDL_SOURCE_DIR:PATH=(.+)\r?$') { throw 'Missing configured SDL source directory.' }
 $sdlSource = $Matches[1].Trim()
 $optionalSdkNotices = @(Get-HeavenOptionalSdkNoticeArguments -Cache $cache)
+if ([bool]$ExperimentalProviders -ne [bool]$SourceManifest) {
+    throw 'Experimental packaging requires both provider selection and exact source manifest.'
+}
+if (-not $ExperimentalProviders) {
+    foreach ($flag in [regex]::Matches($cache, '(?im)^HEAVEN_ENABLE_(FSR3|DLSS):BOOL=([^\r\n]*)')) {
+        $value = $flag.Groups[2].Value.Trim()
+        if ($value -and $value -notmatch '^(0|OFF|NO|FALSE|N|IGNORE|NOTFOUND|.*-NOTFOUND)$') {
+            throw 'SDK-enabled Windows packages require explicit experimental packaging.'
+        }
+    }
+}
 $triplet = Join-Path $BuildDir 'vcpkg_installed/x64-windows-static'
 $runtimeDir = Join-Path $triplet 'bin'
 $packageName = "HeavenBench-$Version-windows-x64"
@@ -103,6 +116,17 @@ Copy-Item -LiteralPath "$repoRoot/packaging/windows/ASSETS.txt" -Destination "$s
 # verified header framework notice; runtime plugin folders are never inputs.
 Invoke-Checked python.exe (@("$PSScriptRoot/collect_licenses.py", '--output', "$stage/licenses",
     '--dependency-dir', "vcpkg=$triplet/share", '--dependency-dir', "SDL2=$sdlSource") + $optionalSdkNotices)
+if ($ExperimentalProviders) {
+    $tag = (Invoke-Checked python.exe @("$PSScriptRoot/frame_generation_package_metadata.py",
+        '--build-dir', $BuildDir, '--stage', $stage, '--binary', "$stage/heaven_benchmark.exe",
+        '--licenses', "$stage/licenses", '--source-manifest', $SourceManifest,
+        '--providers', $ExperimentalProviders, '--platform', 'windows') | Out-String).Trim()
+    if ($tag -notmatch '^experimental-(fsr3|dlss|both)-[0-9a-f]{12}$') { throw 'Invalid experimental package identity.' }
+    $packageName = "HeavenBench-$Version-$tag-windows-x64"
+    $renamedStage = Join-Path $stagingParent $packageName
+    Move-Item -LiteralPath $stage -Destination $renamedStage
+    $stage = $renamedStage
+}
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
     @{ path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/');
        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }

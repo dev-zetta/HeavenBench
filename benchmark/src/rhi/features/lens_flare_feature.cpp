@@ -7,6 +7,7 @@
  * backend's emission/authored light vectors.
  */
 #include "rhi/features/lens_flare_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/render_test_scene_assets.h"
 #include "engine/feature_assets.h"
 #include "rhi/filament_bounds.h"
@@ -359,6 +360,22 @@ void LensFlareFeature::destroy(RenderContext& ctx) {
     built_ = false;
     in_scene_ = false;
     bound_depth_ = nullptr;
+}
+
+
+void LensFlareFeature::append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const {
+    if (!enabled_ || !in_scene_) return;
+    const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    for (const auto& flare : flares_) {
+        TemporalEffectDraw draw{.identity = flare.entity.getId(), .kind = TemporalEffectKind::LensFlare,
+            .source_entity = flare.entity, .vertices = flare.vb, .indices = ib_, .source = flare.mi};
+        draw.textures[0] = {"flareTex", glow_tex_, sampler};
+        draw.textures[1] = {"depthTexture", bound_depth_,
+            {filament::TextureSampler::MinFilter::NEAREST, filament::TextureSampler::MagFilter::NEAREST,
+             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE}};
+        draws.push_back(draw);
+    }
 }
 
 } // namespace heaven

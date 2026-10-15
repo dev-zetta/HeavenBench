@@ -11,6 +11,7 @@
  * Motion is advanced solely from FrameContext::time.
  */
 #include "rhi/features/volumetric_cloud_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 #include "rhi/render_test_scene_assets.h"
 #include "rhi/filament_bounds.h"
 #include "rhi/filament_util.h"
@@ -341,6 +342,17 @@ void VolumetricCloudFeature::destroy(RenderContext& ctx) {
     if (material_) { engine_->destroy(material_); material_ = nullptr; }
     if (vb_) { engine_->destroy(vb_); vb_ = nullptr; }
     if (ib_) { engine_->destroy(ib_); ib_ = nullptr; }
+}
+
+
+void VolumetricCloudFeature::append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const {
+    if (!enabled_ || !in_scene_ || !entity_ || !mi_) return;
+    const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::NEAREST,
+        filament::TextureSampler::MagFilter::NEAREST, filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    TemporalEffectDraw draw{.identity = entity_.getId(), .kind = TemporalEffectKind::VolumetricCloud,
+        .source_entity = entity_, .vertices = vb_, .indices = ib_, .source = mi_};
+    draw.textures[0] = {"depthTexture", bound_depth_, sampler};
+    draws.push_back(draw);
 }
 
 } // namespace heaven

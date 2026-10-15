@@ -25,6 +25,7 @@
 #define HEAVENBENCH_SRC_RHI_FEATURES_PARTICLE_FEATURE_H_
 
 #include "rhi/render_feature.h"
+#include "rhi/frame_generation/temporal_effects.h"
 
 #include <filament/VertexBuffer.h>
 #include <filament/IndexBuffer.h>
@@ -34,6 +35,7 @@
 #include <filament/RenderTarget.h>
 #include <filament/Scene.h>
 #include <filament/View.h>
+#include <filament/Skybox.h>
 
 #include <utils/Entity.h>
 
@@ -49,6 +51,7 @@ public:
 
     void init(RenderContext& ctx, const AppConfig& config) override;
     void update(RenderContext& ctx, const FrameContext& frame) override;
+    void append_temporal_draws(std::vector<TemporalEffectDraw>& draws) const override;
     void release_shared_targets(RenderContext& ctx) override;
     void destroy(RenderContext& ctx);
 
@@ -60,6 +63,13 @@ public:
     [[nodiscard]] bool wants_scene_capture(const FrameContext& frame) const override;
     void begin_scene_capture(RenderContext& ctx, const FrameContext& frame) override;
     void render_composite(RenderContext& ctx) override;
+
+    // FG-only coherent distortion. Off keeps the ordinary weighted grab pass.
+    // The caller detaches borrowed field samplers before resize/destruction.
+    void set_temporal_distortion_enabled(bool enabled);
+    bool prepare_temporal_distortion(RenderContext& ctx, int width, int height);
+    void render_temporal_distortion(RenderContext& ctx);
+    [[nodiscard]] filament::Texture* temporal_distortion_texture() const noexcept;
 
     // Heat haze samples the shared half-res depth pre-pass for
     // occlusion, so it needs the backend to run that pass (and provide
@@ -85,10 +95,14 @@ private:
         filament::MaterialInstance*  mi = nullptr;
         glm::vec3                    origin{0.0f};
         int                          floating_group = -1;
+        TemporalEffectKind           temporal_kind = TemporalEffectKind::Smoke;
+        filament::VertexBuffer*      borrowed_vb = nullptr;
+        filament::IndexBuffer*       borrowed_ib = nullptr;
     };
 
     void build_emitters(RenderContext& ctx);
     void ensure_scene_capture(RenderContext& ctx, int w, int h);
+    void destroy_temporal_distortion(RenderContext& ctx);
 
     // Materials (owned)
     filament::Material*          smoke_material_   = nullptr;
@@ -124,6 +138,20 @@ private:
     // Last half-res depth pre-pass texture bound to the haze
     // instances' sceneDepth sampler (rebind only on change/resize).
     filament::Texture*           bound_depth_ = nullptr;
+
+    struct FieldEmitter {
+        utils::Entity entity;
+        filament::MaterialInstance* material = nullptr;
+    };
+    bool temporal_distortion_enabled_ = false;
+    filament::Material* field_material_ = nullptr;
+    filament::Scene* field_scene_ = nullptr;
+    filament::View* field_view_ = nullptr;
+    filament::Skybox* field_clear_ = nullptr;
+    filament::Texture* field_texture_ = nullptr;
+    filament::RenderTarget* field_target_ = nullptr;
+    std::vector<FieldEmitter> field_emitters_;
+    int field_width_ = 0, field_height_ = 0;
 };
 
 } // namespace heaven

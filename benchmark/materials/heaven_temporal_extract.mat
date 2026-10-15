@@ -9,16 +9,47 @@ material {
     depthCulling : false,
     parameters : [
         { type : sampler2d, name : packedTexture },
-        { type : bool, name : extractDepth }
+        { type : sampler2d, name : effectTexture },
+        { type : bool, name : hasEffects },
+        { type : bool, name : extractDepth },
+        { type : mat4, name : worldFromCurrentClip },
+        { type : mat4, name : previousClipFromWorld },
+        { type : bool, name : cameraHistoryValid }
     ]
 }
 fragment {
+    #include "includes/temporal_sky_motion.glsl"
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         float2 uv = uvToRenderTargetUV(getNormalizedViewportCoord().xy);
         float4 packed = texture(materialParams_packedTexture, uv);
+        if (materialParams.hasEffects) {
+            float4 effect = texture(materialParams_effectTexture, uv);
+            // One depth/vector represents each pixel. Select the nearest
+            // non-negligible contributor only when its own opacity dominates
+            // and no opaque scene surface is in front. This is explicitly a
+            // representative layer, not a sum of overlapping motion vectors.
+            if (abs(effect.w) >= 0.5 && effect.z >= packed.z) {
+                packed = float4(effect.xyz, effect.w > 0.0 ? 1.0 : 0.0);
+            }
+        }
+        float2 motion = packed.xy;
+        if (packed.z == 0.0) {
+            float2 logicalUv = getNormalizedViewportCoord().xy;
+            motion = temporalSkyMotion(float2(logicalUv.x, 1.0 - logicalUv.y),
+                materialParams.worldFromCurrentClip, materialParams.previousClipFromWorld,
+                materialParams.cameraHistoryValid);
+        } else if (packed.w <= 0.0) {
+            // A newly visible contributor has no accepted object match.
+            // Retain dense camera reprojection at its current depth; the
+            // contributor report separately discloses absent correspondence.
+            float2 logicalUv = getNormalizedViewportCoord().xy;
+            motion = temporalDepthCameraMotion(float2(logicalUv.x, 1.0-logicalUv.y),
+                packed.z, materialParams.worldFromCurrentClip,
+                materialParams.previousClipFromWorld, materialParams.cameraHistoryValid);
+        }
         material.baseColor = materialParams.extractDepth
             ? float4(packed.z, 0.0, 0.0, 1.0)
-            : float4(packed.xy, 0.0, 1.0);
+            : float4(motion, 0.0, 1.0);
     }
 }

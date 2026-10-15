@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "frame_generation_present_trace.h"
+
 namespace heaven {
 
 #ifdef __ANDROID__
@@ -97,6 +99,8 @@ public:
     // accepted queue submissions; they do not prove display scanout.
     FrameGenerationPresentationStatus presentation_status() const;
     std::vector<FrameGenerationPresentEvent> take_presentation_events();
+    // Immutable opt-in flag; querying it creates no runtime or GPU resources.
+    bool presentation_trace_requested() const noexcept;
     // Independent of application event consumption. Native callbacks latch
     // this immediately before interpolation after an implicit recreation.
     uint64_t history_epoch() const noexcept;
@@ -124,7 +128,12 @@ public:
     void destroy(SwapChainPtr handle) override;
     void terminate() override;
 
+protected:
+    VkDevice createVkDevice(const VkDeviceCreateInfo& createInfo) noexcept override;
+
 private:
+    VkResult present_traced(SwapChainPtr handle, uint32_t index,
+            VkSemaphore finishedDrawing, uint64_t source_frame, PresentTraceKind kind);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

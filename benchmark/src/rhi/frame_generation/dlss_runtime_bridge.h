@@ -53,7 +53,8 @@ public:
 
     // Serialized driver thread, after all four persistent textures have been
     // rendered, outside a render pass, before endFrame/present. Image order is
-    // HUDless color, extracted depth, extracted motion, premultiplied UI.
+    // HUDless color, extracted depth, extracted motion, premultiplied UI, then
+    // the optional owned coherent bidirectional scene-distortion field.
     std::expected<void, std::string> prepare_native(
             const filament::backend::VulkanCommandContext& context,
             const Camera& camera, const DlssRuntimeFrame& frame);

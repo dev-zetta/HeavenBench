@@ -1,4 +1,5 @@
 #include "frame_generation_output.h"
+#include "rhi/filament_util.h"
 #include "rhi/materials_data.h"
 
 #include <filament/Camera.h>
@@ -18,7 +19,9 @@
 #include <filament/Viewport.h>
 #include <utils/EntityManager.h>
 #include <array>
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <type_traits>
 #include <cstdint>
 #include <utility>
@@ -32,10 +35,12 @@ struct FrameGenerationOutput::Impl {
         filament::Scene* scene{};
         filament::View* view{};
         utils::Entity entity;
+        bool ready = false;
     };
     explicit Impl(const BackendCore& value) : core(value) {}
     BackendCore core;
-    std::array<Pass, 3> passes{}; // normalized depth, UV motion, real-frame UI composite
+    // The last two passes and their targets are lazy: field packing, scene warp.
+    std::array<Pass, 5> passes{};
     filament::VertexBuffer* vertices{};
     filament::IndexBuffer* indices{};
     utils::Entity camera_entity;
@@ -54,13 +59,18 @@ struct FrameGenerationOutput::Impl {
     filament::Texture* ui_depth{};
     filament::Texture* depth{};
     filament::Texture* motion{};
+    filament::Texture* undistorted_color{};
+    filament::Texture* distortion{};
     filament::RenderTarget* scene_target{};
     filament::RenderTarget* ui_target{};
     filament::RenderTarget* depth_target{};
     filament::RenderTarget* motion_target{};
+    filament::RenderTarget* undistorted_target{};
+    filament::RenderTarget* distortion_target{};
     int width = 0, height = 0;
     bool prepared = false;
     bool has_ui = false;
+    bool distortion_active = false;
 
     ~Impl() {
         if (!core.engine) return;
@@ -74,15 +84,24 @@ struct FrameGenerationOutput::Impl {
     }
     void unbind_targets() {
         prepared = false;
+        distortion_active = false;
         unbind_ui();
         if (ui_clear_view) ui_clear_view->setRenderTarget(nullptr);
         for (auto& pass : passes) if (pass.view) pass.view->setRenderTarget(nullptr);
         if (!placeholder) return;
         for (size_t i = 0; i < 2; ++i)
-            if (passes[i].instance) passes[i].instance->setParameter("packedTexture", placeholder, sampler());
+            if (passes[i].instance) {
+                passes[i].instance->setParameter("packedTexture", placeholder, sampler());
+                passes[i].instance->setParameter("effectTexture", placeholder, sampler());
+            }
         if (passes[2].instance) {
             passes[2].instance->setParameter("sceneTexture", placeholder, sampler());
             passes[2].instance->setParameter("uiTexture", placeholder, sampler());
+        }
+        for (size_t i = 3; i < passes.size(); ++i) if (passes[i].instance) {
+            passes[i].instance->setParameter("coarseField", placeholder, sampler());
+            passes[i].instance->setParameter("distortionField", placeholder, sampler());
+            passes[i].instance->setParameter("sceneTexture", placeholder, sampler());
         }
     }
     void unbind_ui() {
@@ -99,11 +118,13 @@ struct FrameGenerationOutput::Impl {
     void destroy_targets() {
         unbind_targets();
         auto& engine = *core.engine;
-        for (auto** target : {&scene_target, &ui_target, &depth_target, &motion_target}) {
+        for (auto** target : {&scene_target, &ui_target, &depth_target, &motion_target,
+                &undistorted_target, &distortion_target}) {
             if (*target) engine.destroy(*target);
             *target = nullptr;
         }
-        for (auto** texture : {&color, &scene_depth, &ui, &ui_depth, &depth, &motion}) {
+        for (auto** texture : {&color, &scene_depth, &ui, &ui_depth, &depth, &motion,
+                &undistorted_color, &distortion}) {
             if (*texture) engine.destroy(*texture);
             *texture = nullptr;
         }
@@ -155,6 +176,9 @@ struct FrameGenerationOutput::Impl {
         if (!vertices || !indices || !camera || !transparent_background || !placeholder) {
             destroy_pipeline(); return false;
         }
+        static constexpr std::array<uint8_t,4> zero{0,0,0,0};
+        placeholder->setImage(engine,0,{zero.data(),zero.size(),
+            filament::Texture::Format::RGBA,filament::Texture::Type::UBYTE});
         vertices->setBufferAt(engine, 0, {quad.data(), sizeof(quad)});
         indices->setBuffer(engine, {triangles.data(), sizeof(triangles)});
         camera->setProjection(filament::Camera::Projection::ORTHO, -1, 1, -1, 1, .1, 10);
@@ -168,7 +192,7 @@ struct FrameGenerationOutput::Impl {
         ui_clear_view->setAntiAliasing(filament::AntiAliasing::NONE);
         ui_clear_view->setMultiSampleAntiAliasingOptions({.enabled = false});
         ui_clear_view->setBlendMode(filament::View::BlendMode::OPAQUE);
-        for (size_t i = 0; i < passes.size(); ++i) {
+        for (size_t i = 0; i < 3; ++i) {
             auto& pass = passes[i];
             pass.material = filament::Material::Builder().package(
                 i == 2 ? k_heaven_fg_composite_filamat : k_heaven_temporal_extract_filamat,
@@ -198,6 +222,55 @@ struct FrameGenerationOutput::Impl {
     }
     bool valid() const {
         return scene_target && ui_target && depth_target && motion_target && passes[2].view;
+    }
+    bool build_distortion() {
+        if (passes[3].ready && passes[4].ready && undistorted_target && distortion_target) return true;
+        auto& engine = *core.engine;
+        // Partial construction is kept for ordinary owner teardown after an
+        // allocation failure; never claim an incomplete pipeline is usable.
+        for (size_t i = 3; i < passes.size(); ++i) {
+            auto& pass = passes[i];
+            if (pass.ready) continue;
+            if (pass.material || pass.instance || pass.scene || pass.view || pass.entity) return false;
+            pass.material = filament::Material::Builder().package(
+                k_heaven_fg_distortion_filamat, k_heaven_fg_distortion_filamat_size).build(engine);
+            if (!pass.material) return false;
+            pass.instance = pass.material->createInstance();
+            pass.scene = engine.createScene(); pass.view = engine.createView();
+            if (!pass.instance || !pass.scene || !pass.view) return false;
+            pass.entity = utils::EntityManager::get().create();
+            if (filament::RenderableManager::Builder(1).geometry(0,
+                    filament::RenderableManager::PrimitiveType::TRIANGLES, vertices, indices)
+                    .material(0, pass.instance).culling(false).castShadows(false).receiveShadows(false)
+                    .boundingBox({{0,0,0}, {1,1,1}}).build(engine, pass.entity) != filament::RenderableManager::Builder::Success)
+                return false;
+            pass.scene->addEntity(pass.entity);
+            pass.view->setScene(pass.scene); pass.view->setCamera(camera);
+            pass.view->setPostProcessingEnabled(false); pass.view->setShadowingEnabled(false);
+            pass.view->setAntiAliasing(filament::AntiAliasing::NONE);
+            pass.view->setMultiSampleAntiAliasingOptions({.enabled = false});
+            pass.view->setBlendMode(filament::View::BlendMode::OPAQUE);
+            pass.instance->setParameter("extractField", i == 3);
+            pass.ready = true;
+        }
+        using Usage = filament::Texture::Usage;
+        using Bits = std::underlying_type_t<Usage>;
+        constexpr auto usage = std::bit_cast<Usage>(static_cast<Bits>(
+            std::to_underlying(Usage::COLOR_ATTACHMENT) | std::to_underlying(Usage::SAMPLEABLE) |
+            std::to_underlying(Usage::BLIT_SRC)));
+        if (!undistorted_color) undistorted_color = filament::Texture::Builder()
+            .width(width).height(height).levels(1).format(filament::Texture::InternalFormat::RGBA8)
+            .usage(usage).build(engine);
+        if (!distortion) distortion = filament::Texture::Builder()
+            .width(width).height(height).levels(1).format(filament::Texture::InternalFormat::RGBA16F)
+            .usage(usage).build(engine);
+        if (!undistorted_color || !distortion) return false;
+        if (!undistorted_target) undistorted_target = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR0, undistorted_color)
+            .texture(filament::RenderTarget::AttachmentPoint::DEPTH, scene_depth).build(engine);
+        if (!distortion_target) distortion_target = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR0, distortion).build(engine);
+        return undistorted_target && distortion_target;
     }
 };
 
@@ -242,12 +315,47 @@ bool FrameGenerationOutput::ensure(int width, int height) {
     return true;
 }
 
-filament::RenderTarget* FrameGenerationOutput::scene_rt() const noexcept { return impl_->scene_target; }
+filament::RenderTarget* FrameGenerationOutput::scene_rt() const noexcept {
+    return impl_->distortion_active ? impl_->undistorted_target : impl_->scene_target;
+}
 filament::RenderTarget* FrameGenerationOutput::ui_rt() const noexcept { return impl_->ui_target; }
 filament::Texture* FrameGenerationOutput::color_texture() const noexcept { return impl_->color; }
 filament::Texture* FrameGenerationOutput::depth_texture() const noexcept { return impl_->depth; }
 filament::Texture* FrameGenerationOutput::motion_texture() const noexcept { return impl_->motion; }
 filament::Texture* FrameGenerationOutput::ui_texture() const noexcept { return impl_->ui; }
+filament::Texture* FrameGenerationOutput::distortion_texture() const noexcept {
+    return impl_->distortion_active ? impl_->distortion : nullptr;
+}
+
+bool FrameGenerationOutput::prepare_distortion(filament::Texture* coarse_field) {
+    auto& p = *impl_;
+    p.distortion_active = false;
+    for (size_t i = 3; i < p.passes.size(); ++i) if (p.passes[i].instance)
+        p.passes[i].instance->setParameter("coarseField", p.placeholder, p.sampler());
+    if (!coarse_field) return true;
+    using Format = filament::Texture::InternalFormat;
+    if (!p.prepared || !p.valid() || coarse_field->getWidth() == 0 || coarse_field->getHeight() == 0 ||
+        coarse_field->getWidth() > 64 || coarse_field->getHeight() > 64 ||
+        (coarse_field->getFormat() != Format::RGBA16F && coarse_field->getFormat() != Format::RGBA32F) ||
+        !p.build_distortion()) return false;
+    const filament::TextureSampler linear(filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    for (size_t i = 3; i < p.passes.size(); ++i) {
+        auto& pass = p.passes[i];
+        pass.view->setViewport({0,0,static_cast<uint32_t>(p.width),static_cast<uint32_t>(p.height)});
+        // Both branches exist in the shader. Never bind an attachment as a
+        // sampled input even when its branch is disabled by a uniform.
+        pass.instance->setParameter("coarseField", i == 3 ? coarse_field : p.placeholder, linear);
+        pass.instance->setParameter("distortionField", i == 4 ? p.distortion : p.placeholder, p.sampler());
+        pass.instance->setParameter("sceneTexture", i == 4 ? p.undistorted_color : p.placeholder, linear);
+        pass.instance->setParameter("fieldBound", 0.1f / static_cast<float>(
+            std::max(coarse_field->getWidth(), coarse_field->getHeight())));
+    }
+    p.passes[3].view->setRenderTarget(p.distortion_target);
+    p.passes[4].view->setRenderTarget(p.scene_target);
+    p.distortion_active = true;
+    return true;
+}
 
 void FrameGenerationOutput::bind_ui(filament::View& view) {
     impl_->unbind_ui();
@@ -261,15 +369,38 @@ void FrameGenerationOutput::bind_ui(filament::View& view) {
 }
 void FrameGenerationOutput::unbind_ui() { impl_->unbind_ui(); }
 
-void FrameGenerationOutput::prepare(filament::Texture* packed, int width, int height, bool has_ui) {
+void FrameGenerationOutput::prepare(filament::Texture* packed, int width, int height, bool has_ui,
+        const TemporalCameraHistory& camera_history, filament::Texture* effects) {
     auto& p = *impl_;
     if (!valid() || !packed || needs_resize(width, height)) { p.prepared = false; return; }
-    for (auto& pass : p.passes) pass.view->setViewport({0,0,static_cast<uint32_t>(width),static_cast<uint32_t>(height)});
+    if (effects && (effects->getWidth() != static_cast<uint32_t>(width) ||
+                    effects->getHeight() != static_cast<uint32_t>(height))) {
+        p.prepared = false;
+        return;
+    }
+    for (auto& pass : p.passes) if(pass.view) pass.view->setViewport({0,0,static_cast<uint32_t>(width),static_cast<uint32_t>(height)});
     p.ui_clear_view->setViewport({0,0,static_cast<uint32_t>(width),static_cast<uint32_t>(height)});
     p.ui_clear_view->setRenderTarget(p.ui_target);
     p.passes[0].view->setRenderTarget(p.depth_target);
     p.passes[1].view->setRenderTarget(p.motion_target);
-    for (size_t i = 0; i < 2; ++i) p.passes[i].instance->setParameter("packedTexture", packed, p.sampler());
+    const auto world_from_current_clip = glm::inverse(camera_history.current_clip_from_world);
+    bool finite_history = camera_history.valid;
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            finite_history &= std::isfinite(world_from_current_clip[column][row]) &&
+                std::isfinite(camera_history.previous_clip_from_world[column][row]);
+    for (size_t i = 0; i < 2; ++i) {
+        auto* instance = p.passes[i].instance;
+        instance->setParameter("packedTexture", packed, p.sampler());
+        instance->setParameter("effectTexture", effects ? effects : p.placeholder, p.sampler());
+        instance->setParameter("hasEffects", effects != nullptr);
+        // Invalid inverses are never uploaded, even while history is disabled.
+        instance->setParameter("worldFromCurrentClip", glm_to_filament(
+            finite_history ? world_from_current_clip : glm::mat4(1.0f)));
+        instance->setParameter("previousClipFromWorld", glm_to_filament(
+            finite_history ? camera_history.previous_clip_from_world : glm::mat4(1.0f)));
+        instance->setParameter("cameraHistoryValid", finite_history);
+    }
     p.passes[2].instance->setParameter("sceneTexture", p.color, p.sampler());
     p.passes[2].instance->setParameter("uiTexture", p.ui, p.sampler());
     p.passes[2].instance->setParameter("hasUi", has_ui);
@@ -280,10 +411,13 @@ void FrameGenerationOutput::render_extract() {
     if (!impl_->prepared || !impl_->core.renderer) return;
     impl_->core.renderer->render(impl_->passes[0].view);
     impl_->core.renderer->render(impl_->passes[1].view);
+    if (impl_->distortion_active) impl_->core.renderer->render(impl_->passes[3].view);
     if (!impl_->has_ui) impl_->core.renderer->render(impl_->ui_clear_view);
 }
 void FrameGenerationOutput::render_composite() {
-    if (impl_->prepared && impl_->core.renderer) impl_->core.renderer->render(impl_->passes[2].view);
+    if (!impl_->prepared || !impl_->core.renderer) return;
+    if (impl_->distortion_active) impl_->core.renderer->render(impl_->passes[4].view);
+    impl_->core.renderer->render(impl_->passes[2].view);
 }
 
 } // namespace heaven

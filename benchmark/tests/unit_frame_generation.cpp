@@ -206,6 +206,25 @@ bool frame_generation_scoring() {
     if (!check(system.status().result.diagnostic_reason == "microprofiler recording; frame generation requested",
                "request at start or combined diagnostic reasons were lost")) return false;
     system.dismiss_result();
+    for (bool before_start : {false,true}) {
+        system.set_presentation_trace_requested(before_start);
+        if (!system.request_start()) return false;
+        system.tick(.25f,camera);
+        system.set_presentation_trace_requested(true);
+        system.set_presentation_trace_requested(false);
+        system.tick(.75f,camera);
+        const auto observed = system.status().result;
+        const auto observed_report = build_benchmark_report(observed,BenchConfig{},
+            {"test","test"},std::chrono::system_clock::time_point{});
+        const auto observed_json = nlohmann::json::parse(observed_report.json);
+        if (!check(observed.diagnostic && observed.frames == 2 &&
+                observed.diagnostic_reason == "presentation timing observation" &&
+                observed.performance.scores.overall == 0.0 &&
+                observed_json.at("scores").at("overall").is_null() &&
+                observed_json.at("scores").at("gpu").is_null(),
+                "Off tour presentation observer lost statistics or received a score")) return false;
+        system.dismiss_result();
+    }
     if (!system.request_start()) return false;
     system.set_frame_generation_requested(true);
     system.cancel();

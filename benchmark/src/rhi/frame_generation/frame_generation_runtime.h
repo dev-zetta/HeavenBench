@@ -19,6 +19,8 @@ class DlssPlatform;
 class DlssRuntimeBridge;
 class TemporalScene;
 class TemporalGrass;
+class TemporalEffects;
+struct TemporalEffectDraw;
 class MeshStore;
 class TextureStore;
 
@@ -41,6 +43,8 @@ public:
     void unbind_ui();
     void prepare_grass(std::span<const TemporalGrassPatch> patches,
         std::span<const Instance> instances, const Camera& camera, float time);
+    void prepare_effects(std::span<const TemporalEffectDraw> draws, const Camera& camera, float time);
+    bool prepare_distortion(filament::Texture* coarse_field, bool required = false);
     filament::RenderTarget* scene_target() const;
     void render_temporal();
     void render_composite();
@@ -64,6 +68,7 @@ private:
     [[maybe_unused]] DlssPlatform* dlss_platform_ = nullptr;
     std::unique_ptr<TemporalScene> temporal_;
     std::unique_ptr<TemporalGrass> grass_;
+    std::unique_ptr<TemporalEffects> effects_;
     std::shared_ptr<FrameGenerationOutput> output_;
     std::unique_ptr<DlssRuntimeBridge> dlss_;
     DlssProspectiveFrame dlss_frame_;

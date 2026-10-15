@@ -59,7 +59,7 @@ RUN --mount=type=cache,id=heaven-linux-clang21-${CPU_ARCH}-${CACHE_SCOPE},target
 
 # Exercise relocation without the compiler, libc++, SDL or development packages
 # installed. System graphics drivers and ALSA remain host prerequisites.
-FROM ${UBUNTU_IMAGE} AS linux-runtime-check
+FROM ${UBUNTU_IMAGE} AS linux-runtime-base
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3 libasound2t64 \
         libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxfixes3 libxss1 \
@@ -67,11 +67,36 @@ RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 instal
         libvulkan1 libgl1 libegl1 \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/verify_appimage.py /verify_appimage.py
+FROM linux-runtime-base AS linux-runtime-check
 COPY --from=linux-build /artifacts/ /artifacts/
 ARG CPU_ARCH=portable
 RUN if [[ "$CPU_ARCH" == portable ]]; then \
         python3 /verify_appimage.py /artifacts/*portable.AppImage 2>&1 | tee /artifacts/logs/runtime-verification.log; \
     else echo 'Architecture-specific executable not run on a generic build host.' > /artifacts/logs/runtime-verification.log; fi
+
+# Optional SDK distributions use the same canonical build/test/package policy,
+# but an independent cache and validator-equipped image. Release stages stay off.
+FROM dependencies AS linux-fsr3-build
+RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends glslang-tools spirv-tools \
+    && rm -rf /var/lib/apt/lists/*
+COPY . .
+ARG JOBS=2
+ARG CACHE_SCOPE=default
+ARG RUN_ANALYSIS=1
+RUN --mount=type=cache,id=heaven-linux-fsr3-clang21-${CACHE_SCOPE},target=/workspace/build,sharing=locked \
+    --mount=type=bind,source=.,target=/source,readonly \
+    set -e; \
+    python3 scripts/prepare_docker_cache.py --source-root /source --platform linux --target portable; \
+    python3 scripts/export_build_sources.py --source-root /source --output-dir /artifacts --platform linux-experimental-fsr3; \
+    args=(); if [[ "$RUN_ANALYSIS" == 0 ]]; then args+=(--skip-analysis); fi; \
+    ./scripts/ci_linux.sh --cpu-arch portable --jobs "$JOBS" --output-dir /artifacts \
+        --experimental-fsr3 --source-manifest /artifacts/source-manifest.json "${args[@]}" \
+    && cp /workspace/build/.heaven-docker-cache.json /artifacts/logs/cache-state.json
+
+FROM linux-runtime-base AS linux-fsr3-runtime-check
+COPY --from=linux-fsr3-build /artifacts/ /artifacts/
+RUN python3 /verify_appimage.py /artifacts/*portable-experimental-fsr3-*.AppImage \
+    2>&1 | tee /artifacts/logs/runtime-verification.log
 
 FROM android-toolchain AS android-build
 COPY --from=dependencies /workspace/lib/ /workspace/lib/
@@ -91,3 +116,6 @@ COPY --from=linux-runtime-check /artifacts/ /
 
 FROM scratch AS android-artifacts
 COPY --from=android-build /artifacts/ /
+
+FROM scratch AS linux-fsr3-artifacts
+COPY --from=linux-fsr3-runtime-check /artifacts/ /

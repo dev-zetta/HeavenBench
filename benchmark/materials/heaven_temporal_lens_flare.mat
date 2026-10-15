@@ -1,0 +1,59 @@
+// Optional temporal contributor: shared visible shape, independent accepted history.
+material {
+    name : heaven_temporal_lens_flare,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : true,
+    // Depth-culling OFF — occlusion is the soft scene-depth comparison in
+    // the fragment shader, not the hardware depth test (which hard-clipped
+    // the quad against the lamp's mounting surface).
+    depthCulling : true,
+    parameters : [
+        { type : float4x4, name : currentClipFromUserWorld },
+        { type : float4x4, name : previousClipFromUserWorld },
+        { type : float4x4, name : previousModel },
+        { type : float3, name : previousCamera },
+        { type : float3, name : previousRight },
+        { type : float3, name : previousUp },
+        { type : float3x3, name : previousWorldToUser },
+        { type : float, name : previousTime },
+        { type : bool, name : historyValid },
+        { type : sampler2d, name : flareTex },
+        // Linear scene-depth texture (F, eye-space forward metres) for
+        // the soft occlusion test. Bound by LensFlareFeature;
+        // a null/unbound texture reads as "far" so the flare is not
+        // occluded before the depth pre-pass produces a real texture.
+        { type : sampler2d, name : depthTexture },
+        { type : float3,    name : tint },
+        { type : float,     name : fadeFar },
+        { type : float,     name : fadeNear },
+        { type : float,     name : maxRadius },
+        { type : float,     name : brightness },
+        { type : float4,    name : flareShaderTuning }
+    ],
+    variables : [ currentClip, previousClip,
+        flareCtx,
+        // .xy = the lamp ANCHOR's screen-space UV (0..1), used to sample scene
+        // depth at the lamp position for whole-flare occlusion..zw unused.
+        anchorInfo
+    ]
+}
+vertex {
+    #define HEAVEN_TEMPORAL_ADDITIVE 1
+    #define HEAVEN_TEMPORAL_LENS_FLARE 1
+    #include "includes/effect_lens_flare_vertex.glsl"
+    #include "includes/temporal_effect_vertex.glsl"
+    void materialVertex(inout MaterialVertexInputs material) { temporalEffectVertex(material); }
+}
+fragment {
+    #define HEAVEN_TEMPORAL_ADDITIVE 1
+    #define HEAVEN_TEMPORAL_LENS_FLARE 1
+    #define HEAVEN_TEMPORAL_EFFECT 1
+    float3 effectTemporalWorld;
+    #include "includes/effect_lens_flare_fragment.glsl"
+    #include "includes/temporal_effect_fragment.glsl"
+    void material(inout MaterialInputs material) { temporalEffectFragment(material); }
+}

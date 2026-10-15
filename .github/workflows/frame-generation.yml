@@ -1,7 +1,7 @@
-name: Optional Windows frame generation contracts
+name: Experimental frame generation packages
 
 # The dedicated experimental branch and explicit dispatch leave release builds
-# unchanged. Neither path publishes packages or proprietary runtime libraries.
+# unchanged. Artifacts are experimental; proprietary runtime plugins stay BYO.
 on:
   push:
     branches: [codex/frame-generation]
@@ -16,6 +16,14 @@ on:
       - 'scripts/fetch_dependencies.sh'
       - 'scripts/fetch_fsr31.py'
       - 'scripts/package_windows.ps1'
+      - 'scripts/package_appimage.sh'
+      - 'scripts/ci_linux.sh'
+      - 'scripts/ci_windows.ps1'
+      - 'scripts/build_docker.sh'
+      - 'scripts/frame_generation_package_metadata.py'
+      - 'scripts/export_repository_sources.py'
+      - 'scripts/verify_appimage.py'
+      - 'docker/**'
       - 'scripts/collect_licenses.py'
       - 'tests/collect_licenses_test.py'
       - 'tests/windows_optional_sdk_licenses_test.ps1'
@@ -24,10 +32,13 @@ on:
       - 'tests/windows_host_preflight_test.ps1'
       - 'tests/fetch_fsr31_test.py'
       - 'tests/frame_generation_recovery_contract_test.py'
+      - 'tests/frame_generation_packages_test.py'
+      - 'tests/windows_experimental_packages_test.ps1'
+      - 'tests/docker_build_test.py'
   workflow_dispatch:
     inputs:
       providers:
-        description: Optional SDK code to compile; no GPU or vendor runtime DLLs
+        description: Experimental SDK-enabled packages; DLSS signed plugins are bring-your-own
         type: choice
         options: [both, fsr3, dlss]
         default: both
@@ -41,8 +52,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-fsr3:
+    name: Experimental Linux x64 / FSR3 / portable AppImage
+    if: inputs.providers != 'dlss'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Validate experimental package contracts
+        run: |
+          python3 tests/frame_generation_packages_test.py
+          python3 tests/docker_build_test.py
+      - name: Build, test and verify experimental FSR AppImage
+        run: ./scripts/build_docker.sh linux --experimental-fsr3 --jobs 2
+      - name: Upload experimental AppImage and matching sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: HeavenBench-experimental-linux-x64-fsr3
+          path: |
+            build/release/linux-experimental-fsr3/*.AppImage
+            build/release/linux-experimental-fsr3/*.sha256
+            build/release/linux-experimental-fsr3/*source.tar.gz
+            build/release/linux-experimental-fsr3/source-manifest.json
+            build/release/linux-experimental-fsr3/build-environment.txt
+            build/release/linux-experimental-fsr3/metadata/
+          if-no-files-found: error
+      - name: Upload experimental Linux build evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: HeavenBench-experimental-linux-fsr3-evidence
+          path: build/release/linux-experimental-fsr3/logs/
+          if-no-files-found: ignore
   windows-frame-generation:
-    name: Windows x64 / MSVC / optional SDK host contracts
+    name: Experimental Windows x64 / MSVC / SDK packages and host contracts
     runs-on: windows-2022
     timeout-minutes: 180
     env:
@@ -61,8 +105,11 @@ jobs:
         run: |
           . ./scripts/windows_common.ps1
           Invoke-Checked python.exe @('tests/fetch_fsr31_test.py')
+          Invoke-Checked python.exe @('tests/frame_generation_packages_test.py')
           Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
             'tests/windows_host_preflight_test.ps1')
+          Invoke-Checked (Join-Path $PSHOME 'pwsh.exe') @('-NoLogo', '-NoProfile', '-File',
+            'tests/windows_experimental_packages_test.ps1')
       - name: Fast native DLSS SDK compile and host contracts
         if: env.FRAME_GENERATION_PROVIDERS != 'fsr3'
         run: |
@@ -289,11 +336,42 @@ jobs:
               dlss_built = $dlss
               host_tests = 'passed; opt-in GPU smoke remains skipped'
               native_gpu_runtime = 'not exercised'
-              package = 'not produced; no runtime DLL redistribution'
+              package = 'pending separate experimental packaging and relocation verification'
             } | ConvertTo-Json | Set-Content (Join-Path $metadata 'acceptance-scope.json')
             "Optional Windows $env:FRAME_GENERATION_PROVIDERS compilation and host contracts passed. No GPU, signed DLSS runtime, display cadence or package qualification is claimed." |
               Add-Content $env:GITHUB_STEP_SUMMARY
           } finally { Stop-Transcript }
+      - name: Package and relocate experimental Windows build
+        run: |
+          . ./scripts/windows_common.ps1
+          $repo = (Get-Location).Path
+          $evidence = Join-Path $repo 'build/frame-generation/windows-ci'
+          $packages = Join-Path $evidence 'packages'
+          Start-Transcript -Path (Join-Path $evidence 'logs/experimental-package.log')
+          try {
+            Invoke-Checked python.exe @('scripts/export_repository_sources.py', '--source-root', $repo,
+              '--output-dir', $packages, '--platform', "windows-experimental-$env:FRAME_GENERATION_PROVIDERS")
+            ./scripts/ci_windows.ps1 -PackageOnly -BuildDir (Join-Path $repo 'build/frame-generation/windows-msvc') `
+              -OutputDir $packages -ExperimentalProviders $env:FRAME_GENERATION_PROVIDERS `
+              -SourceManifest (Join-Path $packages 'source-manifest.json')
+            $path = Join-Path $evidence 'metadata/acceptance-scope.json'
+            $scope = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+            $scope.package = 'experimental ZIP produced and relocated; signed NVIDIA runtime plugins absent; native GPU/runtime qualification remains open'
+            $scope | ConvertTo-Json | Set-Content -LiteralPath $path
+            'Experimental Windows artifact packaged and relocated. DLSS plugins are bring-your-own; no native GPU, visual, display cadence or latency qualification is claimed.' |
+              Add-Content $env:GITHUB_STEP_SUMMARY
+          } finally { Stop-Transcript }
+      - name: Upload experimental Windows ZIP and matching sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: HeavenBench-experimental-windows-x64-${{ inputs.providers || 'both' }}
+          path: |
+            build/frame-generation/windows-ci/packages/*.zip
+            build/frame-generation/windows-ci/packages/*.sha256
+            build/frame-generation/windows-ci/packages/*source.tar.gz
+            build/frame-generation/windows-ci/packages/source-manifest.json
+            build/frame-generation/windows-ci/packages/build-environment.txt
+          if-no-files-found: error
       - name: Upload compile and host-test evidence
         if: always()
         uses: actions/upload-artifact@v7

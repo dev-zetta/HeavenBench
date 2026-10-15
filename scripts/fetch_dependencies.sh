@@ -7,14 +7,49 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." &>/dev/null && pwd)"
 
 FILAMENT_URL="https://github.com/google/filament.git"
 FILAMENT_UPSTREAM_REV="1da46b0a2940db9b1286ec3a8910954c191c010c"
-FILAMENT_PATCH_SHA256="1c63ef1e60f32e278ccf5b08aeb9f12a3dee11b641e2af0a31ad98ae36e95f30"
-FILAMENT_EXPECTED_TREE="5729b06a6a6aacf0830be520c8e814c1969e479e"
+FILAMENT_PATCH_SHA256="a59691324d0cf581ece32c08435734b964d7d0fb94a9a417828a8d55467347a8"
+FILAMENT_EXPECTED_TREE="d3fce3c0b8e6647a5fbcb43c11510b74872cade4"
 FILAMENT_PATCH="$REPO_ROOT/patches/filament/heavenbench.patch"
 JOLT_REV="9e17b843a1e1870f9e6c248c836e700b1253f010"
 RAPIDCHECK_REV="b2d9ed2dddefc4b84318d664b4f221eb792d89c7"
 LIBZIP_REV="6f8a0cdd24a0dc6cce9dac4a7679da784ab124ea"
 POCKETFFT_REV="c90e55b3d529f8efa40ed01a20de22405f45fc65"
 BCDEC_REV="93628fe5627102fe5187b7eeb99122dec6612c36"
+
+fetch_pinned_revision() {
+    local destination="$1"
+    local url="$2"
+    local revision="$3"
+    local attempt output status
+
+    # Retry only transport failures. Revision, patch, tree and local-change
+    # checks remain fail-fast; every attempt requests the identical source.
+    for attempt in 1 2 3; do
+        if output="$(LC_ALL=C GIT_TERMINAL_PROMPT=0 git -C "$destination" \
+                fetch --quiet --depth 1 "$url" "$revision" 2>&1)"; then
+            if [[ -n "$output" ]]; then printf '%s\n' "$output" >&2; fi
+            return 0
+        else
+            status=$?
+        fi
+        printf '%s\n' "$output" >&2
+        if [[ "$attempt" == 3 ]]; then return "$status"; fi
+        case "$output" in
+            *'Could not resolve host'*|*'Could not resolve proxy'*|\
+            *'Failed to connect'*|*'Could not connect to server'*|\
+            *'Connection timed out'*|*'Connection reset by peer'*|\
+            *'Operation timed out'*|\
+            *'The requested URL returned error: 429'*|\
+            *'The requested URL returned error: 500'*|\
+            *'The requested URL returned error: 502'*|\
+            *'The requested URL returned error: 503'*|\
+            *'The requested URL returned error: 504'*) ;;
+            *) return "$status" ;;
+        esac
+        echo "==> Transient fetch failure; retrying the same revision ($attempt/3)" >&2
+        sleep "$((attempt * 2))"
+    done
+}
 
 fetch_revision() {
     local name="$1"
@@ -57,7 +92,7 @@ fetch_revision() {
     fi
 
     echo "==> Fetching $name at $revision"
-    git -C "$destination" fetch --quiet --depth 1 "$url" "$revision"
+    fetch_pinned_revision "$destination" "$url" "$revision"
     git -C "$destination" checkout --quiet --no-overwrite-ignore --detach FETCH_HEAD
 }
 
@@ -118,7 +153,7 @@ fetch_filament() (
 
     if [[ -z "${current_revision:-}" ]]; then
         echo "==> Fetching Filament upstream at $FILAMENT_UPSTREAM_REV"
-        git -C "$destination" fetch --quiet --depth 1 "$FILAMENT_URL" "$FILAMENT_UPSTREAM_REV"
+        fetch_pinned_revision "$destination" "$FILAMENT_URL" "$FILAMENT_UPSTREAM_REV"
         git -C "$destination" checkout --quiet --no-overwrite-ignore --detach "$FILAMENT_UPSTREAM_REV"
     fi
 

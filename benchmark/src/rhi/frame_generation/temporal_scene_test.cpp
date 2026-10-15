@@ -450,7 +450,8 @@ public:
     }
 
     void capture(const char* label, const glm::vec2& motion, float expected_depth,
-                 bool history_valid, bool accept = true) {
+                 bool history_valid, bool accept = true, bool sky_only = false,
+                 bool wrong_sky_history = false) {
         core_.camera->setModelMatrix(glm_to_filament(glm::inverse(camera.view_matrix())));
         require(temporal_->prepare(camera,instances_,runtime_clip()), "Temporal prepare failed");
         const auto& proxy_camera = temporal_->view()->getCamera();
@@ -461,7 +462,9 @@ public:
         for (const auto& plane : planes)
             for (int component = 0; component < 4; ++component)
                 require(std::isfinite(plane[component]),"Temporal culling plane is nonfinite");
-        output_->prepare(temporal_->packed_texture(),kExtent,kExtent,false);
+        output_->prepare(temporal_->packed_texture(),kExtent,kExtent,false,
+            {temporal_->current_clip(), wrong_sky_history ? temporal_->current_clip() :
+                temporal_->previous_clip(), temporal_->history_valid()});
         std::vector<float> depths(static_cast<size_t>(kExtent)*kExtent);
         // Request RG16F's native component type. Filament's generic HALF to
         // FLOAT readback conversion clamps negative values to zero; decoding
@@ -499,11 +502,32 @@ public:
             label,temporal_->scene()->getRenderableCount(),temporal_->view()->getVisibleRenderableCount(),
             temporal_->coverage().proxy_primitives,packed_coverage,packed_depth_max,extracted_depth_max);
         size_t interior = 0, background = 0;
-        float max_depth_error = 0.0f, max_motion_error = 0.0f;
+        float max_depth_error = 0.0f, max_motion_error = 0.0f, sky_error = 0.0f;
+        float expected_sky_max = 0.0f;
+        // Independent pinhole-ray oracle: construct an eye-space direction
+        // from the known 60-degree lens and rotate it into world space. This
+        // does not invert the clip matrix or subtract homogeneous endpoints.
+        const auto world_from_eye = glm::mat3(glm::inverse(camera.view_matrix()));
+        const auto previous_sky_clip = projection_ * previous_sky_camera_.view_matrix();
         for (uint32_t y = 1; y + 1 < kExtent; ++y) {
             for (uint32_t x = 1; x + 1 < kExtent; ++x) {
                 const size_t index = static_cast<size_t>(y)*kExtent+x;
-                if (depths[index] == 0.0f) { ++background; continue; }
+                if (depths[index] == 0.0f) {
+                    ++background;
+                    const glm::vec2 uv{(float(x)+.5f)/float(kExtent),
+                        (float(y)+.5f)/float(kExtent)};
+                    const auto tangent = std::tan(glm::radians(30.0f));
+                    const auto ray = world_from_eye * glm::vec3{
+                        (2.0f*uv.x-1.0f)*tangent,(1.0f-2.0f*uv.y)*tangent,-1.0f};
+                    const auto prior = previous_sky_clip * glm::vec4(ray,0.0f);
+                    const auto expected = history_valid && prior.w > 1e-8f ?
+                        glm::vec2(prior)/prior.w*glm::vec2(.5f,-.5f)+.5f-uv : glm::vec2{};
+                    require(std::isfinite(vectors[index].x) && std::isfinite(vectors[index].y),
+                        "Sky motion is nonfinite");
+                    sky_error = std::max(sky_error,glm::length(vectors[index]-expected));
+                    expected_sky_max = std::max(expected_sky_max,glm::length(expected));
+                    continue;
+                }
                 bool inside = true;
                 for (int dy = -1; dy <= 1; ++dy)
                     for (int dx = -1; dx <= 1; ++dx)
@@ -512,8 +536,10 @@ public:
                 ++interior;
                 require(std::isfinite(depths[index]) && std::isfinite(vectors[index].x) &&
                     std::isfinite(vectors[index].y), "Nonfinite native temporal input");
-                max_depth_error = std::max(max_depth_error,std::abs(depths[index]-expected_depth));
-                max_motion_error = std::max(max_motion_error,glm::length(vectors[index]-motion));
+                if (!sky_only) {
+                    max_depth_error = std::max(max_depth_error,std::abs(depths[index]-expected_depth));
+                    max_motion_error = std::max(max_motion_error,glm::length(vectors[index]-motion));
+                }
                 require(glm::length(vectors[index]-glm::vec2(packed[index])) < 4e-4f,
                     "RG16F extract differs from signed RGBA32F source motion");
                 require(std::abs(packed[index].w-(history_valid?1.0f:0.0f)) < 1e-5f,
@@ -529,7 +555,13 @@ public:
         require(interior >= 256 && background >= 128, "Temporal raster coverage missing or unexpectedly full-screen");
         require(max_depth_error < 2e-5f, "R32F depth differs from independent projection");
         require(max_motion_error < 4e-4f, "RG16F signed motion differs from independent projection");
-        if (accept) temporal_->commit_accepted();
+        std::printf("[temporal_scene_test] %s sky_pixels=%zu sky_error=%.8g expected_sky_max=%.8g\n",
+            label,background,sky_error,expected_sky_max);
+        require(sky_error < 4e-4f,"Dense sky motion differs from independent pinhole-ray projection");
+        if (accept) {
+            temporal_->commit_accepted();
+            previous_sky_camera_ = camera;
+        }
     }
 
     void capture_grass(const char* label, float time,
@@ -764,7 +796,27 @@ private:
     std::vector<Instance> instances_;
     AppConfig config_;
     glm::mat4 projection_{1.0f};
+    Camera previous_sky_camera_;
 };
+
+void run_sky(Fixture& fixture, bool wrong_history = false) {
+    fixture.setup();
+    fixture.capture("sky-first-invalid",{},.125f,false,true,true);
+    fixture.camera.yaw = 7.0f;
+    fixture.camera.pitch = -3.0f;
+    fixture.capture("sky-camera-rotation",{},0,true,true,true,wrong_history);
+    fixture.camera.position = {.1f,-.2f,.08f};
+    fixture.capture("sky-translation-has-no-parallax",{},0,true,true,true);
+    fixture.camera.yaw = 18.0f;
+    fixture.reject_prepared_attempt();
+    fixture.camera.yaw = 9.0f;
+    fixture.capture("sky-rejected-camera-retains-accepted-history",{},0,true,true,true);
+    fixture.invalidate();
+    fixture.camera.pitch = -1.0f;
+    fixture.capture("sky-cut-resets-history",{},0,false,true,true);
+    fixture.camera.pitch = -2.0f;
+    fixture.capture("sky-return-resumes-history",{},0,true,true,true);
+}
 
 void run_grass(Fixture& fixture, bool wrong_previous_time = false) {
     fixture.setup_grass();
@@ -861,6 +913,7 @@ void run() {
     current = project(fixture.clip(),identity,kCenter+glm::vec4{0,.125f,0,0});
     fixture.capture("CPU-positions-translation",previous.uv-current.uv,current.depth,true);
     run_grass(fixture);
+    run_sky(fixture);
     fixture.verify_native_isolation();
 }
 } // namespace
@@ -871,13 +924,19 @@ int main(int argc, char** argv) try {
     if (argc > 1) {
         const std::string_view option(argv[1]);
         heaven::require(argc == 2 && (option == "--culling-only" || option == "--grass-only" ||
-            option == "--grass-wrong-previous-time"),
-            "Usage: heaven_temporal_scene_test [--culling-only|--grass-only|--grass-wrong-previous-time]");
+            option == "--grass-wrong-previous-time" || option == "--sky-only" ||
+            option == "--sky-wrong-previous-camera"),
+            "Usage: heaven_temporal_scene_test [--culling-only|--grass-only|--grass-wrong-previous-time|--sky-only|--sky-wrong-previous-camera]");
         if (option != "--culling-only") {
             heaven::Fixture fixture;
             fixture.init();
-            heaven::run_grass(fixture,option == "--grass-wrong-previous-time");
-            std::puts("[temporal_scene_test] PASS: production grass pixel oracle, wind/model/camera history, cutout, rejected attempt and reset");
+            if (option == "--sky-only" || option == "--sky-wrong-previous-camera") {
+                heaven::run_sky(fixture,option == "--sky-wrong-previous-camera");
+                std::puts("[temporal_scene_test] PASS: dense sky rotation/translation, rejected camera and reset");
+            } else {
+                heaven::run_grass(fixture,option == "--grass-wrong-previous-time");
+                std::puts("[temporal_scene_test] PASS: production grass pixel oracle, wind/model/camera history, cutout, rejected attempt and reset");
+            }
         }
         return 0;
     }

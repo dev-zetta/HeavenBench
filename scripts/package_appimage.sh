@@ -9,9 +9,11 @@ OUTPUT_DIR="$HEAVEN_BUILD_ROOT/release"
 CPU_ARCH=portable
 JOBS=2
 SKIP_BUILD=0
+EXPERIMENTAL_FSR3=0
+SOURCE_MANIFEST=
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --build-dir|--output-dir|--cpu-arch|--jobs)
+        --build-dir|--output-dir|--cpu-arch|--jobs|--source-manifest)
             [[ $# -ge 2 && -n "$2" ]] || { echo "$1 requires a value" >&2; exit 1; } ;;
     esac
     case "$1" in
@@ -20,15 +22,20 @@ while [[ $# -gt 0 ]]; do
         --cpu-arch) CPU_ARCH="$2"; shift 2 ;;
         --jobs) JOBS="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        --experimental-fsr3) EXPERIMENTAL_FSR3=1; shift ;;
+        --source-manifest) SOURCE_MANIFEST="$2"; shift 2 ;;
         --help|-h)
             cat <<'EOF'
 Usage: scripts/package_appimage.sh [--build-dir DIR] [--output-dir DIR]
        [--cpu-arch portable|zen1|zen2|zen3|zen4|zen5] [--jobs N] [--skip-build]
+       [--experimental-fsr3 --source-manifest FILE]
 
 Builds the renderer through build.sh, then creates an AppImage and SHA-256 file.
 --skip-build packages an existing Release tree and verifies its architecture.
 Requires Linux x86-64, curl, file, Python 3, patchelf and desktop-file-validate.
 Packaging tools are downloaded to build/packaging-tools and checksum-verified.
+Experimental FSR packaging requires an existing SDK-enabled portable build,
+validated shader permutations and a matching exact source archive/manifest.
 Build on Ubuntu 24.04 for the CI baseline; newer glibc hosts raise that baseline.
 EOF
             exit 0 ;;
@@ -38,6 +45,13 @@ done
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || { echo "AppImage packaging requires Linux x86-64" >&2; exit 1; }
 [[ "$CPU_ARCH" =~ ^(portable|zen[1-5])$ ]] || { echo "Choose an explicit distributable CPU architecture" >&2; exit 1; }
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "--jobs must be positive" >&2; exit 1; }
+if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
+    [[ "$SKIP_BUILD" == 1 && "$CPU_ARCH" == portable && -f "$SOURCE_MANIFEST" ]] || {
+        echo 'Experimental FSR requires --skip-build, portable CPU and --source-manifest' >&2; exit 1;
+    }
+elif [[ -n "$SOURCE_MANIFEST" ]]; then
+    echo '--source-manifest requires --experimental-fsr3' >&2; exit 1
+fi
 for tool in curl file python3 patchelf desktop-file-validate sha256sum; do
     command -v "$tool" >/dev/null || { echo "Required tool not found: $tool" >&2; exit 1; }
 done
@@ -52,6 +66,16 @@ for executable in heaven_benchmark heaven_asset_packer; do
 done
 grep -qx "HEAVEN_CPU_ARCH:STRING=$CPU_ARCH" "$BUILD_DIR/CMakeCache.txt" || { echo "Build CPU architecture does not match $CPU_ARCH" >&2; exit 1; }
 grep -qx 'CMAKE_BUILD_TYPE:STRING=Release' "$BUILD_DIR/CMakeCache.txt" || { echo "Packaging requires a Release build" >&2; exit 1; }
+if [[ "$EXPERIMENTAL_FSR3" == 0 ]]; then
+    python3 - "$SCRIPT_DIR" "$BUILD_DIR/CMakeCache.txt" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from frame_generation_package_metadata import cache_values, enabled
+cache = cache_values(sys.argv[2])
+if any(enabled(cache.get(key, 'OFF')) for key in ('HEAVEN_ENABLE_FSR3', 'HEAVEN_ENABLE_DLSS')):
+    raise SystemExit('SDK-enabled AppImages require explicit experimental packaging')
+PY
+fi
 VERSION=$(sed -n 's/^project(HeavenBench VERSION \([^ ]*\) LANGUAGES.*$/\1/p' "$REPO_ROOT/benchmark/CMakeLists.txt")
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Cannot determine project version" >&2; exit 1; }
 TOOLS_DIR=$(realpath -m "$HEAVEN_BUILD_ROOT/packaging-tools")
@@ -105,7 +129,15 @@ for lib in "${EXCLUDES[@]}"; do DEPLOY_ARGS+=(--exclude-library "$lib"); done
 
 # Retain distribution copyright files for libraries in the bundled closure.
 python3 "$SCRIPT_DIR/collect_linux_licenses.py" "$APPDIR"
-ARTIFACT="$OUTPUT_DIR/HeavenBench-$VERSION-linux-x86_64-$CPU_ARCH.AppImage"
+ARTIFACT_TAG=
+if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
+    ARTIFACT_TAG=$(python3 "$SCRIPT_DIR/frame_generation_package_metadata.py" \
+        --build-dir "$BUILD_DIR" --stage "$APPDIR/usr/share/heavenbench" \
+        --binary "$APPDIR/usr/bin/heaven_benchmark" --licenses "$APPDIR/usr/share/licenses/HeavenBench" \
+        --source-manifest "$SOURCE_MANIFEST" --providers fsr3 --platform linux)
+    ARTIFACT_TAG="-$ARTIFACT_TAG"
+fi
+ARTIFACT="$OUTPUT_DIR/HeavenBench-$VERSION-linux-x86_64-$CPU_ARCH$ARTIFACT_TAG.AppImage"
 ARCH=x86_64 VERSION="$VERSION" "$STAGE/appimagetool/squashfs-root/AppRun" \
     --runtime-file "$TOOLS_DIR/runtime-20251108-x86_64" "$APPDIR" "$ARTIFACT"
 (cd "$OUTPUT_DIR" && sha256sum "$(basename "$ARTIFACT")" > "$(basename "$ARTIFACT").sha256")

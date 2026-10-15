@@ -118,6 +118,74 @@ bool run_dlss_status_tests() {
         "DLSS failure changed an explicit Off request") && success;
 }
 
+bool run_dlss_distortion_runtime_input_tests() {
+    filament::backend::VulkanCommandContext context;
+    for (size_t index = 0; index != 4; ++index)
+        context.images[index].image = fake_handle<VkImage>(index + 1);
+    auto& field = context.images[4];
+    field.image = fake_handle<VkImage>(5);
+    field.view = fake_handle<VkImageView>(6);
+    field.memory = fake_handle<VkDeviceMemory>(7);
+    field.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    field.extent = {1920, 1080};
+    field.layout = VK_IMAGE_LAYOUT_GENERAL;
+    field.restoredLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    field.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    DlssPresentInputs inputs;
+    inputs.hudless_color.width = 1920;
+    inputs.hudless_color.height = 1080;
+    const auto valid = context;
+    const auto accepts = [&](const auto& candidate) {
+        return dlss_runtime_detail::owned_distortion_input(inputs, candidate).has_value();
+    };
+    bool success = check(accepts(context), "owned full-resolution distortion field rejected");
+    success &= check(inputs.distortion_active && inputs.distortion_field_valid &&
+        inputs.depth_motion_undistorted && inputs.hudless_distortion_matches_backbuffer &&
+        inputs.bidirectional_distortion.image == field.image &&
+        inputs.bidirectional_distortion.view == field.view &&
+        inputs.bidirectional_distortion.memory == field.memory &&
+        inputs.bidirectional_distortion.layout == field.restoredLayout &&
+        inputs.bidirectional_distortion.layout != field.layout,
+        "distortion tag or coherence flags lost the actual owned field/restored layout");
+    field.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    field.extent = {960, 540};
+    success &= check(accepts(context), "compatible signed half-resolution distortion field rejected");
+    auto reject = [&](auto change, const char* message) {
+        auto candidate = valid;
+        change(candidate.images[4]);
+        success &= check(!accepts(candidate), message);
+    };
+    reject([](auto& image) { image.view = VK_NULL_HANDLE; }, "distortion without a native view accepted");
+    reject([](auto& image) { image.memory = VK_NULL_HANDLE; }, "distortion without owned memory accepted");
+    reject([](auto& image) { image.image = VK_NULL_HANDLE; }, "partial distortion metadata silently dropped");
+    reject([](auto& image) { image.format = VK_FORMAT_R16G16B16A16_UNORM; }, "unsigned distortion accepted");
+    reject([](auto& image) { image.format = VK_FORMAT_R16G16_SFLOAT; }, "distortion missing inverse channels accepted");
+    reject([](auto& image) { image.extent.width = 0; }, "zero-size distortion accepted");
+    reject([](auto& image) { --image.extent.height; }, "mismatched distortion aspect accepted");
+    reject([](auto& image) { image.extent = {3840, 2160}; }, "oversized distortion accepted");
+    reject([](auto& image) { image.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; },
+        "unsynchronized distortion callback layout accepted");
+    reject([](auto& image) { image.restoredLayout = VK_IMAGE_LAYOUT_UNDEFINED; },
+        "undefined distortion presentation layout accepted");
+    reject([](auto& image) { image.restoredLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; },
+        "depth-only layout accepted for a color distortion field");
+    reject([](auto& image) { image.aspect = VK_IMAGE_ASPECT_DEPTH_BIT; }, "non-color distortion aspect accepted");
+    reject([](auto& image) { image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; }, "nonsampled distortion accepted");
+    reject([](auto& image) { image.mipLevels = 2; }, "multimip distortion accepted");
+    reject([](auto& image) { image.arrayLayers = 2; }, "array distortion accepted");
+    for (size_t index = 0; index != 4; ++index)
+        reject([&](auto& image) { image.image = valid.images[index].image; },
+            "distortion aliases a mandatory color/depth/motion/UI image");
+    success &= check(accepts(valid) && inputs.distortion_active,
+        "distortion clear control did not first establish an active field");
+    context.images[4] = {};
+    success &= check(accepts(context) && !inputs.distortion_active && !inputs.distortion_field_valid &&
+        !inputs.depth_motion_undistorted && !inputs.hudless_distortion_matches_backbuffer &&
+        inputs.bidirectional_distortion.image == VK_NULL_HANDLE,
+        "inactive owned distortion retained the previous field or coherence declaration");
+    return success;
+}
+
 bool run_dlss_runtime_bridge_tests() {
     constexpr float near_plane = 0.5f;
     constexpr float aspect = 16.0f / 9.0f;
@@ -134,7 +202,7 @@ bool run_dlss_runtime_bridge_tests() {
     const auto previous_vp = projection * previous_view;
     const auto constants = dlss_runtime_detail::camera_constants(glm::inverse(view), projection,
         current_vp, previous_vp, near_plane, std::numeric_limits<float>::max(), fov, aspect, false);
-    bool success = run_dlss_status_tests();
+    bool success = run_dlss_status_tests() && run_dlss_distortion_runtime_input_tests();
     success &= check(constants.has_value(), "actual infinite-far camera rejected");
     if (!constants) return false;
 

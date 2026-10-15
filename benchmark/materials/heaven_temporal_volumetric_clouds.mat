@@ -1,0 +1,97 @@
+// Optional temporal contributor: shared visible shape, independent accepted history.
+material {
+    name : heaven_temporal_volumetric_clouds,
+    requires : [ uv0 ],
+    shadingModel : unlit,
+    // Transparent composite over the scene. The accumulated scattered light is
+    // already alpha-weighted; do not normalize it back to straight RGB before
+    // handing it to Filament's transparent blend path.
+    blending : opaque,
+    // World-space fullscreen quad positioned by the CPU each frame, NOT
+    // vertexDomain:device — a post-process material with vertexDomain:device
+    // could not read its depthTexture sampler reliably (see volfog note).
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : true,
+    // Clouds are a DISTANT SKY LAYER that must be occluded by scene geometry.
+    // Occlusion is now done in-shader against the linear scene-depth texture
+    // (F, eye-space forward distance in metres) produced by the depth
+    // pre-pass / heaven_depth proxy render — the same proven approach as
+    // godrays / volfog (scene-depth-pipeline). The cloud march is
+    // capped at the scene-geometry distance, so cloud samples behind nearer
+    // opaque geometry never accumulate. Hardware depth-culling is therefore
+    // OFF (like godrays / volfog): a screen-space composite that reads depth
+    // manually, so a null/unbound depth texture degrades gracefully to "no
+    // geometry / far" (clouds render unoccluded) rather than crashing.
+    depthCulling : true,
+    parameters : [
+        { type : float4x4, name : currentClipFromUserWorld },
+        { type : float4x4, name : previousClipFromUserWorld },
+        { type : float4x4, name : previousModel },
+        { type : float3, name : previousCamera },
+        { type : float3, name : previousRight },
+        { type : float3, name : previousUp },
+        { type : float3x3, name : previousWorldToUser },
+        { type : float, name : previousTime },
+        { type : bool, name : historyValid },
+        // Linear scene depth (F, eye-space forward distance in metres)
+        // from the depth pre-pass / heaven_depth proxy render.
+        { type : sampler2d, name : depthTexture, precision : high, filterable : false },
+        // Camera world position (view-ray origin). The view-ray direction is
+        // taken from the quad's own world position (getWorldPosition), so no
+        // inverse-view-projection reconstruction is needed any more.
+        { type : float3,   name : cameraPos,             precision : high },
+
+        // Illumination-weighted sun/moon direction and direct radiance.
+        { type : float3,   name : sunDir },
+        { type : float3,   name : sunColor },
+
+        // Sky/moon ambient radiance; includes the current daylight intensity.
+        { type : float3,   name : skyColor },
+
+        // Cloud slab geometry (world Z, the up axis).
+        { type : float,    name : cloudBottom },   // slab bottom altitude (Z)
+        { type : float,    name : cloudTop },      // slab top altitude (Z)
+
+        // Cloud appearance / shaping.
+        { type : float,    name : coverage },      // [0,1] more = denser cover
+        { type : float,    name : densityScale },  // optical-depth multiplier
+        { type : float,    name : noiseScale },    // world->noise frequency
+
+        // Finite march cap (world units). Sky rays would otherwise march to
+        // infinity along the slab; this bounds them so the step length stays
+        // small (no undersampling aliasing) and the layer fades out toward the
+        // horizon instead of ending in a hard razor seam.
+        { type : float,    name : maxMarchDistance },
+
+        // Raymarch step budget (driven by cloud_raymarch_steps quality knob).
+        { type : int,      name : numSteps },
+
+        // Accumulated Frame_Time_Source for the wind-driven motion offset.
+        { type : float,    name : time },
+
+        // Low-discrepancy temporal phase in [0, 1). Added to the per-pixel
+        // march jitter so TAA receives changing samples instead of converging
+        // a fixed screen-space stipple.
+        { type : float,    name : temporalJitter },
+        { type : float4,   name : cloudDensityTuning },
+        { type : float4,   name : cloudLightingTuning },
+        { type : float4,   name : cloudMotionTuning }
+    ],
+
+    variables : [ currentClip, previousClip ]
+}
+vertex {
+    #define HEAVEN_TEMPORAL_CLOUD_VOLUME 1
+    #include "includes/effect_volumetric_clouds_vertex.glsl"
+    #include "includes/temporal_effect_vertex.glsl"
+    void materialVertex(inout MaterialVertexInputs material) { temporalEffectVertex(material); }
+}
+fragment {
+    #define HEAVEN_TEMPORAL_CLOUD_VOLUME 1
+    #define HEAVEN_TEMPORAL_EFFECT 1
+    float3 effectTemporalWorld;
+    #include "includes/effect_volumetric_clouds_fragment.glsl"
+    #include "includes/temporal_effect_fragment.glsl"
+    void material(inout MaterialInputs material) { temporalEffectFragment(material); }
+}

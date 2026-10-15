@@ -76,6 +76,10 @@ public:
     [[nodiscard]] const TemporalSceneCoverage& coverage() const { return coverage_; }
     [[nodiscard]] bool built() const { return built_; }
     [[nodiscard]] bool history_valid() const { return history_valid_; }
+    [[nodiscard]] const glm::mat4& current_clip() const { return current_clip_; }
+    [[nodiscard]] const glm::mat4& previous_clip() const {
+        return history_valid_ ? previous_clip_ : current_clip_;
+    }
 
 private:
     struct Proxy {

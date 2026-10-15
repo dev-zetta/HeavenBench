@@ -1,0 +1,45 @@
+// Optional temporal contributor: shared visible shape, independent accepted history.
+material {
+    name : heaven_temporal_smoke,
+    requires : [ uv0, custom0, custom1 ],
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    flipUV : false,
+    depthWrite : true,
+    parameters : [
+        { type : float4x4, name : currentClipFromUserWorld },
+        { type : float4x4, name : previousClipFromUserWorld },
+        { type : float4x4, name : previousModel },
+        { type : float3, name : previousCamera },
+        { type : float3, name : previousRight },
+        { type : float3, name : previousUp },
+        { type : float3x3, name : previousWorldToUser },
+        { type : float, name : previousTime },
+        { type : bool, name : historyValid },
+        { type : float,  name : time },
+        { type : float3, name : tint },
+        { type : float,  name : alphaScale },
+        { type : float,  name : spawnInterval },
+        { type : float4, name : particleMotionTuning },
+        { type : float4, name : particleShapeTuning }
+    ],
+    variables : [ currentClip, previousClip,
+        ageNorm,        // .x = age/life,.y = slot seed,.z = rise (m above emitter)
+        worldPos        // world-space position for noise sampling
+    ]
+}
+vertex {
+    #define HEAVEN_TEMPORAL_CYCLE 1
+    #include "includes/effect_smoke_vertex.glsl"
+    #include "includes/temporal_effect_vertex.glsl"
+    void materialVertex(inout MaterialVertexInputs material) { temporalEffectVertex(material); }
+}
+fragment {
+    #define HEAVEN_TEMPORAL_CYCLE 1
+    #define HEAVEN_TEMPORAL_EFFECT 1
+    float3 effectTemporalWorld;
+    #include "includes/effect_smoke_fragment.glsl"
+    #include "includes/temporal_effect_fragment.glsl"
+    void material(inout MaterialInputs material) { temporalEffectFragment(material); }
+}

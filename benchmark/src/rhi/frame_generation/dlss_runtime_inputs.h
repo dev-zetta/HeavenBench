@@ -10,6 +10,7 @@
 #include <expected>
 #include <numbers>
 #include <string>
+#include <string_view>
 
 namespace heaven::dlss_runtime_detail {
 
@@ -111,6 +112,55 @@ inline DlssImage present_image(const filament::backend::VulkanCommandImage& nati
     result.mip_levels = native.mipLevels;
     result.array_layers = native.arrayLayers;
     return result;
+}
+
+// Slot four is supplied only by the owned coherent distortion pipeline: its
+// HUDless/backbuffer warp matches and depth/motion remain undistorted. Native
+// metadata can verify compatibility and lifetime state, not inverse-field pixel
+// quality. The runtime must omit this slot when that pipeline is inactive.
+inline std::expected<void, std::string_view> owned_distortion_input(
+        DlssPresentInputs& inputs, const filament::backend::VulkanCommandContext& context) noexcept {
+    static_assert(filament::backend::NativeCommand::TEXTURE_COUNT > 4);
+    inputs.bidirectional_distortion = {};
+    inputs.distortion_active = false;
+    inputs.distortion_field_valid = false;
+    inputs.depth_motion_undistorted = false;
+    inputs.hudless_distortion_matches_backbuffer = false;
+    const auto& field = context.images[4];
+    if (!field.image) {
+        if (field.view || field.memory)
+            return std::unexpected("Optional DLSS distortion metadata has no native image");
+        return {};
+    }
+    if (!field.view || !field.memory ||
+            (field.format != VK_FORMAT_R16G16B16A16_SFLOAT &&
+             field.format != VK_FORMAT_R32G32B32A32_SFLOAT))
+        return std::unexpected("DLSS distortion requires an owned signed RGBA16F/RGBA32F image");
+    if (!field.extent.width || !field.extent.height ||
+            field.extent.width > inputs.hudless_color.width ||
+            field.extent.height > inputs.hudless_color.height ||
+            uint64_t(field.extent.width) * inputs.hudless_color.height !=
+                uint64_t(field.extent.height) * inputs.hudless_color.width)
+        return std::unexpected("DLSS distortion field and HUDless scene aspect/extents differ");
+    if (field.layout != VK_IMAGE_LAYOUT_GENERAL || field.aspect != VK_IMAGE_ASPECT_COLOR_BIT ||
+            field.mipLevels != 1 || field.arrayLayers != 1 ||
+            !(field.usage & VK_IMAGE_USAGE_SAMPLED_BIT))
+        return std::unexpected("DLSS distortion native callback state or sampled view is invalid");
+    if (field.restoredLayout != VK_IMAGE_LAYOUT_GENERAL &&
+            field.restoredLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            field.restoredLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+            field.restoredLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+            field.restoredLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        return std::unexpected("DLSS distortion restored color-image layout is invalid");
+    for (size_t index = 0; index != 4; ++index)
+        if (field.image == context.images[index].image)
+            return std::unexpected("DLSS distortion field aliases a mandatory temporal input");
+    inputs.bidirectional_distortion = present_image(field);
+    inputs.distortion_active = true;
+    inputs.distortion_field_valid = true;
+    inputs.depth_motion_undistorted = true;
+    inputs.hudless_distortion_matches_backbuffer = true;
+    return {};
 }
 
 inline bool sdr_backbuffer_format(VkFormat format) noexcept {
