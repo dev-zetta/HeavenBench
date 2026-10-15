@@ -1,6 +1,7 @@
 #include "frame_generation_present_trace.h"
 #include "json.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -162,6 +164,36 @@ void exercise(const std::filesystem::path& directory) {
         document = read(path);
         require(document.at("samples").back().at("chain") == 2 &&
             document.at("samples").back().at("status") == "khr_complete", "Observer did not restart after recreation");
+    }
+    {
+        FrameGenerationPresentTrace trace(path);
+        trace.configure(false, "Concurrent unsupported submissions");
+        std::atomic<bool> release{false};
+        std::array<std::jthread, 4> producers;
+        for (size_t index = 0; index < producers.size(); ++index) {
+            producers[index] = std::jthread([&, index] {
+                release.wait(false, std::memory_order_acquire);
+                for (uint64_t id = 1; id <= 32; ++id)
+                    trace.submitted(submission(static_cast<uint64_t>(index) * 32 + id));
+            });
+        }
+        release.store(true, std::memory_order_release);
+        release.notify_all();
+        for (auto& producer : producers) producer.join();
+        // Finish immediately: even published slots the observer had not yet
+        // imported must retain complete identities without querying a GPU.
+        trace.finish("Concurrent producers drained");
+        const auto document = read(path);
+        require(document.at("samples").size() == 128 && document.at("dropped_samples") == 0,
+            "Concurrent producer admission lost submissions");
+        std::set<uint64_t> ids;
+        for (const auto& sample : document.at("samples")) {
+            const auto id = sample.at("present_id").get<uint64_t>();
+            require(ids.insert(id).second && sample.at("source_frame") == (id + 1) / 2 &&
+                sample.at("status") == "unsupported", "Concurrent publication corrupted identity/status");
+        }
+        require(*ids.begin() == 1 && *ids.rbegin() == 128,
+            "Concurrent publication omitted a reserved identity");
     }
     {
         FrameGenerationPresentTrace trace(path);

@@ -1049,6 +1049,22 @@ if(Python3_Interpreter_FOUND)
                     --vulkan-include "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
                     --work-dir "${CMAKE_CURRENT_BINARY_DIR}/present-trace-contract")
         set_tests_properties(heaven_frame_generation_present_trace_contract PROPERTIES TIMEOUT 120)
+        set(HEAVEN_PRESENT_TRACE_HOST_FLAGS)
+        if(NOT CMAKE_CROSSCOMPILING)
+            separate_arguments(HEAVEN_PRESENT_TRACE_NATIVE_FLAGS NATIVE_COMMAND "${CMAKE_CXX_FLAGS}")
+            foreach(HEAVEN_PRESENT_TRACE_FLAG IN LISTS HEAVEN_PRESENT_TRACE_NATIVE_FLAGS)
+                list(APPEND HEAVEN_PRESENT_TRACE_HOST_FLAGS "--cxx-flag=${HEAVEN_PRESENT_TRACE_FLAG}")
+            endforeach()
+        endif()
+        add_test(NAME heaven_frame_generation_present_trace_concurrency
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_present_trace_concurrency_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --compiler-id "${CMAKE_CXX_COMPILER_ID}"
+                    --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
+                    ${HEAVEN_PRESENT_TRACE_HOST_FLAGS}
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/present-trace-concurrency")
+        set_tests_properties(heaven_frame_generation_present_trace_concurrency PROPERTIES TIMEOUT 180)
         add_test(NAME heaven_frame_generation_recovery_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_recovery_contract_test.py

@@ -36,10 +36,13 @@ public:
     bool available() const noexcept;
     void configure(bool available, std::string reason, Wait wait = nullptr,
             void* userdata = nullptr);
+    // Ordinary publication supports concurrent producers. Configuration,
+    // finish and destruction must be serialized after all producers drain.
     void submitted(const PresentTraceSubmission& submission) noexcept;
-    // Serialized lifecycle boundary: join before retiring ANY observed native
-    // swapchain/device. Pending observations remain explicitly unresolved.
-    // A later submission may restart the observer after successful recreation.
+    // Join the old observer before retiring ANY observed native swapchain or
+    // device. Ready records remain retained with explicit unresolved status.
+    // An idle replacement is registered here; only a later submission after
+    // successful recreation can provide a new borrowed handle to observe.
     void finish(const char* reason) noexcept;
     static uint64_t now_ns() noexcept;
 private:
