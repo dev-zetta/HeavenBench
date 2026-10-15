@@ -196,6 +196,10 @@ class LinuxPipelineTest(unittest.TestCase):
         self.calls = self.directory / "calls.jsonl"
         executables = self.directory / "executables"
         executables.mkdir()
+        self.build_receipts = {
+            "CMakeCache.txt": b"HEAVEN_ENABLE_FSR3:BOOL=ON\n",
+            "src/rhi/frame_generation/fsr31_shader_blobs.json": b'{"fixture_shader_blobs": [1, 2, 3]}\n',
+        }
         command = (f"#!{sys.executable}\n"
                    "import json, os, pathlib, re, sys\n"
                    "name = pathlib.Path(sys.argv[0]).name\n"
@@ -213,6 +217,14 @@ class LinuxPipelineTest(unittest.TestCase):
                    "            selected = False\n"
                    "    if selected:\n"
                    "        sys.exit(37)\n"
+                   "if name == 'build.sh' and '-DHEAVEN_ENABLE_FSR3=ON' in args:\n"
+                   "    directory = pathlib.Path(os.environ['HEAVEN_BUILD_ROOT']) / 'renderer'\n"
+                   f"    receipts = {self.build_receipts!r}\n"
+                   "    for relative, data in receipts.items():\n"
+                   "        if relative == os.environ.get('FIXTURE_MISSING_BUILD_RECEIPT'):\n"
+                   "            continue\n"
+                   "        path = directory / relative; path.parent.mkdir(parents=True, exist_ok=True)\n"
+                   "        path.write_bytes(data)\n"
                    "if name == 'package_appimage.sh':\n"
                    "    directory = pathlib.Path(args[args.index('--output-dir') + 1])\n"
                    "    architecture = args[args.index('--cpu-arch') + 1]\n"
@@ -292,6 +304,21 @@ class LinuxPipelineTest(unittest.TestCase):
         self.assertEqual(package[package.index('--source-manifest') + 1], str(manifest))
         self.assertTrue(any(call['name'] == 'check_modern_cpp.sh' for call in calls))
         self.assertTrue(any(call['name'] == 'verify_appimage.py' and 'experimental-fsr3' in call['arguments'][0] for call in calls))
+        for relative, data in self.build_receipts.items():
+            self.assertEqual((self.directory / 'artifacts/metadata' / Path(relative).name).read_bytes(), data)
+
+    def test_experimental_missing_build_receipt_prevents_package(self):
+        manifest = self.directory / 'source-manifest.json'; manifest.write_text('{}')
+        for relative in self.build_receipts:
+            with self.subTest(receipt=relative):
+                shutil.rmtree(self.directory / 'build', ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                result, calls = self.run_pipeline(arguments=('--experimental-fsr3', '--source-manifest', manifest),
+                    FIXTURE_MISSING_BUILD_RECEIPT=relative)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(relative, result.stdout + result.stderr)
+                self.assertEqual(self.renderer_test_calls(calls), [])
+                self.assertFalse(any(call['name'] in ('check_modern_cpp.sh', 'package_appimage.sh') for call in calls))
 
     def test_experimental_host_failure_prevents_package(self):
         manifest = self.directory / 'source-manifest.json'; manifest.write_text('{}')
