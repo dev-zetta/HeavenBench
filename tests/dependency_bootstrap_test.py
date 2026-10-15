@@ -33,7 +33,7 @@ class DependencyBootstrapTest(unittest.TestCase):
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.root = Path(cls.temporary.name)
         cls.environment = os.environ.copy()
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT"):
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT", "BASH_ENV"):
             cls.environment.pop(name, None)
         cls.environment.update({
             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -102,6 +102,8 @@ class DependencyBootstrapTest(unittest.TestCase):
         wrapper = binary / "git"
         wrapper.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\n'
+            'if [[ "${1:-}" == --heaven-fixture-command-probe ]]; then\n'
+            '  printf "heaven-fixture-git\\n"; exit 0\nfi\n'
             f'if [[ "${{1:-}}" == -C && "${{3:-}}" == fetch && "$2" == */{dependency} ]]; then\n'
             f'  count=0; if [[ -f {shlex.quote(count.as_posix())} ]]; then read -r count < {shlex.quote(count.as_posix())}; fi\n'
             '  count=$((count + 1))\n'
@@ -112,12 +114,74 @@ class DependencyBootstrapTest(unittest.TestCase):
             f'exec {shlex.quote(Path(GIT).as_posix())} "$@"\n', newline="\n")
         wrapper.chmod(0o755)
         sleep = binary / "sleep"
-        sleep.write_text('#!/bin/sh\n' +
+        sleep.write_text('#!/usr/bin/env bash\n' +
+                         'if [[ "${1:-}" == --heaven-fixture-command-probe ]]; then\n'
+                         '  printf "heaven-fixture-sleep\\n"; exit 0\nfi\n' +
                          f'printf "%s\\n" "$@" >> {shlex.quote(sleeps.as_posix())}\n', newline="\n")
         sleep.chmod(0o755)
+        # Git Bash can rewrite startup PATH and prefer git.exe to an
+        # extensionless shim. Noninteractive Bash sources this fixture-only
+        # entry point after startup; absolute Bash/script paths also avoid
+        # Windows executable-extension and shebang selection differences.
+        entry = project / "fault-entry.bash"
+        entry.write_text(
+            'git() { "$HEAVEN_FIXTURE_BASH" "$HEAVEN_FIXTURE_GIT_WRAPPER" "$@"; }\n'
+            'sleep() { "$HEAVEN_FIXTURE_BASH" "$HEAVEN_FIXTURE_SLEEP_WRAPPER" "$@"; }\n',
+            newline="\n")
         environment = {**self.environment,
-                       "PATH": str(binary) + os.pathsep + self.environment["PATH"]}
+                       "BASH_ENV": entry.as_posix(),
+                       "HEAVEN_FIXTURE_BASH": Path(BASH).as_posix(),
+                       "HEAVEN_FIXTURE_GIT_WRAPPER": wrapper.as_posix(),
+                       "HEAVEN_FIXTURE_SLEEP_WRAPPER": sleep.as_posix()}
+        probe = subprocess.run([BASH, "-c",
+                                'set -e; type -t git; type -t sleep; '
+                                'git --heaven-fixture-command-probe; '
+                                'sleep --heaven-fixture-command-probe'],
+                               env=environment, text=True, capture_output=True,
+                               check=False, timeout=10)
+        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+        self.assertEqual(probe.stdout.splitlines(),
+                         ["function", "function", "heaven-fixture-git", "heaven-fixture-sleep"])
         return environment, count, attempts, sleeps
+
+    def test_fault_selection_survives_shell_path_normalization(self):
+        startup = subprocess.run([BASH, "-c", 'printf "%s" "$PATH"'],
+                                 env=self.environment, text=True, capture_output=True,
+                                 check=False, timeout=10)
+        self.assertEqual(startup.returncode, 0, startup.stdout + startup.stderr)
+        launcher = self.root / "normalize startup path.bash"
+        launcher.write_text(
+            '#!/usr/bin/env bash\n'
+            f'export PATH={shlex.quote(startup.stdout)}\n'
+            f'exec {shlex.quote(Path(BASH).as_posix())} "$@"\n', newline="\n")
+        error = "fatal: Could not resolve host: fixture.invalid"
+        # Precise old-boundary control: PATH-only injection is bypassed after
+        # normalization and incorrectly succeeds without hitting the wrapper.
+        old_project = self.project()
+        old_environment, old_count, _, old_sleeps = self.fetch_fault(
+            old_project, "filament", 3, error, status=73)
+        old_environment.pop("BASH_ENV")
+        old_environment["PATH"] = str(old_project / "fault-bin") + os.pathsep + self.environment["PATH"]
+        old = subprocess.run([BASH, launcher.as_posix(),
+                              (old_project / "scripts/fetch_dependencies.sh").as_posix()],
+                             cwd=old_project, env=old_environment, text=True,
+                             capture_output=True, check=False, timeout=30)
+        self.require_success(old)
+        self.assertNotIn(error, old.stderr)
+        self.assertFalse(old_count.exists())
+        self.assertFalse(old_sleeps.exists())
+        # The same actual bootstrap entry point must retain the failure and
+        # exact retry/backoff policy with the new command-selection boundary.
+        project = self.project()
+        environment, count, _, sleeps = self.fetch_fault(project, "filament", 3, error, status=73)
+        result = subprocess.run([BASH, launcher.as_posix(),
+                                 (project / "scripts/fetch_dependencies.sh").as_posix()],
+                                cwd=project, env=environment, text=True,
+                                capture_output=True, check=False, timeout=30)
+        self.assertEqual(result.returncode, 73, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count(error), 3)
+        self.assertEqual(count.read_text().strip(), "3")
+        self.assertEqual(sleeps.read_text().splitlines(), ["2", "4"])
 
     def require_success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
