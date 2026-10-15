@@ -60,6 +60,12 @@ if [[ "$CPU_ARCH" == portable ]]; then
     targets+=(--target heaven_benchmark_tests --target heaven_profiler_trace_tests --target heaven_benchmark_smoke)
 fi
 "$SCRIPT_DIR/build.sh" --release --jobs "$JOBS" --cpu-arch "$CPU_ARCH" "${configuration[@]}" "${targets[@]}"
+if [[ "$EXPERIMENTAL_FSR3" == 1 ]]; then
+    # Retain existing raw receipts for independent artifact verification.
+    cp "$HEAVEN_BUILD_ROOT/renderer/CMakeCache.txt" "$OUTPUT_DIR/metadata/CMakeCache.txt"
+    cp "$HEAVEN_BUILD_ROOT/renderer/src/rhi/frame_generation/fsr31_shader_blobs.json" \
+        "$OUTPUT_DIR/metadata/fsr31_shader_blobs.json"
+fi
 if [[ "$CPU_ARCH" == portable ]]; then
     if [[ "$RUN_ANALYSIS" == 1 ]]; then
         "$SCRIPT_DIR/check_modern_cpp.sh" --jobs "$JOBS" \
