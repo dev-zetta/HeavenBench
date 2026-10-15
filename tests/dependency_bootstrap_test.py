@@ -135,21 +135,32 @@ class DependencyBootstrapTest(unittest.TestCase):
                        "BASH_ENV": entry.as_posix(),
                        "HEAVEN_FIXTURE_GIT_WRAPPER": wrapper.as_posix(),
                        "HEAVEN_FIXTURE_SLEEP_WRAPPER": sleep.as_posix()}
+        identity = f"BASH={BASH!r}; GIT={GIT!r}\n"
         probe = subprocess.run([BASH, "-c",
                                 'set -e; type -t git; type -t sleep; '
                                 'git --heaven-fixture-command-probe; '
                                 'sleep --heaven-fixture-command-probe'],
                                env=environment, text=True, capture_output=True,
                                check=False, timeout=10)
-        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+        self.assertEqual(probe.returncode, 0, identity + probe.stdout + probe.stderr)
         self.assertEqual(probe.stdout.splitlines(),
-                         ["function", "function", "heaven-fixture-git", "heaven-fixture-sleep"])
+                         ["function", "function", "heaven-fixture-git", "heaven-fixture-sleep"], identity)
         arguments = ["HEAD^{tree}", "path with spaces", ""]
-        fidelity = subprocess.run([BASH, "-c", 'git --heaven-fixture-argv-probe "$@"',
-                                   "fixture-argv", *arguments],
+        # Native Windows callers can trigger MSYS startup brace globbing before
+        # Bash sees its positional arguments. Create the literal data inside
+        # the shell, as the production bootstrap script does. First check the
+        # shell's bytes, then independently check the sourced wrapper's bytes.
+        fidelity_script = project / "fault-argv-probe.bash"
+        fidelity_script.write_text(
+            'set -euo pipefail\nset -- ' + shlex.join(arguments) + '\n'
+            'printf "%s\\0" "$@"\n'
+            'git --heaven-fixture-argv-probe "$@"\n', newline="\n")
+        fidelity = subprocess.run([BASH, fidelity_script.as_posix()],
                                   env=environment, capture_output=True, check=False, timeout=10)
-        self.assertEqual(fidelity.returncode, 0, fidelity.stderr.decode(errors="replace"))
-        self.assertEqual(fidelity.stdout, b"".join(argument.encode() + b"\0" for argument in arguments))
+        self.assertEqual(fidelity.returncode, 0, identity + fidelity.stderr.decode(errors="replace"))
+        expected = b"".join(argument.encode() + b"\0" for argument in arguments)
+        self.assertEqual(fidelity.stdout[:len(expected)], expected, identity + "direct-shell argv")
+        self.assertEqual(fidelity.stdout[len(expected):], expected, identity + "sourced-wrapper argv")
         return environment, count, attempts, sleeps
 
     def test_fault_wrapper_preserves_revision_and_argument_bytes(self):
@@ -157,12 +168,17 @@ class DependencyBootstrapTest(unittest.TestCase):
         environment, count, _, sleeps = self.fetch_fault(project, "filament", 0, "unused failure")
         self.require_success(self.run_bootstrap(project, environment))
         directory = project / "lib/filament"
-        revision = subprocess.run([BASH, "-c", 'git -C "$1" rev-parse "$2"',
-                                   "fixture-revision", directory.as_posix(), "HEAD^{tree}"],
+        revision_script = project / "fault-revision-probe.bash"
+        revision_arguments = shlex.join(["-C", directory.as_posix(), "rev-parse", "HEAD^{tree}"])
+        revision_script.write_text(
+            'set -euo pipefail\n' + shlex.quote(Path(GIT).as_posix()) + ' ' + revision_arguments + '\n'
+            'git ' + revision_arguments + '\n', newline="\n")
+        revision = subprocess.run([BASH, revision_script.as_posix()],
                                   env=environment, text=True, capture_output=True,
                                   check=False, timeout=10)
-        self.require_success(revision)
-        self.assertEqual(revision.stdout.strip(), self.tree)
+        identity = f"BASH={BASH!r}; GIT={GIT!r}\n"
+        self.assertEqual(revision.returncode, 0, identity + revision.stdout + revision.stderr)
+        self.assertEqual(revision.stdout.splitlines(), [self.tree, self.tree], identity)
         self.assertEqual(count.read_text().strip(), "1")
         self.assertFalse(sleeps.exists())
 
@@ -206,7 +222,7 @@ class DependencyBootstrapTest(unittest.TestCase):
         self.assertEqual(sleeps.read_text().splitlines(), ["2", "4"])
 
     def require_success(self, result):
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, f"BASH={BASH!r}; GIT={GIT!r}\n" + result.stdout + result.stderr)
 
     def base_checkout(self, project):
         directory = project / "lib/filament"
