@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <limits>
 
 namespace {
@@ -190,11 +191,17 @@ bool invalid_inputs_and_exact_serialization() {
         "large host timestamps lost precision or software report claimed physical latency");
 }
 } // namespace
-int main() {
+int main() try {
     const bool ok = pending_survives_rejection_and_unrendered_ui() &&
         coalescing_net_zero_and_overwritten_state() && exact_out_of_order_matching() &&
         unavailable_nonmonotonic_and_ambiguous() && bounded_capacity_and_lifecycle() &&
         invalid_inputs_and_exact_serialization();
     if (ok) std::puts("input_response_test: all checks passed");
     return ok ? 0 : 1;
+} catch (const std::exception& error) {
+    std::fprintf(stderr, "input_response_test: unexpected exception: %s\n", error.what());
+    return 1;
+} catch (...) {
+    std::fputs("input_response_test: unexpected non-standard exception\n", stderr);
+    return 1;
 }

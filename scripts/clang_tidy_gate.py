@@ -8,7 +8,7 @@ quaternion indices. Do not broaden this exception when the dependency changes:
 review the new source and diagnostic trace instead. ArrayBound stays enabled.
 
 Clang 21.1.8 also rejects valid combinations of the fixed-underlying uint16_t
-TextureUsage bitmask. Only three reviewed callers and their entire diagnostic
+TextureUsage bitmask. Only four reviewed callers and their entire diagnostic
 traces are recognized below; EnumCastOutOfRange remains enabled elsewhere.
 """
 
@@ -60,6 +60,14 @@ TEXTURE_USAGE_CALLERS = {
         "trace_sha256": "5a097ab28216dcf5ac5ebe18ab0f74071e18f879a321aea93b7c487c3bc1de1c",
         "value": 536, "call_offset": 1226, "call_line": 41,
         "expression": "Texture::Usage::DEFAULT | Texture::Usage::GEN_MIPMAPPABLE",
+    },
+    # The HDR screenshot copy uses unchanged COLOR_ATTACHMENT | BLIT_SRC flags.
+    # Pin its complete source and actual trace; other backend findings still fail.
+    Path("benchmark/src/rhi/filament_backend.cpp"): {
+        "source_sha256": "356cb28abb45d79eb487dff3db2989bd7f12a5ca83e6c1bb9b023b1d0172f09c",
+        "trace_sha256": "443a86a9f026c5c4642712a09a62f4bfb104c141c8e2c750919bded7e80fa025",
+        "value": 65, "call_offset": 7677, "call_line": 210,
+        "expression": "Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::BLIT_SRC",
     },
 }
 

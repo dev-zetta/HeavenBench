@@ -533,8 +533,13 @@ public:
 
 private:
     bool save_input_response() {
+        if (!input_response_ || !input_response_path_) {
+            std::fputs("Software input response export failed: recorder or output path unavailable\n", stderr);
+            return false;
+        }
+        const auto destination = *input_response_path_;
         input_response_->retire_pending("shutdown: completion history not yet published");
-        const auto temporary = std::filesystem::path(input_response_path_->string() +
+        const auto temporary = std::filesystem::path(destination.string() +
             ".tmp." + std::to_string(InputResponseRecorder::now_ns()));
         try {
             auto report = input_response_->report();
@@ -567,15 +572,15 @@ private:
                         identity["unchanged"] = *digest == input_response_executable_sha256_;
                 }
             }
-            if (input_response_path_->has_parent_path())
-                std::filesystem::create_directories(input_response_path_->parent_path());
+            if (destination.has_parent_path())
+                std::filesystem::create_directories(destination.parent_path());
             std::ofstream output;
             output.exceptions(std::ios::failbit | std::ios::badbit);
             output.open(temporary, std::ios::binary | std::ios::trunc);
             output << report.dump(2) << '\n';
             output.close();
-            std::filesystem::rename(temporary, *input_response_path_);
-            std::printf("Software input response saved: %s\n", input_response_path_->string().c_str());
+            std::filesystem::rename(temporary, destination);
+            std::printf("Software input response saved: %s\n", destination.string().c_str());
             return true;
         } catch (const std::exception& error) {
             std::error_code ignored;
@@ -1766,8 +1771,8 @@ private:
                 if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_F6 && !ev.key.repeat) {
                     const auto consumed_ns = input_response_ ? InputResponseRecorder::now_ns() : 0;
                     overlay_ui_.toggle_microprofiler();
-                    if (input_response_) (void)input_response_->record(InputResponseKind::UiToggle,
-                        consumed_ns, overlay_ui_.microprofiler_open() ? 1.0 : 0.0);
+                    if (input_response_) static_cast<void>(input_response_->record(InputResponseKind::UiToggle,
+                        consumed_ns, overlay_ui_.microprofiler_open() ? 1.0 : 0.0));
                     continue;
                 }
 
@@ -1813,8 +1818,8 @@ private:
                         camera_.process_mouse(static_cast<float>(ev.motion.xrel),
                                               static_cast<float>(ev.motion.yrel));
                         if (input_response_ && (old_yaw != camera_.yaw || old_pitch != camera_.pitch))
-                            (void)input_response_->record(InputResponseKind::CameraLook,
-                                consumed_ns, camera_.yaw, camera_.pitch);
+                            static_cast<void>(input_response_->record(InputResponseKind::CameraLook,
+                                consumed_ns, camera_.yaw, camera_.pitch));
                     }
                 }
             }

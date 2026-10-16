@@ -232,12 +232,12 @@ bool frame_generation_scoring() {
         system.set_input_response_requested(true);
         system.set_input_response_requested(false);
         system.tick(.75f, camera);
-        const auto result = system.status().result;
-        const auto report = nlohmann::json::parse(build_benchmark_report(result,
+        const auto response_result = system.status().result;
+        const auto response_report = nlohmann::json::parse(build_benchmark_report(response_result,
             BenchConfig{}, {"test", "test"}, std::chrono::system_clock::time_point{}).json);
-        if (!check(result.diagnostic && result.frames == 2 &&
-                result.diagnostic_reason == "software input response observation" &&
-                report.at("scores").at("overall").is_null(),
+        if (!check(response_result.diagnostic && response_result.frames == 2 &&
+                response_result.diagnostic_reason == "software input response observation" &&
+                response_report.at("scores").at("overall").is_null(),
                 "software response recording received a score or lost its sticky reason")) return false;
         system.dismiss_result();
     }

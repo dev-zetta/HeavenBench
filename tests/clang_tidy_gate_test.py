@@ -47,6 +47,7 @@ def baseline_report():
 def texture_usage_reports():
     """Actual reviewed Clang 21.1.8 exports, with portable repository paths."""
     fixtures = json.loads((ROOT / "tests/fixtures/clang_tidy_texture_usage.json").read_text())
+    fixtures.append(json.loads((ROOT / "tests/fixtures/clang_tidy/filament_backend_texture_usage.json").read_text()))
 
     def absolute_paths(value):
         if isinstance(value, dict):
@@ -173,14 +174,27 @@ class ClangTidyGateTest(unittest.TestCase):
     def test_caller_cannot_reuse_a_stale_export(self):
         self.assertEqual(self.run_wrapper(baseline_report(), extra=("--export-fixes=stale.yaml",)).returncode, 2)
 
-    def test_three_reviewed_texture_bitmasks_preserve_diagnostics(self):
-        for report in texture_usage_reports():
+    def test_four_reviewed_texture_bitmasks_preserve_diagnostics(self):
+        reports = texture_usage_reports()
+        self.assertEqual({Path(report["MainSourceFile"]).relative_to(ROOT) for report in reports},
+                         set(gate.TEXTURE_USAGE_CALLERS))
+        for report in reports:
             with self.subTest(caller=report["MainSourceFile"]):
                 result = self.run_wrapper(report)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("fixture diagnostic remains visible", result.stdout)
                 self.assertIn("fixture stderr remains visible", result.stderr)
                 self.assertIn("diagnostics retained above", result.stderr)
+
+    def test_backend_texture_bitmask_requires_exact_reviewed_caller(self):
+        caller = Path("benchmark/src/rhi/filament_backend.cpp")
+        report = next(report for report in texture_usage_reports()
+                      if Path(report["MainSourceFile"]) == ROOT / caller)
+        self.assertTrue(gate.permitted_texture_usage_report(report))
+        previous_policy = {path: record for path, record in gate.TEXTURE_USAGE_CALLERS.items()
+                           if path != caller}
+        with patch.object(gate, "TEXTURE_USAGE_CALLERS", previous_policy):
+            self.assertFalse(gate.permitted_texture_usage_report(report))
 
     def test_texture_bitmask_value_cast_and_level_changes_fail(self):
         for baseline in texture_usage_reports():
