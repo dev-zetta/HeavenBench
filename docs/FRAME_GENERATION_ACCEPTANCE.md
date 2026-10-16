@@ -1,6 +1,6 @@
 # Experimental Off/FSR acceptance
 
-Status: one bounded software input-to-render cohort passes; the user's manual comparison remains unexecuted. No user observations or acceptance are recorded yet.
+Status: bounded software checks pass, and general qualitative user acceptance was recorded on October 16, 2026: “It appears to work properly.” The detailed Off/FSR protocol and individual observations were not attested.
 
 On October 16 the user accepted software measurements plus a manual Off/FSR comparison because no high-speed camera is available. This replaces the mandatory camera recording gate in the older qualification receipts. No phone, tablet or USB connection is needed. Physical input-to-photon latency and exact display cadence remain unmeasured; optional hardware testing can follow later. Both SDKs and frame generation remain off by default, NVIDIA runtime execution is excluded, and this review covers experimental SDR at fixed resolution.
 
@@ -12,7 +12,7 @@ New input instrumentation is later source work; those accepted packages do not c
 
 An instrumented build enables the transient diagnostic with `HEAVEN_INPUT_RESPONSE_TRACE=/absolute/writable/input-response.json`; choose a different output file for each Off/FSR take. It is off by default. Actual consumed F6/camera inputs use CPU `steady_clock` timestamps and correlate to the first accepted real source; rejected attempts preserve pending inputs. The report separates consume-to-`render_frame`-return time from consume-to-matching-`FrameInfo.gpuFrameComplete` host fence-return time. The latter is an upper bound including queue/provider pacing and worker scheduling; it is not a GPU clock timestamp or screen measurement. Device/OS delay before consumption is excluded. Collection adds no ordinary-frame waits and caps observations at 4,096 events and 64 outstanding frame probes. Coalesced, cancelled, net-zero, missing and unresolved observations remain visible; last GPU results may not publish before exit. Atomic export occurs on exit, with raw IDs/stages/statuses, counters, per-kind percentiles and build/hardware/start/end settings. Traced tours are diagnostic/unscored even with Off.
 
-The helper application/host build and focused 2/2 CTest selection pass. The [local native receipt](../build/frame-generation/20261016/software-acceptance/native-04/receipt.json) records Off and FSR with six consumed UI and fifteen consumed camera responses each, all with frontend/GPU observations and no invalid input, event/probe overflow or association ambiguity. Both runs exit zero and FSR reports zero native presentation failures. Median consume-to-GPU-fence observed upper bounds are Off UI 149.828 ms/camera 164.777 ms and FSR UI 172.053 ms/camera 179.819 ms. This single small cohort uses automated XTest through `SDL_MOUSE_RELATIVE_MODE_WARP=1` on X11/XWayland; raw device delivery and physical delay are excluded. Expected rejected/startup Filament ID gaps appear in `history_missing`, while all 42 recorded input responses resolve. Two earlier synthetic raw-relative delivery attempts with successful UI and zero camera responses remain preserved. The receipt binds later local source-diff/binary identities, without extending the source `5316360` CI result. These descriptive software results do not establish a clean performance or physical latency comparison and do not complete the user's manual review.
+The helper application/host build and focused 2/2 CTest selection pass. The [local native receipt](../build/frame-generation/20261016/software-acceptance/native-04/receipt.json) records Off and FSR with six consumed UI and fifteen consumed camera responses each, all with frontend/GPU observations and no invalid input, event/probe overflow or association ambiguity. Both runs exit zero and FSR reports zero native presentation failures. Median consume-to-GPU-fence observed upper bounds are Off UI 149.828 ms/camera 164.777 ms and FSR UI 172.053 ms/camera 179.819 ms. This single small cohort uses automated XTest through `SDL_MOUSE_RELATIVE_MODE_WARP=1` on X11/XWayland; raw device delivery and physical delay are excluded. Expected rejected/startup Filament ID gaps appear in `history_missing`, while all 42 recorded input responses resolve. Two earlier synthetic raw-relative delivery attempts with successful UI and zero camera responses remain preserved. The receipt binds later local source-diff/binary identities, without extending the source `5316360` CI result. These descriptive software results do not establish a clean performance or physical latency comparison; general user acceptance is recorded separately below.
 
 The [final-controls-02 receipt](../build/frame-generation/20261016/software-acceptance/final-controls-02/receipt.json) additionally verifies byte-identical traced/untraced Off PPM output for thirty fixed 640×360 sources using `--test-scene material-models`, and explicit export-failure exit 1 with the sentinel preserved and no temporary output left. This is a bounded fixture/export check; the earlier invalid-flag attempt remains failed evidence.
 
@@ -44,24 +44,24 @@ This is a qualitative comparison on the observed display. It cannot label every 
 
 ## Observation record
 
-Fill only after both takes. Keep unknown values explicit. A manual pass remains pending until the user supplies the observations and acceptance decision.
+The user reported “It appears to work properly” on October 16, 2026. This closes the revised manual item as general qualitative acceptance. It does not attest execution of the detailed protocol or supply separate mode, motion, camera or UI assessments; those fields stay explicitly unspecified.
 
 | Field | Record |
 | --- | --- |
-| Review date and reviewer | Pending |
-| Executable/source or package identity | Pending |
-| Assets and settings/configuration | Pending |
-| GPU/driver and display refresh/VRR | Pending |
-| Resolution, window mode and starting camera | Pending |
-| Take order and effective modes | Pending |
-| Motion steadiness: FSR better / same / worse / uncertain | Pending |
-| Ghosting/doubled edges and affected objects | Pending |
-| Camera response: acceptable / laggy / uncertain | Pending |
-| F6 panel response: acceptable / laggy / uncertain | Pending |
-| Stalls, fallback or other reproducible issue | Pending |
+| Review date and reviewer | October 16, 2026; user in this conversation |
+| Executable/source or package identity | Not supplied for the manual review; local software checks separately bind `2921dfb` |
+| Assets and settings/configuration | Not supplied |
+| GPU/driver and display refresh/VRR | Not supplied |
+| Resolution, window mode and starting camera | Not supplied |
+| Take order and effective modes | Not supplied |
+| Motion steadiness: FSR better / same / worse / uncertain | Not supplied |
+| Ghosting/doubled edges and affected objects | Not supplied |
+| Camera response: acceptable / laggy / uncertain | Not supplied |
+| F6 panel response: acceptable / laggy / uncertain | Not supplied |
+| Stalls, fallback or other reproducible issue | No issue described in the acceptance message; individual cases not supplied |
 | Software cohort and measured source identity | `native-04/receipt.json`; later local source-diff and binary bound there |
-| Manual-take trace paths, if collected | Pending |
-| User decision: acceptable experimentally / needs correction / uncertain | Pending |
+| Manual-take trace paths, if collected | Not supplied |
+| User decision: acceptable experimentally / needs correction / uncertain | General qualitative acceptance: “It appears to work properly.” |
 | Physical input-to-photon latency | Unmeasured; optional follow-up |
 
-The overall revised acceptance remains incomplete while the user's manual observations are pending. The completed bounded software cohort, existing build/package success, AI image review and native submission counts do not fill those fields.
+The revised experimental, default-off acceptance is complete within the bounded software evidence and general user report. The unspecified fields are not inferred or turned into additional gates. Exact protocol execution, physical latency and unrestricted image quality are not established. NVIDIA runtime execution remains excluded; the local diagnostic commit is separate from the CI/package checkpoint at `5316360` and has not been pushed or packaged.
