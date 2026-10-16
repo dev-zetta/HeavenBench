@@ -342,11 +342,15 @@ using MaterialResolver = std::function<GpuMaterial(const std::string& mesh_path,
 // ── RHI Backend Interface ───────────────────────────────────────
 
 struct RhiScene;
+class InputResponseRecorder;
 
 class IRhiBackend {
 public:
     virtual void set_trace_sink(profile::Recorder* /*recorder*/) {}
     virtual void set_trace_frame_context(const profile::Context& /*context*/) {}
+    // Opt-in software response diagnostics; recorder outlives the backend.
+    virtual void set_input_response_context(InputResponseRecorder* /*recorder*/,
+            uint64_t /*attempt*/, uint64_t /*submission*/) {}
     [[nodiscard]] virtual TraceCapabilities trace_capabilities() const { return {}; }
     virtual ~IRhiBackend() = default;
 

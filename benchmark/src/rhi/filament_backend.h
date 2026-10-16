@@ -86,6 +86,8 @@ public:
     ~FilamentBackend() override;
     void set_trace_sink(profile::Recorder* recorder) override;
     void set_trace_frame_context(const profile::Context& context) override;
+    void set_input_response_context(InputResponseRecorder* recorder,
+            uint64_t attempt, uint64_t submission) override;
     [[nodiscard]] TraceCapabilities trace_capabilities() const override;
 
     [[nodiscard]] bool initialized() const noexcept {
@@ -623,6 +625,9 @@ private:
     // completed frame. Benchmark samples are additionally bounded by the
     // steady-clock timestamp captured before the first measured submission.
     std::unique_ptr<filament::FrameHistoryStream> gpu_history_stream_;
+    InputResponseRecorder* input_response_ = nullptr;
+    uint64_t input_response_attempt_ = 0;
+    uint64_t input_response_submission_ = 0;
     double collected_gpu_ms_ = -1.0;
     std::vector<double> benchmark_gpu_times_;
     int64_t benchmark_gpu_start_ns_ = 0;

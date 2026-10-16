@@ -188,6 +188,14 @@ public:
         }
     }
 
+    void set_input_response_requested(bool requested) {
+        input_response_requested_ = requested;
+        if (requested && state_ == BenchmarkState::Running) {
+            diagnostic_ = true;
+            diagnostic_input_response_ = true;
+        }
+    }
+
     // Replace the provisional per-frame GPU samples with the backend's final,
     // deduplicated and benchmark-bounded set immediately before completion.
     void set_gpu_benchmark_times(std::vector<double> samples) {
@@ -244,6 +252,8 @@ private:
     bool                diagnostic_frame_generation_ = false;
     bool                presentation_trace_requested_ = false;
     bool                diagnostic_presentation_trace_ = false;
+    bool                input_response_requested_ = false;
+    bool                diagnostic_input_response_ = false;
     FrameGenerationStatus frame_generation_status_;
 };
 

@@ -225,6 +225,22 @@ bool frame_generation_scoring() {
                 "Off tour presentation observer lost statistics or received a score")) return false;
         system.dismiss_result();
     }
+    for (bool before_start : {false, true}) {
+        system.set_input_response_requested(before_start);
+        if (!system.request_start()) return false;
+        system.tick(.25f, camera);
+        system.set_input_response_requested(true);
+        system.set_input_response_requested(false);
+        system.tick(.75f, camera);
+        const auto result = system.status().result;
+        const auto report = nlohmann::json::parse(build_benchmark_report(result,
+            BenchConfig{}, {"test", "test"}, std::chrono::system_clock::time_point{}).json);
+        if (!check(result.diagnostic && result.frames == 2 &&
+                result.diagnostic_reason == "software input response observation" &&
+                report.at("scores").at("overall").is_null(),
+                "software response recording received a score or lost its sticky reason")) return false;
+        system.dismiss_result();
+    }
     if (!system.request_start()) return false;
     system.set_frame_generation_requested(true);
     system.cancel();

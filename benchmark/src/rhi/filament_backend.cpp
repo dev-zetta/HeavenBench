@@ -1,4 +1,5 @@
 #include "benchmark/microprofiler.h"
+#include "benchmark/input_response.h"
 /*
  * HeavenBench — Filament RHI Backend implementation
  *
@@ -627,8 +628,16 @@ TraceCapabilities FilamentBackend::trace_capabilities() const {
     return profile_bridge_ ? profile_bridge_->capabilities() : TraceCapabilities{};
 }
 
+void FilamentBackend::set_input_response_context(InputResponseRecorder* recorder,
+        uint64_t attempt, uint64_t submission) {
+    input_response_ = recorder;
+    input_response_attempt_ = attempt;
+    input_response_submission_ = submission;
+}
+
 FilamentBackend::~FilamentBackend() {
     if (!engine_) return;
+    if (input_response_) input_response_->retire_pending("backend destroyed");
     engine_->flushAndWait();
     destroy_frame_generation();
 
@@ -1357,6 +1366,7 @@ Result<void> FilamentBackend::reconfigure_for_reload(
             Error("Filament pipelines are unavailable for reload"));
     }
 
+    if (input_response_) input_response_->retire_pending("scene reload");
     engine_->flushAndWait();
     destroy_frame_generation();
     // Features may own material instances and may borrow TextureStore entries
@@ -1958,7 +1968,16 @@ void FilamentBackend::collect_completed_gpu_times() {
     if (!gpu_history_stream_) return;
 
     for (const auto& sample : gpu_history_stream_->getNewFrames()) {
-        if (!sample) continue;
+        if (!sample) {
+            if (input_response_) input_response_->history_missing();
+            continue;
+        }
+        // Fence observations are independent of hardware timer-query support.
+        // Match exact accepted beginFrame brackets before rejecting durations.
+        if (input_response_) {
+            input_response_->gpu_frame(sample->frameId, sample->beginFrame,
+                sample->backendEndFrame, sample->gpuFrameComplete);
+        }
         const auto gpu_ns = sample->gpuFrameDuration;
         if (gpu_ns <= 0) continue;
 
@@ -2674,7 +2693,10 @@ bool FilamentBackend::render_views(const Camera& camera,
     bool depth_quads_pulled = need_depth_pass;
     bool presented = false;
     prepare_screenshot_target(viewport_w, viewport_h);
-    if (renderer_->beginFrame(swapchain_, capture_frame_timestamp())) {
+    const auto input_begin_lo = input_response_ ? InputResponseRecorder::now_ns() : 0;
+    const bool accepted = renderer_->beginFrame(swapchain_, capture_frame_timestamp());
+    const auto input_begin_hi = input_response_ ? InputResponseRecorder::now_ns() : 0;
+    if (accepted) {
         if (need_depth_pass) {
             // Render the depth pre-pass while the post-effect quads are
             // removed from the scene.
@@ -2731,6 +2753,10 @@ bool FilamentBackend::render_views(const Camera& camera,
         else if(frame_generation_) frame_generation_->submit(true,camera);
         submit_screenshot(viewport_w, viewport_h);
         { profile::Scope submit_scope("End frame submission", "Rendering"); renderer_->endFrame(); }
+        if (input_response_) {
+            input_response_->accepted_frame(input_response_attempt_, input_response_submission_,
+                input_begin_lo, input_begin_hi, overlay_ready);
+        }
         finish_screenshot();
         presented = true;
 
@@ -3392,6 +3418,7 @@ void FilamentBackend::resize([[maybe_unused]] int width,
     // the presentation surface so the resolution change actually takes effect.
     // No-op if the engine never came up.
     if (!engine_ || !window_) return;
+    if (input_response_) input_response_->retire_pending("surface resize");
 
     if (hdr_) {
         if (auto supported = validate_hdr_surface(); !supported) {

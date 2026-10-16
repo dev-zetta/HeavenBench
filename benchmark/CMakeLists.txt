@@ -759,6 +759,14 @@ file(GLOB BENCHMARK_TEST_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
 )
 list(FILTER BENCHMARK_TEST_SOURCES EXCLUDE REGEX "/smoke_specular_occlusion\\.cpp$")
+list(FILTER BENCHMARK_TEST_SOURCES EXCLUDE REGEX "/input_response_test\\.cpp$")
+
+add_executable(heaven_input_response_tests
+    tests/input_response_test.cpp src/benchmark/input_response.cpp)
+heaven_configure_owned_cpp_target(heaven_input_response_tests)
+target_include_directories(heaven_input_response_tests PRIVATE src)
+target_include_directories(heaven_input_response_tests SYSTEM PRIVATE ../lib/nlohmann)
+add_test(NAME heaven_input_response_tests COMMAND heaven_input_response_tests)
 
 add_executable(heaven_benchmark_tests
     ${BENCHMARK_TEST_LOGIC_SOURCES}
@@ -1127,6 +1135,7 @@ endif() # desktop test executables
 # Dedicated native GPU fixtures remain explicit, opt-in targets.
 if(TARGET heaven_benchmark_tests)
     set(heaven_host_contract_targets
+        heaven_input_response_tests
         heaven_profiler_trace_tests
         heaven_capture_camera_motion_tests
         heaven_frame_generation_history_tests

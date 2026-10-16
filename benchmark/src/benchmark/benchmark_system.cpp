@@ -75,7 +75,9 @@ bool BenchmarkSystem::request_start() {
     diagnostic_microprofile_ = microprofile_recording_;
     diagnostic_frame_generation_ = frame_generation_requested_;
     diagnostic_presentation_trace_ = presentation_trace_requested_;
-    diagnostic_  = diagnostic_microprofile_ || diagnostic_frame_generation_ || diagnostic_presentation_trace_;
+    diagnostic_input_response_ = input_response_requested_;
+    diagnostic_ = diagnostic_microprofile_ || diagnostic_frame_generation_ ||
+        diagnostic_presentation_trace_ || diagnostic_input_response_;
     state_       = BenchmarkState::Running;
     return true;
 }
@@ -185,6 +187,10 @@ void BenchmarkSystem::enter_complete() {
     if (diagnostic_presentation_trace_) {
         if (!result_.diagnostic_reason.empty()) result_.diagnostic_reason += "; ";
         result_.diagnostic_reason += "presentation timing observation";
+    }
+    if (diagnostic_input_response_) {
+        if (!result_.diagnostic_reason.empty()) result_.diagnostic_reason += "; ";
+        result_.diagnostic_reason += "software input response observation";
     }
     if (diagnostic_) result_.performance.scores = {};
     result_.average_fps = result_.performance.metrics.average_fps;

@@ -31,6 +31,7 @@
 #include "engine/material_rhi.h"
 #include "engine/path_resolver.h"
 #include "engine/runtime_paths.h"
+#include "engine/sha256.h"
 #include "engine/music_player.h"
 #include "engine/surface_displacement_policy.h"
 #include "engine/camera_path.h"
@@ -52,6 +53,7 @@
 #include "benchmark/result_report.h"
 #include "benchmark/microprofiler.h"
 #include "benchmark/microprofile_report.h"
+#include "benchmark/input_response.h"
 #include "json.hpp"
 
 #include <SDL2/SDL.h>
@@ -425,10 +427,11 @@ class Application {
 public:
     Application(BenchConfig config, RuntimePaths runtime_paths,
                 std::string config_path, VisualCaptureOptions capture,
-                MicroprofileOptions microprofile)
+                MicroprofileOptions microprofile, std::optional<std::filesystem::path> executable)
         : config_(std::move(config)),
           runtime_paths_(std::move(runtime_paths)),
           capture_(std::move(capture)), microprofile_(std::move(microprofile)) {
+        input_response_executable_ = std::move(executable);
         profile::set_recorder(&micro_recorder_);
         micro_recorder_.set_thread_name("Main");
         config_ui_.current_config_name =
@@ -470,7 +473,19 @@ public:
         }
 
         stats_.reset_frame_clock();
+        if (input_response_path_) {
+            input_response_ = std::make_unique<InputResponseRecorder>();
+            input_response_->set_initial_state(overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
+            input_response_initial_settings_ = serialize_config(config_);
+            if (input_response_executable_) {
+                const auto digest = sha256_file(*input_response_executable_);
+                if (digest) input_response_executable_sha256_ = *digest;
+            }
+            std::printf("Software input response recording: %s (not display latency)\n",
+                input_response_path_->string().c_str());
+        }
         main_loop();
+        if (input_response_ && !save_input_response()) return 1;
 
         if (microprofile_.output_base && !microprofile_finished_) {
             // Shutdown may overtake the startup export on short/cancelled runs.
@@ -517,6 +532,59 @@ public:
     }
 
 private:
+    bool save_input_response() {
+        input_response_->retire_pending("shutdown: completion history not yet published");
+        const auto temporary = std::filesystem::path(input_response_path_->string() +
+            ".tmp." + std::to_string(InputResponseRecorder::now_ns()));
+        try {
+            auto report = input_response_->report();
+            const auto status = backend_->frame_generation_status();
+            const auto final_settings = serialize_config(config_);
+            report["metadata"] = {
+                {"version", HEAVENBENCH_VERSION}, {"architecture", HEAVENBENCH_ARCHITECTURE},
+                {"api", backend_->render_api_name()}, {"gpu", active_gpu_name_},
+                {"driver", active_gpu_info_.driver_name}, {"driver_version", active_gpu_info_.driver_version},
+                {"cpu", active_system_info_.cpu}, {"platform", active_system_info_.platform},
+                {"effective_settings_initial", nlohmann::json::parse(input_response_initial_settings_)},
+                {"effective_settings_final", nlohmann::json::parse(final_settings)},
+                {"settings_changed", input_response_initial_settings_ != final_settings},
+                {"frame_generation_requested_final", std::string(frame_generation_mode_id(status.requested))},
+                {"frame_generation_effective_final", std::string(frame_generation_mode_id(status.effective))},
+                {"frame_generation_reason_final", status.reason}, {"benchmark_score", false}
+            };
+            auto& identity = report["metadata"]["binary_identity"];
+            identity = {{"invoked_path", input_response_executable_ ?
+                nlohmann::json(input_response_executable_->string()) : nlohmann::json(nullptr)},
+                {"sha256_initial", input_response_executable_sha256_.empty() ?
+                    nlohmann::json(nullptr) : nlohmann::json(input_response_executable_sha256_)},
+                {"sha256_final", nullptr}, {"unchanged", nullptr},
+                {"scope", "invoked file bytes; external source/build receipt required; not loaded-image attestation"}};
+            if (input_response_executable_) {
+                const auto digest = sha256_file(*input_response_executable_);
+                if (digest) {
+                    identity["sha256_final"] = *digest;
+                    if (!input_response_executable_sha256_.empty())
+                        identity["unchanged"] = *digest == input_response_executable_sha256_;
+                }
+            }
+            if (input_response_path_->has_parent_path())
+                std::filesystem::create_directories(input_response_path_->parent_path());
+            std::ofstream output;
+            output.exceptions(std::ios::failbit | std::ios::badbit);
+            output.open(temporary, std::ios::binary | std::ios::trunc);
+            output << report.dump(2) << '\n';
+            output.close();
+            std::filesystem::rename(temporary, *input_response_path_);
+            std::printf("Software input response saved: %s\n", input_response_path_->string().c_str());
+            return true;
+        } catch (const std::exception& error) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            std::fprintf(stderr, "Software input response export failed: %s\n", error.what());
+            return false;
+        }
+    }
+
     void update_microprofile_metadata(std::string_view phase) {
         if (microprofile_metadata_capture_id_ != micro_recorder_.session_id()) {
             microprofile_metadata_capture_id_ = micro_recorder_.session_id();
@@ -1439,6 +1507,7 @@ private:
         // frame seeds its controls from the same values the renderer started with.
         working_config_ = config_;
         bench_->set_presentation_trace_requested(presentation_trace_requested_);
+        bench_->set_input_response_requested(input_response_path_.has_value());
         bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         overlay_ui_.set_application_build_info(kApplicationBuildInfo);
         active_gpu_telemetry_ = backend_->gpu_telemetry();
@@ -1456,11 +1525,15 @@ private:
             if (capture_.output || capture_.profile_output) {
                 if (microprofile_.visible || overlay_ui_.microprofiler_open())
                     last_intents_ = overlay_ui_.build_microprofiler();
+                if (input_response_) input_response_->set_response_state(
+                    overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
                 return;
             }
             overlay_ui_.draw_debug_sidebar(debug_sidebar_info(), config_ui_.frame_generation);
             last_intents_ = overlay_ui_.build(bench_->status(), working_config_,
                                               config_ui_);
+            if (input_response_) input_response_->set_response_state(
+                overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
         });
 
         // Populate the overlay's Resolution dropdown from the monitor's
@@ -1691,7 +1764,10 @@ private:
                     continue;
                 }
                 if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_F6 && !ev.key.repeat) {
+                    const auto consumed_ns = input_response_ ? InputResponseRecorder::now_ns() : 0;
                     overlay_ui_.toggle_microprofiler();
+                    if (input_response_) (void)input_response_->record(InputResponseKind::UiToggle,
+                        consumed_ns, overlay_ui_.microprofiler_open() ? 1.0 : 0.0);
                     continue;
                 }
 
@@ -1730,9 +1806,16 @@ private:
                         mouse_look_ = false;
                         SDL_SetRelativeMouseMode(SDL_FALSE);
                     }
-                    if (ev.type == SDL_MOUSEMOTION && mouse_look_)
+                    if (ev.type == SDL_MOUSEMOTION && mouse_look_) {
+                        const auto consumed_ns = input_response_ ? InputResponseRecorder::now_ns() : 0;
+                        const auto old_yaw = camera_.yaw;
+                        const auto old_pitch = camera_.pitch;
                         camera_.process_mouse(static_cast<float>(ev.motion.xrel),
                                               static_cast<float>(ev.motion.yrel));
+                        if (input_response_ && (old_yaw != camera_.yaw || old_pitch != camera_.pitch))
+                            (void)input_response_->record(InputResponseKind::CameraLook,
+                                consumed_ns, camera_.yaw, camera_.pitch);
+                    }
                 }
             }
 
@@ -2209,10 +2292,24 @@ private:
             auto submission_context = trace_context;
             submission_context.submission_id = microprofile_submission_id_ + 1;
             backend_->set_trace_frame_context(submission_context);
+            if (input_response_) {
+                input_response_->set_response_state(overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
+                backend_->set_input_response_context(input_response_.get(),
+                    trace_context.attempt_id, submission_context.submission_id);
+            }
             const FrameResult frame_result = backend_->render_frame(
                 scene_.instances, moving_instance_indices_, scene_.gpu_meshes,
                 resolver, camera_, lighting_, weather_, tonemap_,
                 window_.width, window_.height);
+            if (input_response_ && frame_result.presented) {
+                input_response_->frontend_complete(submission_context.submission_id,
+                    InputResponseRecorder::now_ns());
+                if (!input_response_ready_) {
+                    input_response_ready_ = true;
+                    std::printf("Software input response ready: first real frame accepted\n");
+                    std::fflush(stdout);
+                }
+            }
             latest_frame_timings_ = frame_result.timings;
             submission_retry_.observe_gpu_ms(frame_result.timings.gpu_ms);
             if (frame_result.presented) microprofile_scene_ready_ = true;
@@ -3137,6 +3234,16 @@ private:
         const char* value = std::getenv("HEAVEN_FG_PRESENT_TRACE");
         return value && *value;
     }();
+    const std::optional<std::filesystem::path> input_response_path_ = []
+            () -> std::optional<std::filesystem::path> {
+        const char* value = std::getenv("HEAVEN_INPUT_RESPONSE_TRACE");
+        return value && *value ? std::optional(std::filesystem::path(value)) : std::nullopt;
+    }();
+    std::unique_ptr<InputResponseRecorder> input_response_;
+    bool input_response_ready_ = false;
+    std::string input_response_initial_settings_;
+    std::optional<std::filesystem::path> input_response_executable_;
+    std::string input_response_executable_sha256_;
     OverlayUI                      overlay_ui_;
     OverlayIntents                 last_intents_;
     // In-UI configuration state. The
@@ -3303,7 +3410,7 @@ int main(int argc, char* argv[]) try {
 
     return Application(std::move(resolved.config), runtime_paths,
                        std::move(resolved.config_path), std::move(resolved.capture),
-                       std::move(resolved.microprofile)).run();
+                       std::move(resolved.microprofile), std::move(executable_invocation)).run();
 } catch (const std::exception& error) {
     std::fprintf(stderr, "HeavenBench failed: %s\n", error.what());
     return 1;
