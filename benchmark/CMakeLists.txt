@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 # third_party/stb_vorbis.c compiles with the C toolchain, mirroring the
 # top-level project's bundled lz4.c precedent. Our own renderer code is all
 # C++ (the standard is set per-target below); enabling C does not change it.
-project(HeavenBench VERSION 1.0.1 LANGUAGES C CXX)
+project(HeavenBench VERSION 1.1.0 LANGUAGES C CXX)
 
 # Note: C++ standard is set per-target below, not globally,
 # to avoid leaking C++23 into Filament's subdirectory build.
