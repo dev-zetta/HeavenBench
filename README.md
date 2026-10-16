@@ -6,7 +6,7 @@
 
 *Captured in HeavenBench on Linux with Vulkan, Visual Ultra and the enhanced 4K texture pack enabled, at 1920×1080.*
 
-**Downloads:** [HeavenBench 1.0.1 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.0.1). The Android APK is development-signed; upgrading from 1.0.0 requires backing up imported assets and user data before uninstalling and reinstalling. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
+**Downloads:** [HeavenBench 1.1.0 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.1.0), with separate experimental Linux FSR 3.1 and Windows FSR/DLSS-adapter packages. Generation remains off by default. The Android APK is development-signed with a different certificate from published 1.0.1 and cannot update that installation in place; back up imported assets and user data before uninstalling and reinstalling. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
 The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is ad hoc signed, without notarization, and full rendering on a physical Mac remains unverified. See [macOS setup and launch instructions](docs/MACOS.md).
 
@@ -27,7 +27,7 @@ The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is
 - **Adjustable geometry and quality:** rendering presets, displacement and tessellation levels, GPU instancing and skinning, and settings labels indicating estimated CPU, GPU and memory impact.
 - **Responsive loading:** background scene preparation with stage text and a progress bar, plus reusable geometry caches.
 - **Reports and diagnostics:** saved JSON and self-contained HTML benchmark reports, a live CPU/GPU microprofiler with exportable task timelines, and isolated rendering test scenes using simple objects and real scene meshes.
-- **Experimental frame generation in source builds:** optional Vulkan FSR 3.1 and Windows DLSS integration, with separate render/presentation counters and diagnostic, unscored tours. These default off; see [requirements, build options and validation limits](docs/FRAME_GENERATION.md).
+- **Experimental frame generation:** separate optional Vulkan FSR 3.1 packages for Linux/Windows and a Windows DLSS adapter, with separate render/presentation counters and diagnostic, unscored tours. Generation defaults off; proprietary NVIDIA runtime plugins are supplied separately and NVIDIA runtime execution remains untested. See [requirements, build options and validation limits](docs/FRAME_GENERATION.md).
 - **Desktop and Android controls:** free exploration, accessible benchmark cancellation and settings, plus Vulkan rendering, an OpenGL fallback and HDR10 output on compatible native-Wayland Linux displays.
 
 The [rendering feature guide](docs/FILAMENT_RENDERING_FEATURES.md) describes presets, supported effects and their limits. Rendering updates, features and texture choices change the workload; compare benchmark results using matching application versions and settings.
