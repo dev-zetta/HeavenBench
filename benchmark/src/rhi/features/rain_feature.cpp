@@ -1,13 +1,7 @@
 /*
- * HeavenBench — Rain feature implementation (skeleton)
- *
- * scope: the IRenderFeature scaffolding, resource init with
- * graceful failure, the toggle/destroy lifecycle
- * and the depth-pre-pass declaration. The build-once
- * streaks  and splashes  plus their per-frame
- * uniform pushes are wired in later tasks — build_rain / build_splashes
- * update are minimal stubs here that compile and do nothing harmful
- * while Rain_Intensity is 0.
+ * HeavenBench — persistent precipitation and depth-projected splashes.
+ * Effective zero removes ordinary and temporal draw membership while retaining
+ * build-once buffers; active frames update only uniforms and transforms.
  */
 #include "rhi/features/rain_feature.h"
 #include "rhi/frame_generation/temporal_effects.h"
@@ -419,10 +413,14 @@ void RainFeature::release_shared_targets(RenderContext& ctx) {
 }
 
 void RainFeature::update(RenderContext& ctx, const FrameContext& frame) {
-    // Guard on a successful init  and the weather handle so we never
-    // dereference a null FrameContext::weather.
-    if (!available_) return;
-    if (!frame.weather) return;
+    // Precipitation stops at effective zero, after the weather's dry-down. The
+    // application's separate wetness accumulator continues updating normally.
+    const float intensity = frame.weather ? frame.weather->effective_intensity() : 0.0f;
+    precipitation_active_ = available_ && intensity > 0.0f;
+    if (!enabled_ || !precipitation_active_) {
+        set_scene_membership(ctx, false);
+        return;
+    }
 
     // ── Build-once geometry on the first active frame ───────────
     // update() is only called while enabled (see update_features), so the
@@ -433,18 +431,9 @@ void RainFeature::update(RenderContext& ctx, const FrameContext& frame) {
         build_rain(ctx);
         build_splashes(ctx);
         built_ = true;
-        in_scene_ = enabled_;
-        if (enabled_) {
-            if (rain_entity_)   ctx.scene->addEntity(rain_entity_);
-            if (splash_entity_) ctx.scene->addEntity(splash_entity_);
-        }
     }
+    set_scene_membership(ctx, true);
 
-    // Effective rain intensity drives every per-frame response; intensity 0
-    // (e.g. via `--rain-intensity 0` or `--no-rain`) yields activeStreaks = 0
-    // so nothing draws and the Shipping_Look is preserved. The default
-    // intensity is now medium (0.5).
-    const float intensity = frame.weather->effective_intensity();
     const int   active_streaks = static_cast<int>(
         std::lround(intensity * static_cast<float>(kMaxStreaks)));
     const glm::vec3 cam = frame.camera ? frame.camera->position : glm::vec3(0.0f);
@@ -600,21 +589,22 @@ void RainFeature::on_depth_prepass_end(RenderContext& ctx) {
     if (splash_entity_) ctx.scene->addEntity(splash_entity_);
 }
 
-void RainFeature::on_enabled_changed(RenderContext& ctx, bool on) {
-    // Add/remove ONLY this feature's renderables. Before
-    // the build-once geometry exists, this is a no-op — build_rain /
-    // build_splashes honour enabled_ when they run,
-    // mirroring the ParticleFeature precedent.
-    if (!built_) return;
-    if (on && !in_scene_) {
+void RainFeature::set_scene_membership(RenderContext& ctx, bool present) {
+    if (present == in_scene_) return;
+    if (present) {
         if (rain_entity_)   ctx.scene->addEntity(rain_entity_);
         if (splash_entity_) ctx.scene->addEntity(splash_entity_);
-        in_scene_ = true;
-    } else if (!on && in_scene_) {
+    } else {
         if (rain_entity_)   ctx.scene->remove(rain_entity_);
         if (splash_entity_) ctx.scene->remove(splash_entity_);
-        in_scene_ = false;
     }
+    in_scene_ = present;
+}
+
+void RainFeature::on_enabled_changed(RenderContext& ctx, bool on) {
+    // Reuse the last wet membership on a toggle; update() resolves fresh
+    // weather before any draw, and the weather query resolves depth demand.
+    set_scene_membership(ctx, on && built_ && precipitation_active_);
 }
 
 void RainFeature::destroy(RenderContext& ctx) {
@@ -651,6 +641,7 @@ void RainFeature::destroy(RenderContext& ctx) {
     splash_tex_  = nullptr;
     bound_depth_ = nullptr;
     built_       = false;
+    precipitation_active_ = false;
 }
 
 

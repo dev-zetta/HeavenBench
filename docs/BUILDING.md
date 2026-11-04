@@ -57,7 +57,7 @@ The run helper enumerates Linux DRM GPUs and defaults to the device with the mos
 ./scripts/run.sh --gpu integrated
 ```
 
-PCI vendor/device IDs and PCI addresses are accepted alongside indices. `--gpu integrated` prefers the lowest-VRAM device; `--gpu default` leaves selection to the Vulkan driver. The helper sets device-selection environment variables before the renderer loads its graphics backend.
+PCI vendor/device IDs and PCI addresses are accepted alongside indices. Concrete selectors request Mesa device isolation and the application checks the actual Vulkan vendor/device identity before scene loading; indices and PCI selectors additionally require matching physical PCI identity. A mismatch or unavailable required identity fails clearly. `--gpu integrated` prefers the lowest reported VRAM, while `auto`/`dedicated` prefer the highest; these remain heuristics because some drivers report no comparable VRAM total. `--gpu default` clears wrapper selection and leaves the device to the driver. Inherited Mesa/DRI preferences remain preserved when no explicit selector is supplied. OpenGL retains PCI-form `DRI_PRIME` and reports its actual renderer name, with an explicit diagnostic that numeric/PCI verification is unavailable. Check the backend's actual device rather than treating a preference announcement as proof of selection.
 
 ### CPU architecture variants
 

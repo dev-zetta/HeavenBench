@@ -13,11 +13,8 @@
  * `--rain-intensity 0` or `--no-rain`). The default intensity is now
  * medium (0.5), so the default run renders the storm.
  *
- * Skeleton scope: the IRenderFeature scaffolding, resource
- * init with graceful failure, the toggle/destroy lifecycle, and
- * the depth-pre-pass declaration. The build-once streaks/splashes and
- * the per-frame uniform updates land in tasks 6.2 / 6.3 — build_rain /
- * build_splashes / update are minimal stubs here.
+ * Shared depth demand is resolved from current weather before feature updates,
+ * so activation binds the current target on its first frame.
  */
 #ifndef HEAVENBENCH_SRC_RHI_FEATURES_RAIN_FEATURE_H_
 #define HEAVENBENCH_SRC_RHI_FEATURES_RAIN_FEATURE_H_
@@ -48,9 +45,13 @@ public:
 
     // Splash projection samples scene depth to place impacts on the
     // ground, so the shared depth pre-pass must run while rain is
-    // active. Only true once the renderables are actually built.
+    // active. The weather overload is evaluated before update(), including the
+    // first wet frame and reactivation after an idle target resize.
     [[nodiscard]] bool needs_depth_prepass() const override {
-        return enabled_ && built_;
+        return enabled_ && in_scene_;
+    }
+    [[nodiscard]] bool needs_depth_prepass(const WeatherState& weather) const override {
+        return enabled_ && available_ && weather.effective_intensity() > 0.0f;
     }
 
     // The splash material SAMPLES the shared depth pre-pass texture
@@ -89,6 +90,7 @@ protected:
 private:
     void build_rain(RenderContext& ctx);     // build-once streak quads  —
     void build_splashes(RenderContext& ctx); // build-once impact quads  —
+    void set_scene_membership(RenderContext& ctx, bool present);
 
     // Streaks: one renderable, up to the centralized kMaxStreaks capacity.
     // quads. heaven_rain.filamat.
@@ -117,6 +119,7 @@ private:
     bool built_     = false; // build-once geometry created
     bool in_scene_  = false; // renderables currently added to the scene
     bool available_ = false; // all materials/textures loaded
+    bool precipitation_active_ = false;
 
     // Build-once counters (read through the backend's debug_build_counters()).
     // Each is bumped exactly once, at its build site, and stays put for the

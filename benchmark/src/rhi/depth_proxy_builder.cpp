@@ -409,7 +409,8 @@ void DepthProxyBuilder::build(const BackendCore& core, MeshStore& meshes,
 
 void DepthProxyBuilder::update_transforms(const BackendCore& core,
                                           std::span<const Instance> instances,
-                                          std::span<const int> dirty_instance_indices)
+                                          std::span<const int> dirty_instance_indices,
+                                          bool refresh_all)
 {
     const auto camera_position = core.camera ? core.camera->getPosition() : filament::math::double3{};
     const glm::dvec3 culling_camera(camera_position.x, camera_position.y, camera_position.z);
@@ -417,7 +418,7 @@ void DepthProxyBuilder::update_transforms(const BackendCore& core,
     const bool supported_world_origins = core.camera && grid_origin && !*grid_origin;
 
     const auto is_dirty = [&](int index) {
-        return std::binary_search(dirty_instance_indices.begin(),
+        return refresh_all || std::binary_search(dirty_instance_indices.begin(),
                                   dirty_instance_indices.end(), index);
     };
 
@@ -452,7 +453,7 @@ void DepthProxyBuilder::update_transforms(const BackendCore& core,
         }
     }
 
-    if (dirty_instance_indices.empty()) return;
+    if (!refresh_all && dirty_instance_indices.empty()) return;
 
     // Instanced depth chunks: refresh each chunk's InstanceBuffer local
     // transforms from the CURRENT member instance transforms — never rebuild

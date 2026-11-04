@@ -295,6 +295,11 @@ public:
     //                            "voids"). Features that own no main-
     //                            scene quads leave these as no-ops.
     [[nodiscard]] virtual bool needs_depth_prepass() const { return false; }
+    // Resolve demand from this frame's weather before allocating shared targets.
+    // Stateful consumers can override this without using their previous update.
+    [[nodiscard]] virtual bool needs_depth_prepass(const WeatherState& /*weather*/) const {
+        return needs_depth_prepass();
+    }
     virtual void on_depth_prepass_begin(RenderContext& /*ctx*/) {}
     virtual void on_depth_prepass_end(RenderContext& /*ctx*/) {}
 

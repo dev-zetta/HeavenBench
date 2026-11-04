@@ -21,7 +21,10 @@
 #define HEAVENBENCH_SRC_ENGINE_LOADER_VALIDATION_H_
 
 #include <cstdio>
+#include <algorithm>
+#include <cstring>
 #include <cstdint>
+#include <limits>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -34,8 +37,10 @@
 
 namespace heaven::loadval {
 
-// Sequential binary reader shared by native and ZIP-backed format loaders. It
-// writes directly into typed destination storage and owns its AssetStream.
+// Sequential binary reader shared by native and ZIP-backed format loaders.
+// Small fields share bounded read-ahead storage; large arrays still read
+// directly into typed destination storage. Moving a reader transfers ownership
+// of its lazy heap buffer rather than copying it through loader Result values.
 class AssetBinaryReader {
 public:
     explicit AssetBinaryReader(std::unique_ptr<AssetStream> stream)
@@ -56,9 +61,29 @@ public:
     [[nodiscard]] bool read_bytes(std::span<std::byte> bytes) {
         std::size_t offset = 0;
         while (offset < bytes.size()) {
-            auto count = stream_->read(bytes.subspan(offset));
-            if (!count || *count == 0) return false;
-            offset += *count;
+            const auto unread = buffer_size_ - buffer_cursor_;
+            if (unread != 0) {
+                const auto count = std::min(unread, bytes.size() - offset);
+                std::memcpy(bytes.data() + offset, buffer_.get() + buffer_cursor_, count);
+                buffer_cursor_ += count;
+                offset += count;
+                continue;
+            }
+            buffer_cursor_ = buffer_size_ = 0;
+            auto remaining = bytes.subspan(offset);
+            if (remaining.size() >= kReadAheadBytes) {
+                const auto count = stream_->read(remaining);
+                if (!count || *count == 0 || *count > remaining.size()) return false;
+                offset += *count;
+            } else {
+                if (!buffer_) buffer_ = std::make_unique_for_overwrite<std::byte[]>(kReadAheadBytes);
+                const auto count = stream_->read({buffer_.get(), kReadAheadBytes});
+                // A stream can discover CRC or I/O failure after touching the
+                // destination. Publish cached bytes only after a successful
+                // read, retaining AssetStream's logical EOF validation.
+                if (!count || *count == 0 || *count > kReadAheadBytes) return false;
+                buffer_size_ = *count;
+            }
         }
         return true;
     }
@@ -75,14 +100,48 @@ public:
     }
 
     [[nodiscard]] bool seek_relative(int64_t offset) {
-        return stream_->seek(offset, AssetSeekOrigin::Current).has_value();
+        const auto unread = buffer_size_ - buffer_cursor_;
+        const auto position = tell();
+        uint64_t target = 0;
+        if (offset >= 0) {
+            const auto distance = static_cast<uint64_t>(offset);
+            if (distance <= unread) {
+                buffer_cursor_ += static_cast<std::size_t>(distance);
+                return true;
+            }
+            if (distance > std::numeric_limits<uint64_t>::max() - position) return false;
+            target = position + distance;
+        } else {
+            // Negating INT64_MIN or subtracting unread bytes from it would
+            // overflow. Convert its magnitude without either signed operation.
+            const auto distance = static_cast<uint64_t>(-(offset + 1)) + 1;
+            if (distance <= buffer_cursor_) {
+                buffer_cursor_ -= static_cast<std::size_t>(distance);
+                return true;
+            }
+            if (distance > position) return false;
+            target = position - distance;
+        }
+        if (target > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return false;
+        const auto native_position = stream_->tell();
+        const auto result = stream_->seek(static_cast<int64_t>(target), AssetSeekOrigin::Begin);
+        // A replay-based failed seek may already have moved its stream. Cached
+        // bytes then describe a retired position and must not be reused.
+        if (result || stream_->tell() != native_position) buffer_cursor_ = buffer_size_ = 0;
+        return result.has_value();
     }
 
     [[nodiscard]] uint64_t size() const noexcept { return stream_->size(); }
-    [[nodiscard]] uint64_t tell() const noexcept { return stream_->tell(); }
+    [[nodiscard]] uint64_t tell() const noexcept {
+        return stream_->tell() - (buffer_size_ - buffer_cursor_);
+    }
 
 private:
     std::unique_ptr<AssetStream> stream_;
+    static constexpr std::size_t kReadAheadBytes = std::size_t{64} * 1024;
+    std::unique_ptr<std::byte[]> buffer_;
+    std::size_t buffer_cursor_ = 0;
+    std::size_t buffer_size_ = 0;
 };
 
 // ── Stream readers (FILE*-based: mi08, ms08, dds) ───────────────

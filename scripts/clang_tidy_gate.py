@@ -64,8 +64,8 @@ TEXTURE_USAGE_CALLERS = {
     # The HDR screenshot copy uses unchanged COLOR_ATTACHMENT | BLIT_SRC flags.
     # Pin its complete source and actual trace; other backend findings still fail.
     Path("benchmark/src/rhi/filament_backend.cpp"): {
-        "source_sha256": "356cb28abb45d79eb487dff3db2989bd7f12a5ca83e6c1bb9b023b1d0172f09c",
-        "trace_sha256": "443a86a9f026c5c4642712a09a62f4bfb104c141c8e2c750919bded7e80fa025",
+        "source_sha256": "3244a131d7a5e1d59531741025339c4ed8c2a999e11cde12e5c6bd2df0895de5",
+        "trace_sha256": "8eb82ea90782ea99bae7ad12412f101774affb84d8e3ac810c51bc226f61a8eb",
         "value": 65, "call_offset": 7677, "call_line": 210,
         "expression": "Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::BLIT_SRC",
     },

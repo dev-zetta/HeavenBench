@@ -421,6 +421,14 @@ read_zip_entry(zip_t& archive, std::string_view name, uint64_t size) {
         }
         offset += static_cast<std::size_t>(count);
     }
+    // Startup manifests bypass AssetStream, so force their independent ZIP
+    // reader through logical EOF before accepting otherwise valid JSON bytes.
+    std::byte sentinel{};
+    if (zip_fread(file.get(), &sentinel, 1) != 0) {
+        return std::unexpected(
+            Error{"CRC/EOF validation failed for ZIP entry '" +
+                  std::string(name) + "'"});
+    }
     if (zip_fclose(file.release()) != 0) {
         return std::unexpected(
             Error{"CRC validation failed for ZIP entry '" +

@@ -1510,6 +1510,7 @@ Result<RhiScene> load_scene_rhi(const AppConfig& config, IRhiBackend& backend,
                     ? displacement_policy->boundary_fade : 0.0f,
                 .surface_policy_version = displacement_policy
                     ? displacement_policy->policy_version : 0,
+                .source_surface_index = static_cast<uint32_t>(si),
             };
             if (displacement_policy && displacement_policy->kind ==
                     SurfaceDisplacementKind::VillageGround) {
@@ -1733,6 +1734,7 @@ Result<RhiScene> load_scene_rhi(const AppConfig& config, IRhiBackend& backend,
                 .base_transform = {
                     sk_base_transform[0], sk_base_transform[1],
                     sk_base_transform[2], sk_base_transform[3]},
+                .source_surface_index = static_cast<uint32_t>(si),
             };
             // Foliage skip — not relevant for the skinned set today
             // but kept for symmetry with the static path.

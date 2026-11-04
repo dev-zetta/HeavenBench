@@ -999,6 +999,9 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../tests/dlss_lifecycle_contract_test.py)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        add_test(NAME heaven_gpu_selection_launcher
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/gpu_selection_launcher_test.py)
         # CPU-only controller checks; the real GPU pause fixture stays opt-in.
         add_test(NAME heaven_frame_generation_pause_controller
             COMMAND ${Python3_EXECUTABLE}
@@ -1043,6 +1046,12 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_glx_swapchain_lifetime
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/glx_swapchain_lifetime_test.py
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/glx-swapchain-lifetime")
+        set_tests_properties(heaven_glx_swapchain_lifetime PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_frame_generation_capture_memory_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/frame_generation_capture_memory_contract_test.py

@@ -93,10 +93,13 @@ public:
 
     // Per-frame: sync each proxy's transform to its paired instance so the
     // depth scene tracks the animated visible scene (floating islands, skinned
-    // meshes).
+    // meshes). Resume after skipped depth frames with refresh_all so one-off
+    // changes from an earlier frame are reflected even when no instance is
+    // dirty in the current frame.
     void update_transforms(const BackendCore& core,
                            std::span<const Instance> instances,
-                           std::span<const int> dirty_instance_indices);
+                           std::span<const int> dirty_instance_indices,
+                           bool refresh_all = false);
 
     // Remove + destroy all proxy entities from `proxy_scene`; clears built().
     void clear(const BackendCore& core, filament::Scene* proxy_scene);

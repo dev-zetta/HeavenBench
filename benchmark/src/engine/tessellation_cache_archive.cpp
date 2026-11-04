@@ -21,6 +21,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -189,11 +190,58 @@ Result<std::vector<std::byte>> read_zip_entry(zip_t& archive,
         }
         offset += static_cast<std::size_t>(count);
     }
+    // Libzip can deliver the advertised final bytes before verifying their
+    // CRC. Force logical EOF before callers can decode or commit this entry.
+    std::byte sentinel{};
+    if (zip_fread(file.get(), &sentinel, 1) != 0) {
+        return std::unexpected(Error("CRC/EOF failure in tessellation cache entry: " +
+                                     name));
+    }
     if (zip_fclose(file.release()) != 0) {
         return std::unexpected(Error("CRC failure in tessellation cache entry: " +
                                      name));
     }
     return bytes;
+}
+
+using SourceSurfaceIndices =
+    std::unordered_map<std::string, std::optional<uint32_t>>;
+
+// Legacy loose metadata names a surface without its original ordinal. Read
+// only bounded mi08 headers to recover unique names; duplicate names remain
+// ambiguous even when their vertex/index counts happen to agree.
+Result<SourceSurfaceIndices> read_source_surface_indices(
+        const std::string& mesh_path, AssetFileSystemRef assets) {
+    auto opened = loadval::AssetBinaryReader::open(mesh_path, assets, "legacy source mesh");
+    if (!opened) return std::unexpected(opened.error());
+    auto reader = std::move(*opened);
+    uint32_t magic = 0;
+    std::array<float, 10> bounds{};
+    int32_t count = 0;
+    if (!reader.read_object(magic) || magic != 0x3830696du ||
+        !reader.read_array(std::span(bounds)) || !reader.read_object(count) ||
+        !loadval::in_range(count, 1, loadval::kMaxSurfaces)) {
+        return std::unexpected(Error("invalid legacy source mesh headers"));
+    }
+    SourceSurfaceIndices indices;
+    for (int32_t index = 0; index < count; ++index) {
+        int32_t name_size = 0;
+        if (!reader.read_object(name_size) ||
+            !loadval::in_range(name_size, 1, loadval::kMaxNameLen) ||
+            !loadval::fits(reader.tell(), static_cast<uint64_t>(name_size), reader.size())) {
+            return std::unexpected(Error("invalid legacy source surface name"));
+        }
+        std::vector<char> name(static_cast<std::size_t>(name_size));
+        if (!reader.read_array(std::span(name)) || name.back() != '\0' ||
+            !loadval::fits(reader.tell(), sizeof(bounds), reader.size()) ||
+            !reader.seek_relative(sizeof(bounds))) {
+            return std::unexpected(Error("truncated legacy source surface headers"));
+        }
+        auto [entry, inserted] = indices.try_emplace(
+            std::string(name.data(), name.size() - 1), static_cast<uint32_t>(index));
+        if (!inserted) entry->second.reset();
+    }
+    return indices;
 }
 
 } // namespace
@@ -213,6 +261,7 @@ struct TessellationCacheArchive::Impl {
     std::filesystem::path stage_dir;
     std::map<std::string, std::filesystem::path> staged;
     std::unordered_map<std::string, uint64_t> fingerprints;
+    std::unordered_map<std::string, SourceSurfaceIndices> legacy_surface_indices;
     bool dirty = false;
     bool finished = false;
     std::optional<Error> staging_error;
@@ -262,6 +311,17 @@ struct TessellationCacheArchive::Impl {
         return hash;
     }
 
+    std::optional<uint32_t> legacy_surface_index(
+            const std::string& mesh_path, const std::string& surface_name) {
+        auto [source, inserted] = legacy_surface_indices.try_emplace(logical(mesh_path));
+        if (inserted) {
+            if (auto indices = read_source_surface_indices(mesh_path, assets))
+                source->second = std::move(*indices);
+        }
+        const auto found = source->second.find(surface_name);
+        return found == source->second.end() ? std::nullopt : found->second;
+    }
+
     std::string key(const std::string& mesh_path,
                     const std::string& surface_name,
                     const TessellationCacheParameters& parameters,
@@ -272,6 +332,7 @@ struct TessellationCacheArchive::Impl {
         hash_string(hash, logical(mesh_path));
         hash_scalar(hash, fingerprint(mesh_path));
         hash_string(hash, surface_name);
+        hash_scalar(hash, parameters.source_surface_index);
         hash_string(hash, logical(parameters.density_path));
         hash_scalar(hash, fingerprint(parameters.density_path));
         hash_string(hash, logical(parameters.height_path));
@@ -438,6 +499,9 @@ Result<TessellationCacheArchive> TessellationCacheArchive::open(
                         hex64(impl->fingerprint(density))) {
                     continue;
                 }
+                const auto source_surface_index =
+                    impl->legacy_surface_index(mesh, surface_name);
+                if (!source_surface_index) continue;
 
                 std::filesystem::path binary = item.path();
                 binary.replace_extension(".bin");
@@ -489,6 +553,7 @@ Result<TessellationCacheArchive> TessellationCacheArchive::open(
                     .edge_scale = edge_scale,
                     .subdivisions = subdivisions,
                     .base_transform = transform,
+                    .source_surface_index = *source_surface_index,
                 };
                 const std::string key = impl->key(
                     mesh, surface_name, parameters, kStaticKind);
@@ -499,6 +564,7 @@ Result<TessellationCacheArchive> TessellationCacheArchive::open(
                     {"kind", "static"},
                     {"mesh", impl->logical(mesh)},
                     {"surface", surface_name},
+                    {"source_surface_index", *source_surface_index},
                     {"density", impl->logical(density)},
                     {"density_factor", density_factor},
                     {"edge_scale", edge_scale},
@@ -547,6 +613,7 @@ void stage_typed(TessellationCacheArchive::Impl& impl,
         {"kind", kind == kStaticKind ? "static" : "skinned"},
         {"mesh", impl.logical(mesh_path)},
         {"surface", surface_name},
+        {"source_surface_index", parameters.source_surface_index},
         {"density", impl.logical(parameters.density_path)},
         {"height", impl.logical(parameters.height_path)},
         {"source_normal", impl.logical(parameters.source_normal_path)},

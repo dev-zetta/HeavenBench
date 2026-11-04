@@ -1382,6 +1382,7 @@ Result<void> FilamentBackend::reconfigure_for_reload(
     if (depth_proxy_builder_ && depth_prepass_) {
         depth_proxy_builder_->clear(core_, depth_prepass_->proxy_scene());
     }
+    depth_proxy_refresh_pending_ = true;
     if (light_spawner_) light_spawner_->destroy(core_);
     mat_cache_->clear_instances();
     texture_store_->clear_loaded_textures();
@@ -1570,6 +1571,7 @@ void FilamentBackend::build_render_context() {
     // objects exist. They create their GPU resources lazily on first use.
     depth_prepass_ = std::make_unique<DepthPrePass>(core_);
     depth_proxy_builder_ = std::make_unique<DepthProxyBuilder>();
+    depth_proxy_refresh_pending_ = true;
     scene_color_capture_ = std::make_unique<SceneColorCapture>(core_);
     if (hdr_) {
         if (!hdr_output_) hdr_output_ = std::make_unique<HdrOutput>(core_);
@@ -2403,7 +2405,7 @@ bool FilamentBackend::update_render_features(
     // the depth texture / render target / view on first call.
     bool need_depth_pass = false;
     for (auto& f : render_features_) {
-        if (f->enabled() && f->needs_depth_prepass()) {
+        if (f->enabled() && f->needs_depth_prepass(weather)) {
             need_depth_pass = true;
             break;
         }
@@ -2431,6 +2433,7 @@ bool FilamentBackend::update_render_features(
                 instances, dirty_instance_indices, meshes, resolve_material);
         }
     }
+    if (!need_depth_pass) depth_proxy_refresh_pending_ = true;
 
     // Scene-colour capture (SSGI). Engage only when a feature wants the
     // rendered scene colour. Done BEFORE building the FrameContext so the
@@ -2521,8 +2524,12 @@ void FilamentBackend::sync_depth_proxies(
             config_.features.gpu_skinning, config_.tessellation.enabled);
     } else {
         depth_proxy_builder_->update_transforms(
-            core_, instances, dirty_instance_indices);
+            core_, instances, dirty_instance_indices, depth_proxy_refresh_pending_);
     }
+    // This is independent of presentation: updates are queued before
+    // beginFrame, including when that frame is rejected. A failed build must
+    // retain the refresh request until a later successful synchronization.
+    depth_proxy_refresh_pending_ = !depth_proxy_builder_->built();
 }
 
 // Single source of the skinned-mesh-index set shared by SceneBuilder and

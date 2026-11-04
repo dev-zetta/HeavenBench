@@ -16,7 +16,9 @@
 
 namespace heaven {
 
-inline constexpr uint32_t kTessellationArchiveVersion = 36;
+// Version 37 gives each original source-surface ordinal its own identity;
+// older ZIP entries can alias distinct same-name surfaces within one mesh.
+inline constexpr uint32_t kTessellationArchiveVersion = 37;
 
 // TessellationCacheParameters is the stable, implementation-independent
 // identity of one topology payload and its displacement/seam inputs.
@@ -31,6 +33,9 @@ struct TessellationCacheParameters {
     std::array<float, 4> base_transform{1.0f, 1.0f, 0.0f, 0.0f};
     float boundary_fade = 0.0f;
     uint32_t surface_policy_version = 0;
+    // Original file order, before empty or hidden surfaces are omitted from
+    // uploads. Surface names alone need not be unique within one source mesh.
+    uint32_t source_surface_index = 0;
 };
 
 // Scene-scoped, versioned ZIP cache for validated static and skinned

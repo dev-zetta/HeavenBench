@@ -24,7 +24,7 @@
  * to the backend):
  *   - debug_find_feature("rain") returns the registered RainFeature so the case
  *     can assert needs_depth_prepass() == true after an active frame (the
- *     feature is enabled_ && built_).
+ *     feature has visible precipitation).
  *   - debug_depth_texture() returns the shared depth pre-pass texture, non-null
  *     only after the pass has actually run — proving the backend ran the shared
  *     depth pass *because* a depth-sampling feature (rain) requested it.
@@ -33,15 +33,10 @@
  *     feature reads scene depth *only* through FrameContext::depth_texture: the
  *     bound handle equals debug_depth_texture() exactly.
  *
- * TIMING — the depth texture appears on the SECOND active frame, not the first:
- * the backend computes need_depth_pass from each enabled feature's
- * needs_depth_prepass() BEFORE update_features() runs. On frame 1 the rain
- * feature has not built yet (built_ == false ⇒ needs_depth_prepass() == false),
- * so no depth pass runs and FrameContext::depth_texture is null; update_features
- * then builds the geometry (built_ becomes true). On frame 2 needs_depth_prepass()
- * is true, so the backend ensures the shared depth target before update_features,
- * FrameContext::depth_texture is non-null, and RainFeature::update() binds it.
- * This case therefore renders several active frames before asserting.
+ * TIMING — current weather determines demand BEFORE feature updates, so the
+ * first active frame can ensure and bind fresh depth even before rain builds.
+ * This case also checks steady-state binding over several active frames;
+ * smoke_rain_activity covers zero/positive transitions and inactive resize.
  *
  * CUMULATIVE-BACKEND ROBUSTNESS: the harness shares ONE backend across cases.
  * The contract asserted here is steady-state (it holds on every frame once rain
@@ -71,8 +66,10 @@
 
 #include <filament/Texture.h>
 
+#include <array>
 #include <cstdio>
 #include <span>
+#include <utility>
 
 namespace heaven::smoke {
 
@@ -83,7 +80,7 @@ constexpr const char* kTag = "[smoke_rain_depth_prepass]";
 // Render exactly one ACTIVE rain frame with an empty scene. Identical to the
 // helper in smoke_rain_build_once.cpp: a stack WeatherState at intensity 1.0 so
 // rain is active, which makes the backend's update_features loop call
-// RainFeature::update() (build on the first call, bind depth on the next).
+// RainFeature::update() (build and bind depth on the first active call).
 void render_one_active_frame(IRhiBackend& backend, const Camera& camera,
                              const LightingParams& lighting,
                              const TonemapParams& tonemap, int w, int h) {
@@ -125,20 +122,50 @@ CaseResult run_rain_depth_prepass_case(const CaseContext& ctx) {
         return CaseResult::Skip;
     }
 
+    // Other consumers must not supply depth on rain's behalf. Restore their
+    // exact enabled state so this remains safe in the cumulative full suite.
+    std::array<std::pair<const char*, bool>, 6> other_consumers{{
+        {"god_rays", false}, {"volumetric_fog", false}, {"particles", false},
+        {"lens_flares", false}, {"volumetric-clouds", false}, {"ssgi", false}}};
+    for (auto& [name, enabled] : other_consumers) {
+        if (const auto* feature = backend.debug_find_feature(name)) enabled = feature->enabled();
+        backend.debug_set_feature_enabled(name, false);
+    }
+    struct RestoreConsumers {
+        FilamentBackend& backend;
+        const decltype(other_consumers)& states;
+        ~RestoreConsumers() {
+            for (const auto& [name, enabled] : states)
+                backend.debug_set_feature_enabled(name, enabled);
+        }
+    } restore_consumers{backend, other_consumers};
+
     Camera camera;
     LightingParams lighting = lighting_for_time_of_day(ctx.config.time_of_day);
     TonemapParams  tonemap;
 
     const int w = ctx.width;
     const int h = ctx.height;
+    const bool first_active_frame = backend.debug_build_counters().rain_streak_builds == 0;
 
-    // Render several ACTIVE rain frames. The depth texture is produced on the
-    // SECOND active frame (see the file header: build on frame 1, depth pass +
-    // bind on frame 2), so a handful of frames lets the deferred build and the
-    // depth bind settle into the steady state the contract describes.
+    // Render several active frames to check persistent binding after the first
+    // wet frame has requested depth and built its geometry.
     constexpr int kFrames = 4;
     for (int i = 0; i < kFrames; ++i) {
         render_one_active_frame(backend, camera, lighting, tonemap, w, h);
+        // Selected-case runs start with an unbuilt rain feature. Assert the
+        // coordinator used current weather, rather than the previous no-arg
+        // state, before this very first update had built the rain geometry.
+        if (i == 0 && first_active_frame && backend.debug_build_counters().rain_streak_builds != 0) {
+            const auto* feature = backend.debug_find_feature("rain");
+            const auto* rain = static_cast<const RainFeature*>(feature);
+            if (!rain || !rain->bound_depth_texture() ||
+                    rain->bound_depth_texture() != backend.debug_depth_texture()) {
+                std::printf("%s FAIL: first wet coordinator frame did not bind current shared depth\n", kTag);
+                return CaseResult::Fail;
+            }
+            std::printf("%s first wet coordinator frame bound current shared depth\n", kTag);
+        }
     }
 
     // ── Environment robustness: rain feature unavailable ⇒ SKIP ──

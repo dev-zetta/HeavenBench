@@ -499,6 +499,9 @@ private:
     // lazily and transform-synced only while a consumer needs depth (see
     // sync_depth_proxies); torn down before depth_prepass_ in the destructor.
     std::unique_ptr<DepthProxyBuilder> depth_proxy_builder_;
+    // Dirty indices describe only the current frame. After skipping depth,
+    // refresh all retained proxy placements once before rendering it again.
+    bool depth_proxy_refresh_pending_ = true;
 
     // ── Scene-colour capture (previous-frame history for SSGI) ──
     // Ping-pong colour targets + blit. Engaged only when a feature returns

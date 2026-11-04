@@ -4,6 +4,8 @@
 #include "engine/asset_file_system.h"
 #include "engine/zip_archive.h"
 
+#include <zlib.h>
+
 #include <chrono>
 #include <algorithm>
 #include <array>
@@ -16,6 +18,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <span>
 #include <thread>
 #include <vector>
@@ -365,6 +368,96 @@ bool unit_asset_file_system() {
     return ok;
 }
 
+// The manifest has a separate ZIP reader from ordinary asset streams. Preserve
+// valid JSON/root metadata while retaining the CRC of another valid payload;
+// otherwise a schema/parser failure could conceal a missing EOF/CRC check.
+bool unit_asset_manifest_crc() {
+    namespace fs = std::filesystem;
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { std::error_code error; fs::remove_all(path, error); }
+    } cleanup{fs::temp_directory_path() / ("heaven-manifest-crc-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))};
+    fs::create_directories(cleanup.path);
+    const std::string original =
+        R"({"schema_version":1,"data_root_prefix":"Data_Root","comment":"first"})";
+    const std::string changed =
+        R"({"schema_version":1,"data_root_prefix":"Data_Root","comment":"other"})";
+    const std::string world = "world";
+    const uint32_t old_crc = static_cast<uint32_t>(crc32(0,
+        reinterpret_cast<const Bytef*>(original.data()), static_cast<uInt>(original.size())));
+    bool ok = true;
+    for (const auto compression : {heaven::ZipCompression::Store, heaven::ZipCompression::Deflate}) {
+        const auto path = cleanup.path / (compression == heaven::ZipCompression::Store ? "store.zip" : "deflate.zip");
+        {
+            auto writer = heaven::ZipArchiveWriter::create(path, false);
+            if (!writer || !writer->add_bytes(std::string(heaven::kAssetArchiveManifest),
+                    std::as_bytes(std::span(changed)), compression) ||
+                !writer->add_bytes("Data_Root/heaven/heaven.world", std::as_bytes(std::span(world)),
+                    heaven::ZipCompression::Store) || !writer->finish()) return false;
+        }
+        if (!heaven::AssetFileSystem::open(path.string()) || !heaven::validate_zip_archive(path, true)) {
+            std::printf("[unit_asset_manifest_crc] FAILED: valid changed manifest control\n");
+            return false;
+        }
+        std::ifstream input(path, std::ios::binary);
+        std::vector<unsigned char> raw{std::istreambuf_iterator<char>(input), {}};
+        const auto fits = [&](std::size_t offset, std::size_t size) {
+            return offset <= raw.size() && size <= raw.size() - offset;
+        };
+        const auto u16 = [&](std::size_t offset) {
+            return uint32_t{raw[offset]} | (uint32_t{raw[offset + 1]} << 8);
+        };
+        const auto u32 = [&](std::size_t offset) { return u16(offset) | (u16(offset + 2) << 16); };
+        const auto put32 = [&](std::size_t offset, uint32_t value) {
+            for (std::size_t byte = 0; byte < 4; ++byte)
+                raw[offset + byte] = static_cast<unsigned char>(value >> (8 * byte));
+        };
+        if (raw.size() < 22 || u32(raw.size() - 22) != 0x06054b50u) return false;
+        std::size_t central = u32(raw.size() - 6);
+        bool patched = false;
+        while (fits(central, 46) && u32(central) == 0x02014b50u) {
+            const auto name_size = u16(central + 28), extra_size = u16(central + 30), comment_size = u16(central + 32);
+            if (!fits(central + 46, name_size + extra_size + comment_size)) return false;
+            const std::string_view name(reinterpret_cast<const char*>(raw.data() + central + 46), name_size);
+            if (name == heaven::kAssetArchiveManifest) {
+                const auto local = static_cast<std::size_t>(u32(central + 42));
+                if (!fits(local, 30) || u32(local) != 0x04034b50u || u32(central + 16) == old_crc) return false;
+                put32(central + 16, old_crc);
+                put32(local + 14, old_crc);
+                if ((u16(local + 6) & 8u) != 0) {
+                    std::size_t descriptor = local + 30 + u16(local + 26) + u16(local + 28) + u32(central + 20);
+                    if (!fits(descriptor, 4)) return false;
+                    if (u32(descriptor) == 0x08074b50u) descriptor += 4;
+                    if (!fits(descriptor, 4)) return false;
+                    put32(descriptor, old_crc);
+                }
+                patched = true;
+            }
+            central += 46 + name_size + extra_size + comment_size;
+        }
+        if (!patched) return false;
+        input.close();
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+            output.close();
+            if (!output) return false;
+        }
+        if (heaven::validate_zip_archive(path, true)) {
+            std::printf("[unit_asset_manifest_crc] FAILED: corrupt fixture must independently fail CRC\n");
+            return false;
+        }
+        if (heaven::AssetFileSystem::open(path.string())) {
+            std::printf("[unit_asset_manifest_crc] FAILED: CRC-invalid %s manifest mounted\n",
+                compression == heaven::ZipCompression::Store ? "STORE" : "DEFLATE");
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 const heaven::testing::Register registered(unit_asset_file_system);
+const heaven::testing::Register registered_manifest_crc(unit_asset_manifest_crc);
 
 } // namespace

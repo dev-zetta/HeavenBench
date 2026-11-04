@@ -1,14 +1,18 @@
 # HeavenBench Performance Optimizations
 
-This document describes the performance work implemented after the analytic-sky
-and bundled-sky-assets changes. The work targets per-frame CPU overhead, repeated
-GPU state uploads, duplicated geometry, physics cost, expensive screen-space
-effects, and repeatable profiling.
+This document describes the performance work implemented after the analytic-sky and bundled-sky-assets changes. The work targets per-frame CPU overhead, repeated GPU state uploads, duplicated geometry, physics cost, expensive screen-space effects, and repeatable profiling.
 
-Correctness takes priority over raw throughput. The frustum-culling work exposed
-a bounding-box construction bug that initially caused visible objects to
-disappear under small camera rotations. Optimization 4 documents the root cause
-and the corrected culling implementation.
+Correctness takes priority over raw throughput. The frustum-culling work exposed a bounding-box construction bug that initially caused visible objects to disappear under small camera rotations. Optimization 4 documents the root cause and the corrected culling implementation.
+
+## November 4 review remediation
+
+[Rain workload gating](CODE_REVIEW_2026-11-04.md#final-rain-workload-and-image-controls) removes ordinary and temporal precipitation membership at effective intensity zero and resolves depth demand before target arbitration. The isolated corrected native fixture submits 1,017 main-pass triangles/five commands with no rain-only depth pass, matching rain disabled on Vulkan and OpenGL; the initial implementation submitted 120,002 additional main-pass triangles plus a 1,017-triangle depth pass. Positive rain keeps its original workload, dry-down follows effective intensity, independent wetness continues, and buffers remain persistent. Zero/off pixels match exactly; positive captures retain a bounded two-RGB8-level noise-phase difference caused by corrected first-wet depth scheduling. Short draw-count traces do not establish an FPS gain. The CR-06 continuation refreshes retained depth-proxy transforms, culling and instanced bounds once after an inactive interval, so a past one-off dirty event cannot leave stale depth on reactivation. Idle frames retain their skipped synchronization and pass; steady active frames keep ordinary dirty-index updates.
+
+The production binary reader now owns a lazy 64 KiB heap read-ahead buffer, drains cached bytes before direct large-array reads, and retains checked logical seek/tell and EOF/CRC error propagation. The initial scratch `fort.mesh` trial reduced mean load time from 24.41 to 10.41 ms; that historical prototype result is separate from the production acceptance below. Host, malformed-input, corruption and scoped ASan/UBSan regressions cover the integrated reader. Complete-scene startup and rendering FPS effects remain unmeasured.
+
+The [final production-reader acceptance](CODE_REVIEW_2026-11-04.md#production-zip-reader-performance-acceptance) measures 26.101/10.811/26.179 ms per warm ZIP mesh load in baseline/candidate/baseline order on fixed CPU 15, each with at least two seconds of warmup and 60 measured seconds. The integrated reader takes 58.58–58.71% less time with 0.30% baseline drift and identical complete geometry hashes. Task build/test/GPU work is stopped during the measurement. This qualifies the one mesh-loader workload, not whole-scene startup or rendering FPS.
+
+Concrete Vulkan GPU selectors now validate actual identity before scene loading; default/environment behavior and heuristic policies remain explicit. Controlled comparisons must continue recording the backend's actual GPU. Earlier measurements below retain their own recorded hardware/source identities.
 
 ## 1. Frame telemetry and benchmark accounting
 

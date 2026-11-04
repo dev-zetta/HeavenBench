@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — 2026-11-04
+
+Enforce concrete Linux Vulkan GPU requests through Mesa device isolation and actual device/PCI identity checks. Preserve default/environment preferences and the OpenGL fallback with explicit verification limits. Distinguish original source-surface ordinals in neutral tessellation cache keys, advance ZIP semantics to 37 with conservative v34 loose import, and verify logical EOF/CRC before accepting cache or asset-pack manifest bytes.
+
+Remove invisible rain geometry and rain-only depth demand at effective zero while preserving dry-down, wetness, temporal membership and persistent buffers. Add bounded 64 KiB binary-loader read-ahead with checked logical seeks and unchanged short-read/corruption handling. Add focused host/native negative regressions, sanitizer evidence and [the dated code review/remediation record](docs/CODE_REVIEW_2026-11-04.md). Existing rendering/platform acceptance limits remain scoped in that record.
+
+Correct Intel OpenGL height-sampling teardown crashes by handing retiring current GLX pbuffers to the existing dummy drawable and clearing the matching cached swap-chain pointer. Retain the change in the reproducible Filament patch, add actual-source lifecycle regressions and verify complete OpenGL suites on Intel and AMD, including an isolated native negative control. Material packages remain unchanged.
+
+Refresh retained depth-proxy transforms, culling and instanced buffers once when shared depth resumes after an inactive interval. Preserve idle-pass removal and steady-state dirty updates; add native singleton/instanced depth-field regressions with failing refresh-disabled controls. Final Intel/AMD OpenGL and AMD Vulkan suites each pass 54 cases with five disclosed skips.
+
 ## 1.1.0 — 2026-10-16
 
 Add experimental FSR 3.1 frame generation for explicit Linux and Windows Vulkan SDK builds, plus an optional Windows NVIDIA Streamline DLSS adapter. Both SDK build options and the saved frame-generation mode default off. Settings and `--frame-generation off|fsr3|dlss` show requested/effective modes and explicit unavailability reasons. Both providers require SDR and fixed rendering resolution; any tour requesting generation is diagnostic and unscored, including unavailable requests or a later switch to Off.

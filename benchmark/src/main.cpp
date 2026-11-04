@@ -39,6 +39,7 @@
 #include "engine/tessellation_cache_archive.h"
 #include "engine/startup_timer.h"
 #include "engine/submission_retry.h"
+#include "engine/gpu_selection.h"
 #include "rhi/rhi.h"
 #include "rhi/filament_util.h"
 #include "rhi/overlay/overlay_ui.h"
@@ -1304,6 +1305,29 @@ private:
             backend_->set_asset_context(std::cref(*paths_),
                                         std::cref(*assets_));
             active_gpu_info_ = backend_->gpu_info();
+            const char* requested_gpu_env = std::getenv("HEAVEN_EXPECT_GPU_ID");
+            const char* requested_pci_env = std::getenv("HEAVEN_EXPECT_GPU_PCI");
+            const std::string_view requested_gpu = requested_gpu_env ? requested_gpu_env : "";
+            const std::string_view requested_pci = requested_pci_env ? requested_pci_env : "";
+            if (!requested_gpu.empty() || !requested_pci.empty()) {
+                if (backend_->render_api_name() == "Vulkan") {
+                    const GpuSelectionIdentity active{
+                        active_gpu_info_.vendor_id, active_gpu_info_.device_id,
+                        {active_gpu_info_.pci_domain, active_gpu_info_.pci_bus,
+                         active_gpu_info_.pci_device, active_gpu_info_.pci_function}};
+                    if (auto error = requested_gpu_error(requested_gpu, requested_pci, active))
+                        return std::unexpected(Error{std::move(*error)});
+                    std::printf("GPU selection verified: %.*s%s%.*s\n",
+                        static_cast<int>(requested_gpu.size()), requested_gpu.data(),
+                        requested_pci.empty() ? "" : " at ",
+                        static_cast<int>(requested_pci.size()), requested_pci.data());
+                } else {
+                    std::fprintf(stderr,
+                        "GPU selection: OpenGL numeric/PCI identity verification is unavailable; "
+                        "DRI_PRIME remains a preference. Active renderer: %s\n",
+                        active_gpu_info_.model_name.c_str());
+                }
+            }
             active_gpu_name_ =
                 clean_text_field(active_gpu_info_.model_name, kUnknownGpu);
             check_active_graphics_driver();

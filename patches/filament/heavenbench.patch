@@ -544,7 +544,7 @@ index c5af962ec039bcc344cf1f724976f4a1b2a3834e..e56375745ae01ae7708e5e8832276f4e
          void (FILAMENT_GL_APIENTRYP getQueryObjectuiv)(GLuint id, GLenum pname, GLuint* params);
          void (FILAMENT_GL_APIENTRYP getQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
 diff --git a/filament/backend/src/opengl/OpenGLDriver.cpp b/filament/backend/src/opengl/OpenGLDriver.cpp
-index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd2731455e671fc 100644
+index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..f59420bf3d1d16d69a0c90cbc6b0cc0b6457dc65 100644
 --- a/filament/backend/src/opengl/OpenGLDriver.cpp
 +++ b/filament/backend/src/opengl/OpenGLDriver.cpp
 @@ -15,6 +15,7 @@
@@ -587,7 +587,17 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
          destruct(ph, p);
      }
  }
-@@ -4137,6 +4149,7 @@ void OpenGLDriver::insertEventMarker(char const* string) {
+@@ -2505,6 +2517,9 @@ void OpenGLDriver::destroySwapChain(Handle<HwSwapChain> sch) {
+ 
+     if (sch) {
+         GLSwapChain const* sc = handle_cast<GLSwapChain*>(sch);
++        if (mCurrentDrawSwapChain == sc) {
++            mCurrentDrawSwapChain = nullptr;
++        }
+         mPlatform.destroySwapChain(sc->swapChain);
+         destruct(sch, sc);
+     }
+@@ -4137,6 +4152,7 @@ void OpenGLDriver::insertEventMarker(char const* string) {
  }
  
  void OpenGLDriver::pushGroupMarker(char const* string) {
@@ -595,7 +605,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #ifndef __EMSCRIPTEN__
  #ifdef GL_EXT_debug_marker
  #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_OPENGL
-@@ -4148,12 +4161,13 @@ void OpenGLDriver::pushGroupMarker(char const* string) {
+@@ -4148,12 +4164,13 @@ void OpenGLDriver::pushGroupMarker(char const* string) {
  
  #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_BACKEND
      FILAMENT_TRACING_CONTEXT(FILAMENT_TRACING_CATEGORY_FILAMENT);
@@ -610,7 +620,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #ifndef __EMSCRIPTEN__
  #ifdef GL_EXT_debug_marker
  #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_OPENGL
-@@ -4165,7 +4179,7 @@ void OpenGLDriver::popGroupMarker(int) {
+@@ -4165,7 +4182,7 @@ void OpenGLDriver::popGroupMarker(int) {
  
  #if DEBUG_GROUP_MARKER_LEVEL & DEBUG_GROUP_MARKER_BACKEND
      FILAMENT_TRACING_CONTEXT(FILAMENT_TRACING_CATEGORY_FILAMENT);
@@ -619,7 +629,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #endif
  #endif
  }
-@@ -4491,6 +4505,7 @@ void OpenGLDriver::executeGpuCommandsCompleteOps() noexcept { // NOLINT(*-except
+@@ -4491,6 +4508,7 @@ void OpenGLDriver::executeGpuCommandsCompleteOps() noexcept { // NOLINT(*-except
  // ------------------------------------------------------------------------------------------------
  
  void OpenGLDriver::tick(int) {
@@ -627,7 +637,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
      DEBUG_MARKER()
  #ifndef FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
      executeGpuCommandsCompleteOps();
-@@ -4511,6 +4526,11 @@ void OpenGLDriver::beginFrame(
+@@ -4511,6 +4529,11 @@ void OpenGLDriver::beginFrame(
      auto& gl = getBackendState();
      insertEventMarker("beginFrame");
      mPlatform.beginFrame(monotonic_clock_ns, refreshIntervalNs, frameId);
@@ -639,7 +649,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
      if (UTILS_UNLIKELY(!mTexturesWithStreamsAttached.empty())) {
          OpenGLPlatform& platform = mPlatform;
          for (GLTexture const* t : mTexturesWithStreamsAttached) {
-@@ -4606,6 +4626,7 @@ void OpenGLDriver::flush(int) {
+@@ -4606,6 +4629,7 @@ void OpenGLDriver::flush(int) {
  void OpenGLDriver::finish(int) {
      DEBUG_MARKER()
      glFinish();
@@ -647,7 +657,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #ifndef FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
      executeGpuCommandsCompleteOps();
      assert_invariant(mGpuCommandCompleteOps.empty());
-@@ -5064,6 +5085,7 @@ void OpenGLDriver::draw2(uint32_t const indexOffset, uint32_t const indexCount,
+@@ -5064,6 +5088,7 @@ void OpenGLDriver::draw2(uint32_t const indexOffset, uint32_t const indexCount,
              rp->gl.getIndicesType(),
              reinterpret_cast<const void*>(indexOffset << rp->gl.indicesShift),
              GLsizei(instanceCount));
@@ -655,7 +665,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #endif
  
  #if FILAMENT_ENABLE_MATDBG
-@@ -5099,6 +5121,7 @@ void OpenGLDriver::drawArrays(uint32_t const vertexOffset, uint32_t const vertex
+@@ -5099,6 +5124,7 @@ void OpenGLDriver::drawArrays(uint32_t const vertexOffset, uint32_t const vertex
      GLRenderPrimitive const* const rp = mBoundRenderPrimitive;
      glDrawArraysInstanced(GLenum(rp->type), GLint(vertexOffset), GLsizei(vertexCount),
              GLsizei(instanceCount));
@@ -663,7 +673,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  #endif
  
  #if FILAMENT_ENABLE_MATDBG
-@@ -5132,6 +5155,7 @@ void OpenGLDriver::draw2GLES2(uint32_t const indexOffset, uint32_t const indexCo
+@@ -5132,6 +5158,7 @@ void OpenGLDriver::draw2GLES2(uint32_t const indexOffset, uint32_t const indexCo
      assert_invariant(instanceCount == 1);
      glDrawElements(GLenum(rp->type), GLsizei(indexCount), rp->gl.getIndicesType(),
              reinterpret_cast<const void*>(indexOffset << rp->gl.indicesShift));
@@ -671,7 +681,7 @@ index 8d2f64facd85f056a8e3cd2a2976e7ccd6ace076..dc0511663b8aa327d2e79bd8ddd27314
  
  #if FILAMENT_ENABLE_MATDBG
      CHECK_GL_ERROR_NON_FATAL()
-@@ -5160,6 +5184,10 @@ void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+@@ -5160,6 +5187,10 @@ void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
      }
  }
  
@@ -823,6 +833,56 @@ index 3bc7eff166241f81462e890ff5502ddc9ce80900..9dd674d06fdd6ef0738c98efab859355
  extern PFNGLENDQUERYEXTPROC glEndQueryEXT;
  extern PFNGLGETQUERYOBJECTUIVEXTPROC glGetQueryObjectuivEXT;
  extern PFNGLGETQUERYOBJECTUI64VEXTPROC glGetQueryObjectui64vEXT;
+diff --git a/filament/backend/src/opengl/platforms/PlatformGLX.cpp b/filament/backend/src/opengl/platforms/PlatformGLX.cpp
+index d52005d4ac01391e38f817312fe5739feee35e15..190b809b4734ef994659aa7137c6f7438a705d38 100644
+--- a/filament/backend/src/opengl/platforms/PlatformGLX.cpp
++++ b/filament/backend/src/opengl/platforms/PlatformGLX.cpp
+@@ -39,6 +39,7 @@ typedef int (* X11_FREE)(void*);
+ // Function pointer types for GLX functions
+ typedef void (* GLX_DESTROY_CONTEXT)(Display*, GLXContext);
+ typedef void (* GLX_SWAP_BUFFERS)(Display* dpy, GLXDrawable drawable);
++typedef GLXDrawable (* GLX_GET_CURRENT_DRAWABLE)();
+ // Stores GLX function pointers and a handle to the system's GLX library
+ struct GLXFunctions {
+     PFNGLXCHOOSEFBCONFIGPROC chooseFbConfig;
+@@ -46,6 +47,8 @@ struct GLXFunctions {
+     PFNGLXCREATEPBUFFERPROC createPbuffer;
+     PFNGLXDESTROYPBUFFERPROC destroyPbuffer;
+     PFNGLXMAKECONTEXTCURRENTPROC setCurrentContext;
++    GLX_GET_CURRENT_DRAWABLE getCurrentDrawable;
++    PFNGLXGETCURRENTREADDRAWABLEPROC getCurrentReadDrawable;
+ 
+     /*
+        When creating a shared GL context, we query the used
+@@ -106,6 +109,10 @@ static bool loadLibraries() {
+             getProcAddress((const GLubyte*)"glXDestroyPbuffer");
+     g_glx.setCurrentContext = (PFNGLXMAKECONTEXTCURRENTPROC)
+             getProcAddress((const GLubyte*)"glXMakeContextCurrent");
++    g_glx.getCurrentDrawable = (GLX_GET_CURRENT_DRAWABLE)
++            getProcAddress((const GLubyte*)"glXGetCurrentDrawable");
++    g_glx.getCurrentReadDrawable = (PFNGLXGETCURRENTREADDRAWABLEPROC)
++            getProcAddress((const GLubyte*)"glXGetCurrentReadDrawable");
+     g_glx.destroyContext = (GLX_DESTROY_CONTEXT)
+             getProcAddress((const GLubyte*)"glXDestroyContext");
+     g_glx.swapBuffers = (GLX_SWAP_BUFFERS)
+@@ -318,6 +325,17 @@ Platform::SwapChain* PlatformGLX::createSwapChain(
+ void PlatformGLX::destroySwapChain(Platform::SwapChain* swapChain) noexcept {
+     auto it = std::find(mPBuffers.begin(), mPBuffers.end(), (GLXPbuffer)swapChain);
+     if (it != mPBuffers.end()) {
++        // Leave a live drawable current for queued GL work after offscreen teardown.
++        // Some GLX drivers access the retired pbuffer again in glFinish().
++        GLXDrawable const draw = g_glx.getCurrentDrawable();
++        GLXDrawable const read = g_glx.getCurrentReadDrawable();
++        if (draw == *it || read == *it) {
++            bool const success = g_glx.setCurrentContext(mGLXDisplay,
++                    draw == *it ? mDummySurface : draw,
++                    read == *it ? mDummySurface : read, mGLXContext);
++            FILAMENT_CHECK_POSTCONDITION(success)
++                    << "Unable to release current GLX pbuffer before destruction.";
++        }
+         g_glx.destroyPbuffer(mGLXDisplay, (GLXPbuffer)swapChain);
+         mPBuffers.erase(it);
+     }
 diff --git a/filament/backend/src/vulkan/VulkanCommands.cpp b/filament/backend/src/vulkan/VulkanCommands.cpp
 index 482c01412f234b4733a16a2273ba7adc75ef13b7..c8dcc5023bd139cabf38ad066270fcd494b178d5 100644
 --- a/filament/backend/src/vulkan/VulkanCommands.cpp

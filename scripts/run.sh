@@ -288,20 +288,33 @@ fi
 # Select before the process loads Vulkan. MESA_VK_DEVICE_SELECT addresses the
 # Vulkan device while DRI_PRIME's PCI form covers Mesa's general device choice.
 # Existing environment overrides win over the automatic policy; an explicit
-# --gpu always wins over the environment.
+# --gpu always wins over the environment. Policy names remain preferences:
+# sysfs does not expose comparable VRAM totals on every supported driver.
+unset HEAVEN_EXPECT_GPU_ID HEAVEN_EXPECT_GPU_PCI
+GPU_CONCRETE=0
+case "$GPU_SELECT" in
+    auto|dedicated|discrete|integrated|default|"") ;;
+    *) GPU_CONCRETE=1 ;;
+esac
 if [[ "$GPU_SELECT_EXPLICIT" -eq 0 && "$GPU_SELECT" == "auto" && \
       ( -n "${MESA_VK_DEVICE_SELECT:-}" || -n "${DRI_PRIME:-}" ) ]]; then
     echo "==> Keeping GPU selection from environment"
 elif [[ "$GPU_SELECT" == "default" || -z "$GPU_SELECT" ]]; then
-    unset MESA_VK_DEVICE_SELECT DRI_PRIME
+    unset MESA_VK_DEVICE_SELECT DRI_PRIME MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE
     echo "==> GPU selection left to the Vulkan driver"
 elif (( ${#GPU_IDS[@]} == 0 )); then
     if [[ "$GPU_SELECT" == "auto" || "$GPU_SELECT" == "dedicated" || \
           "$GPU_SELECT" == "discrete" || "$GPU_SELECT" == "integrated" ]]; then
         echo "Warning: no DRM GPUs detected; GPU selection left to the Vulkan driver" >&2
     else
+        if [[ ! "$GPU_SELECT" =~ ^[[:xdigit:]]{4}:[[:xdigit:]]{4}$ ]]; then
+            echo "Error: cannot resolve GPU selector '$GPU_SELECT' without DRM enumeration" >&2
+            exit 2
+        fi
         export MESA_VK_DEVICE_SELECT="$GPU_SELECT"
-        echo "==> MESA_VK_DEVICE_SELECT=$GPU_SELECT (GPU enumeration unavailable)"
+        export MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1
+        export HEAVEN_EXPECT_GPU_ID="${GPU_SELECT,,}"
+        echo "==> Requested GPU $GPU_SELECT (DRM enumeration unavailable; Vulkan identity will be checked)"
     fi
 else
     GPU_INDEX=""
@@ -335,7 +348,18 @@ else
     GPU_PCI_PRIME="${GPU_PCI_PRIME//./_}"
     export MESA_VK_DEVICE_SELECT="${GPU_IDS[$GPU_INDEX]}"
     export DRI_PRIME="pci-${GPU_PCI_PRIME}"
-    echo "==> GPU [$GPU_INDEX]: ${GPU_NAMES[$GPU_INDEX]} ($(format_vram "${GPU_VRAM_BYTES[$GPU_INDEX]}"))"
+    if [[ "$GPU_CONCRETE" -eq 1 ]]; then
+        # Reordering the Vulkan list is insufficient: Filament independently
+        # prefers discrete devices. Mesa must expose only the requested ID.
+        export MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1
+        export HEAVEN_EXPECT_GPU_ID="${GPU_IDS[$GPU_INDEX]}"
+        if [[ "$GPU_SELECT" =~ ^[0-9]+$ || "$GPU_SELECT" == "${GPU_BDFS[$GPU_INDEX]}" ]]; then
+            export HEAVEN_EXPECT_GPU_PCI="${GPU_BDFS[$GPU_INDEX]}"
+        fi
+        echo "==> Requested GPU [$GPU_INDEX]: ${GPU_NAMES[$GPU_INDEX]} ($(format_vram "${GPU_VRAM_BYTES[$GPU_INDEX]}")); Vulkan identity will be checked"
+    else
+        echo "==> GPU preference [$GPU_INDEX]: ${GPU_NAMES[$GPU_INDEX]} ($(format_vram "${GPU_VRAM_BYTES[$GPU_INDEX]}")); active renderer identity is authoritative"
+    fi
     echo "==> MESA_VK_DEVICE_SELECT=$MESA_VK_DEVICE_SELECT DRI_PRIME=$DRI_PRIME"
 fi
 

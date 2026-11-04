@@ -9,6 +9,7 @@ Start with [Getting started](GETTING_STARTED.md) for asset preparation, platform
 - [Graphics drivers](GRAPHICS_DRIVERS.md): startup advisories and compatible upgrade guidance.
 - [Android guide](../android/README.md): installation, touch controls, preview configuration and device-validation limits.
 - [Known issues](KNOWN_BUGS.md): current bugs and reproduction notes.
+- [November 4 code review](CODE_REVIEW_2026-11-04.md): GPU-selection, cache/ZIP loading, rain workload and depth-resume fixes, Intel OpenGL teardown correction, full native/static checks and validation limits.
 - [Credits and third-party notices](CREDITS.md): contributors, libraries, tools and asset attribution.
 - [Changelog](../CHANGELOG.md): daily development history and the 1.0.0 source baseline.
 

@@ -101,6 +101,7 @@ const CaseEntry kCases[] = {
     {"rain_asset_failure",  &heaven::smoke::run_rain_asset_failure_case},
     {"rain_build_once",     &heaven::smoke::run_rain_build_once_case},
     {"rain_depth_prepass",  &heaven::smoke::run_rain_depth_prepass_case},
+    {"rain_activity",       &heaven::smoke::run_rain_activity_case},
     {"feature_registration",
                             &heaven::smoke::run_feature_registration_case},
     {"gpu_skinning",        &heaven::smoke::run_gpu_skinning_case},
@@ -127,6 +128,9 @@ const CaseEntry kCases[] = {
     {"height_sampler_lit_lifecycle", &heaven::smoke::run_height_sampler_lit_lifecycle_case},
     {"render_test_reload", &heaven::smoke::run_render_test_reload_case},
     {"loading_progress", &heaven::smoke::run_loading_progress_case},
+    // This case deliberately reloads the scene. Keep it after cases that
+    // assert absolute startup build counters on the cumulative backend.
+    {"depth_resume", &heaven::smoke::run_depth_resume_case},
 };
 
 } // namespace

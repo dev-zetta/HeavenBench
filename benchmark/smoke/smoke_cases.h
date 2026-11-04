@@ -143,6 +143,8 @@ struct CaseContext {
 // exact shared texture (reads scene depth only through FrameContext::depth_texture).
 // Defined in smoke_rain_depth_prepass.cpp.
 [[nodiscard]] CaseResult run_rain_depth_prepass_case(const CaseContext& ctx);
+[[nodiscard]] CaseResult run_rain_activity_case(const CaseContext& ctx);
+[[nodiscard]] CaseResult run_depth_resume_case(const CaseContext& ctx);
 
 // GPU-skinning smoke case
 // the four Animated_Objects are skinned
