@@ -83,8 +83,8 @@ Completed runs automatically save matched JSON and self-contained HTML reports u
 Desktop launchers accept `HEAVEN_USER_DIR` to override the user directory. An unpackaged development binary without that override saves reports beside its executable. Configuration is stored as `config.json`; packages accept `--config FILE` and ordinary renderer flags. `HEAVEN_DATA` selects assets in the desktop launchers, and saved configuration can retain its own data path.
 
 ```text
-results/HeavenBench_1.1.0_YYYYMMDD_HHMMSS_mmm.json
-results/HeavenBench_1.1.0_YYYYMMDD_HHMMSS_mmm.html
+results/HeavenBench_1.1.1_YYYYMMDD_HHMMSS_mmm.json
+results/HeavenBench_1.1.1_YYYYMMDD_HHMMSS_mmm.html
 ```
 
 Results use schema version 2 and score version 3. Compare scores only when application and score versions, workloads and effective settings match. Rendering updates can change the GPU workload even when the preset name stays the same. [Development and measurement](DEVELOPMENT.md#benchmark-measurement-and-report-format) describes the score calculations and machine-readable fields.

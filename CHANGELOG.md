@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2026-11-04
+## 1.1.1 — 2026-11-04
 
 Enforce concrete Linux Vulkan GPU requests through Mesa device isolation and actual device/PCI identity checks. Preserve default/environment preferences and the OpenGL fallback with explicit verification limits. Distinguish original source-surface ordinals in neutral tessellation cache keys, advance ZIP semantics to 37 with conservative v34 loose import, and verify logical EOF/CRC before accepting cache or asset-pack manifest bytes.
 
@@ -9,6 +9,8 @@ Remove invisible rain geometry and rain-only depth demand at effective zero whil
 Correct Intel OpenGL height-sampling teardown crashes by handing retiring current GLX pbuffers to the existing dummy drawable and clearing the matching cached swap-chain pointer. Retain the change in the reproducible Filament patch, add actual-source lifecycle regressions and verify complete OpenGL suites on Intel and AMD, including an isolated native negative control. Material packages remain unchanged.
 
 Refresh retained depth-proxy transforms, culling and instanced buffers once when shared depth resumes after an inactive interval. Preserve idle-pass removal and steady-state dirty updates; add native singleton/instanced depth-field regressions with failing refresh-disabled controls. Final Intel/AMD OpenGL and AMD Vulkan suites each pass 54 cases with five disclosed skips.
+
+The benchmark version is **1.1.1** and Android versionCode is **5**. Extraction tools remain **0.3.1**, result schema remains **2**, and score version remains **3**. Fresh release CI, package verification and publication are pending; [release readiness](docs/RELEASE_READINESS.md#november-4-111-release-preparation) distinguishes the reviewed source validation from those release gates. Compare benchmark results using matching application and score versions, workloads and effective settings.
 
 ## 1.1.0 — 2026-10-16
 

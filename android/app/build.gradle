@@ -30,8 +30,8 @@ android {
         applicationId 'app.zetta.heavenbench'
         minSdk versions.getProperty('minSdk').toInteger()
         targetSdk versions.getProperty('sdk').toInteger()
-        versionCode 4
-        versionName providers.gradleProperty('heavenVersion').getOrElse('1.1.0')
+        versionCode 5
+        versionName providers.gradleProperty('heavenVersion').getOrElse('1.1.1')
         ndk { abiFilters providers.gradleProperty('heavenAbi').getOrElse('arm64-v8a') }
     }
     compileOptions {
