@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.1 — 2026-11-04
+## 1.1.1 — 2026-11-05
 
 Enforce concrete Linux Vulkan GPU requests through Mesa device isolation and actual device/PCI identity checks. Preserve default/environment preferences and the OpenGL fallback with explicit verification limits. Distinguish original source-surface ordinals in neutral tessellation cache keys, advance ZIP semantics to 37 with conservative v34 loose import, and verify logical EOF/CRC before accepting cache or asset-pack manifest bytes.
 
@@ -10,7 +10,7 @@ Correct Intel OpenGL height-sampling teardown crashes by handing retiring curren
 
 Refresh retained depth-proxy transforms, culling and instanced buffers once when shared depth resumes after an inactive interval. Preserve idle-pass removal and steady-state dirty updates; add native singleton/instanced depth-field regressions with failing refresh-disabled controls. Final Intel/AMD OpenGL and AMD Vulkan suites each pass 54 cases with five disclosed skips.
 
-The benchmark version is **1.1.1** and Android versionCode is **5**. Extraction tools remain **0.3.1**, result schema remains **2**, and score version remains **3**. Fresh release CI, package verification and publication are pending; [release readiness](docs/RELEASE_READINESS.md#november-4-111-release-preparation) distinguishes the reviewed source validation from those release gates. Compare benchmark results using matching application and score versions, workloads and effective settings.
+The benchmark version is **1.1.1** and Android versionCode is **5**. Extraction tools remain **0.3.1**, result schema remains **2**, and score version remains **3**. Fresh release CI, independent eight-package/source/checksum audits and publication pass at source `7930b9e`; [release readiness](docs/RELEASE_READINESS.md#november-5-published-111) records the exact downloadable bytes and bounded package-runtime evidence. Compare benchmark results using matching application and score versions, workloads and effective settings.
 
 ## 1.1.0 — 2026-10-16
 
