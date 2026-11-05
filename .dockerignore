@@ -49,3 +49,8 @@
 **/Thumbs.db
 **/*.iml
 android/local.properties
+# Never admit private signing containers through a source-directory allowlist.
+**/*.[jJ][kK][sS]
+**/*.[kK][eE][yY][sS][tT][oO][rR][eE]
+**/*.[pP]12
+**/*.[pP][fF][xX]

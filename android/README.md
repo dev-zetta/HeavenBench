@@ -4,6 +4,8 @@
 
 The published 1.1.1 APK uses a different development signing certificate from the published 1.1.0 APK. Back up imported assets and user data before uninstalling 1.1.0 and installing 1.1.1; `adb install -r` cannot update that older release in place. Earlier published APKs also used different development certificates. Local builds can update installations signed with the same local debug key.
 
+Trusted `main` CI builds add a conditional post-build [persistent signing step](../docs/ANDROID_SIGNING.md). Docker and Gradle still receive no persistent credentials, and the APK remains a debuggable development build. The new identity requires one final backup/uninstall/reinstall migration from published 1.1.1; its old private key was not retained. After that migration, future official APKs retain update compatibility through the same application ID and signing key with incremented versionCode. Published 1.1.1 assets, source and certificate records remain unchanged.
+
 The Linux build host needs the renderer's normal Clang/libc++ dependencies, Java 17 or newer, and an Android SDK. Install the versions pinned in [versions.properties](versions.properties):
 
 ```sh
@@ -42,7 +44,7 @@ When the GPU cannot upload an original BC1/BC3/BC4/BC5 texture, the renderer dec
 
 Configuration (`config.json`), the imported `assets.zip`, tessellation cache (`cache/`), and benchmark reports (`results/`) live under Android's app-specific external files directory, usually `/sdcard/Android/data/app.zetta.heavenbench/files/`; internal app storage is the fallback when external storage is unavailable. The launcher displays the actual directory. Storage is removed when the app is uninstalled. For a connected development device, use `adb pull /sdcard/Android/data/app.zetta.heavenbench/files/results` to collect reports and `adb logcat` to inspect renderer failures. [Android app-specific storage](https://developer.android.com/training/data-storage/app-specific).
 
-The GitHub Actions workflow builds and uploads a development APK as a workflow artifact. It does not create a public release, run the scene on a GPU, or sign with a production key. Avoid distributing the debug key as a production signing identity.
+The GitHub Actions workflow builds and validates a development APK without persistent credentials. In the exact project repository, only a `main` push or manual dispatch on `main` may enter the branch-restricted `android-signing` environment and run the isolated post-build signing step; pull requests, forks and other branches use the empty `android-development` environment and upload development artifacts. Trusted signing fails if credentials or the committed certificate pin do not match, without an ephemeral-key fallback. Signing secrets stay out of Docker, Gradle, caches and artifacts. The workflow does not create a public release, run the scene on a GPU or change the APK's debuggable development status. See [signing setup, backup and recovery](../docs/ANDROID_SIGNING.md).
 
 APK assembly requires Android Lint to pass for both application code and generated SDL Java sources. [prepare_sdl_java.py](prepare_sdl_java.py) verifies the SHA-256 of three SDL 2.32.10 inputs before creating a build-tree copy with local Bluetooth/capture permission checks and private USB receiver registration. The downloaded source and native SDL library are unchanged. A different SDL revision fails closed until these integration changes are reviewed; staging regressions check source preservation, input drift, and reproducibility.
 

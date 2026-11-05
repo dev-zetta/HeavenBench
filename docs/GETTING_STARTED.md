@@ -33,6 +33,8 @@ The normal asset location is an `assets/` directory containing compatible ZIP pa
 
 **Android 1.1.1 upgrade:** the published 1.1.1 development APK has a different signing certificate from published 1.1.0. Back up imported assets and user data before uninstalling 1.1.0 and installing 1.1.1; an in-place update from that release is not supported. Other installed builds require a matching signing certificate for an in-place update.
 
+Future APKs from the protected persistent-signing path introduce a new identity after published 1.1.1. That first migration also requires backing up app data, uninstalling the old app and reinstalling; published 1.1.1 is unchanged. Later official updates can install in place with the same application ID and retained signing key plus an incremented versionCode. Pull-request, other-branch and independently signed local development APKs do not share that update guarantee. See [Android signing and migration](ANDROID_SIGNING.md).
+
 On Linux systems without FUSE, launch the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1 ./HeavenBench-*.AppImage`. Linux packages use host graphics drivers and the ALSA audio library; see [platform package requirements](BUILDING.md#platform-packages) if startup fails.
 
 A development checkout uses the same scene pack:

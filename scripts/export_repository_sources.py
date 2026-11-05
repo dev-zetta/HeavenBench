@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 
+from export_build_sources import reject_private_key_paths
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,6 +29,7 @@ def main():
             if not source.exists() and not source.is_symlink():
                 # A working-tree deletion is part of the exact current source.
                 continue
+            reject_private_key_paths([Path(relative)])
             if not source.is_file():
                 raise ValueError('Source export cannot omit a tracked path: ' + relative)
             target = context / relative

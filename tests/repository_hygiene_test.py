@@ -118,8 +118,25 @@ class IgnorePolicyTest(unittest.TestCase):
             "tests/fixtures/compile_commands.json", "config.json", "CHANGELOG.md",
             "docs/RELEASE_READINESS.md", "docs/tutorial/build/example.cpp",
             "tools/extraction/uniginex.cpp", "scripts/build_asset_tools.sh",
+            "android/signing-certificate.pem", "android/signing-certificate.der",
+            "android/signing-certificate.sha256",
         }
         self.assertEqual(self.ignored(paths), set())
+
+    def test_private_key_containers_are_ignored_at_any_depth(self):
+        paths = {prefix + "signing" + suffix
+                 for prefix in ("", "android/", "tools/nested/")
+                 for suffix in (".jks", ".JKS", ".keystore", ".KeyStore",
+                                ".p12", ".P12", ".pfx", ".PFX")}
+        self.assertEqual(self.ignored(paths), paths)
+
+    def test_docker_private_key_exclusions_follow_source_allowlists(self):
+        rules = (REPOSITORY / ".dockerignore").read_text().splitlines()
+        last_allow = max(index for index, rule in enumerate(rules) if rule.startswith("!"))
+        for pattern in ("**/*.[jJ][kK][sS]", "**/*.[kK][eE][yY][sS][tT][oO][rR][eE]",
+                        "**/*.[pP]12", "**/*.[pP][fF][xX]"):
+            self.assertIn(pattern, rules)
+            self.assertGreater(rules.index(pattern), last_allow)
 
     def test_index_contains_no_ignored_local_files(self):
         ignored = self.ignored(self.tracked_paths())

@@ -537,6 +537,31 @@ class SourceExportTest(unittest.TestCase):
         self.require_success(self.export(second))
         self.assertEqual(self.archive(second).read_bytes(), first)
 
+    def test_private_key_container_rejection_preserves_previous_export(self):
+        self.require_success(self.export())
+        original = {path.name: path.read_bytes() for path in self.output.iterdir()}
+        (self.source / "android").mkdir()
+        for name in ("signing.jks", "signing.KeyStore", "signing.p12", "signing.PFX", ".keystore"):
+            with self.subTest(name=name):
+                key = self.source / "android" / name
+                key.write_bytes(b"private fixture bytes, not a real key")
+                result = self.export()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("private-key files", result.stderr)
+                self.assertNotIn("private fixture bytes", result.stdout + result.stderr)
+                self.assertEqual({path.name: path.read_bytes() for path in self.output.iterdir()}, original)
+                key.unlink()
+
+    def test_public_signing_certificates_remain_in_source_export(self):
+        certificates = {"signing-certificate.pem": b"public certificate PEM fixture",
+                        "signing-certificate.der": b"public certificate DER fixture"}
+        for name, content in certificates.items():
+            (self.source / name).write_bytes(content)
+        self.require_success(self.export())
+        with tarfile.open(self.archive()) as archive:
+            for name, content in certificates.items():
+                self.assertEqual(archive.extractfile("HeavenBench-1.2.3/" + name).read(), content)
+
     def test_bundled_cpu_subset_is_complete_in_source_export(self):
         # BuildKit exercises the actual filter in the clean release pipeline.
         # Keep its required bundled dependency allowlist explicit here, without

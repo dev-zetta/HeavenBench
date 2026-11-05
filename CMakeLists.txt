@@ -63,6 +63,18 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/docker_build_test.py
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(
+            NAME android_signing_regressions
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/android_signing_test.py
+        )
+    endif()
+    add_test(
+        NAME android_signing_workflow_regressions
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/android_signing_workflow_test.py
+    )
     add_test(
         NAME dependency_bootstrap_regressions
         COMMAND ${Python3_EXECUTABLE}

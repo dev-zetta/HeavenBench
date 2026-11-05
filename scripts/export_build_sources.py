@@ -10,6 +10,15 @@ import re
 import subprocess
 import tarfile
 
+PRIVATE_KEY_SUFFIXES = (".jks", ".keystore", ".p12", ".pfx")
+
+
+def reject_private_key_paths(paths):
+    """Reject signing containers by name without opening their private contents."""
+    for path in paths:
+        if path.name.lower().endswith(PRIVATE_KEY_SUFFIXES):
+            raise ValueError("Source export must not distribute private-key files: " + path.as_posix())
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -26,6 +35,7 @@ def main():
                         (source / "benchmark/CMakeLists.txt").read_text())[1]
     prefix = f"HeavenBench-{version}"
     files = sorted(path for path in source.rglob("*") if path.is_file() or path.is_symlink())
+    reject_private_key_paths(path.relative_to(source) for path in files)
     manifest = {}
     for path in files:
         if path.is_symlink():

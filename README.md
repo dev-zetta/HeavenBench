@@ -10,6 +10,8 @@
 
 The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is ad hoc signed, without notarization, and full rendering on a physical Mac remains unverified. See [macOS setup and launch instructions](docs/MACOS.md).
 
+For future trusted Android CI builds, [persistent signing](docs/ANDROID_SIGNING.md) provides a retained update identity through a separate post-build step. Published 1.1.1 keeps its original development certificate and assets; moving from it to the new identity requires one final backup/uninstall/reinstall migration. The APK remains debuggable development software, and subsequent official updates require the same application ID and key with an incremented versionCode.
+
 ## Watch the showcase
 
 [![Watch the HeavenBench 1.0.0 feature showcase on YouTube](docs/images/heavenbench-showcase.png)](https://youtu.be/v-s5fNxlnVw)

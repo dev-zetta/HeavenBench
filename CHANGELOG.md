@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Add a pinned, persistent Android signing step for trusted `main` push/manual builds using the branch-restricted `android-signing` GitHub Environment. Keep Docker/Gradle builds free of persistent credentials, skip signing for pull requests/forks/other branches, and fail official signing on missing secrets or a certificate mismatch. Retain the same debuggable development APK payload and a public source/run/attempt-bound signing receipt; stable signing does not establish production build or device qualification.
+
+The new identity requires one final backup/uninstall/reinstall migration from published 1.1.1 because its old private key was not retained. Later official updates reuse the retained key and application ID with an incremented versionCode. Published 1.1.1 source, certificate, tag and assets remain unchanged; application version `1.1.1` and versionCode `5` are not advanced by this signing follow-up.
+
 ## 1.1.1 — 2026-11-05
 
 Enforce concrete Linux Vulkan GPU requests through Mesa device isolation and actual device/PCI identity checks. Preserve default/environment preferences and the OpenGL fallback with explicit verification limits. Distinguish original source-surface ordinals in neutral tessellation cache keys, advance ZIP semantics to 37 with conservative v34 loose import, and verify logical EOF/CRC before accepting cache or asset-pack manifest bytes.

@@ -238,6 +238,44 @@ class PackageMetadataTest(unittest.TestCase):
 
 
 class RepositorySourceExportTest(unittest.TestCase):
+    def test_forced_tracked_private_keys_rejected_and_public_certificates_preserved(self):
+        with tempfile.TemporaryDirectory(prefix='heaven signing source policy ') as temporary:
+            directory = Path(temporary)
+            source = directory / 'repo'
+            (source / 'benchmark').mkdir(parents=True)
+            (source / 'scripts').mkdir()
+            def git(*args):
+                return subprocess.run(['git', '-C', str(source), *args], check=True,
+                                      text=True, capture_output=True)
+            git('init', '-q')
+            (source / 'benchmark/CMakeLists.txt').write_text('project(HeavenBench VERSION 1.2.3 LANGUAGES CXX)\n')
+            (source / '.gitignore').write_bytes((ROOT / '.gitignore').read_bytes())
+            (source / 'scripts/export_build_sources.py').write_bytes((ROOT / 'scripts/export_build_sources.py').read_bytes())
+            (source / 'public-certificate.pem').write_bytes(b'public PEM fixture')
+            git('add', '.')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
+            output = directory / 'packages'
+            command = [sys.executable, str(ROOT / 'scripts/export_repository_sources.py'),
+                       '--source-root', str(source), '--output-dir', str(output),
+                       '--platform', 'android-arm64-v8a']
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            manifest = json.loads((output / 'source-manifest.json').read_text())
+            self.assertIn('public-certificate.pem', manifest['files'])
+            original = {path.name: path.read_bytes() for path in output.iterdir()}
+            for name in ('private.jks', 'private.KeyStore', 'private.p12', 'private.PFX', '.keystore'):
+                with self.subTest(name=name):
+                    key = source / name
+                    key.write_bytes(b'private fixture bytes, not a real key')
+                    git('add', '-f', key.name)
+                    rejected = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn('private-key files', rejected.stderr)
+                    self.assertNotIn('private fixture bytes', rejected.stdout + rejected.stderr)
+                    self.assertEqual({path.name: path.read_bytes() for path in output.iterdir()}, original)
+                    git('rm', '--cached', '--quiet', key.name)
+                    key.unlink()
+
     def test_worktree_edits_included_and_ignored_plugins_excluded(self):
         with tempfile.TemporaryDirectory(prefix='heaven source policy ') as temporary:
             directory = Path(temporary); source = directory / 'repo'; source.mkdir()

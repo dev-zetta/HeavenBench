@@ -1,5 +1,13 @@
 # First-release readiness
 
+## Persistent Android signing follow-up
+
+The post-1.1.1 signing path retains one Android CI job and adds a conditional post-build signing step. Only an exact-repository `main` push or manual dispatch on `main` uses the `android-signing` environment restricted to that branch; other builds use the empty `android-development` environment and retain development artifacts. Persistent keystore/password secrets enter only the signing step, with a committed public certificate pin, strict failure on missing/mismatched credentials and no Docker/Gradle/cache exposure. The APK remains debuggable development software. [The signing guide](ANDROID_SIGNING.md) documents setup, private backup/recovery and the one-time migration.
+
+The published 1.1.1 APK remains bound to source `7930b9eaae5feef8dfae7396e479d534848d721f` and certificate SHA-256 `e9ada48557382df3482a55a610bac47870dbff5cf78ca367a911c180653d85cf`. Its private development key was not retained; a new retained identity cannot update that installation in place. Back up imported assets, configuration and reports before uninstalling and reinstalling once. Future official updates require the same application ID and retained key with an incremented versionCode. Existing release assets/tag, application version `1.1.1` and versionCode `5` are unchanged.
+
+Fresh trusted-runner signing continuity and device upgrade acceptance are pending for this follow-up; no new published package or completed persistent-signing CI run is claimed here. The publication and earlier device/runtime records below retain their original source, certificate and artifact identities.
+
 ## November 5 published 1.1.1
 
 [HeavenBench 1.1.1 is published](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.1.1) from commit [`7930b9eaae5feef8dfae7396e479d534848d721f`](https://github.com/dev-zetta/HeavenBench/commit/7930b9eaae5feef8dfae7396e479d534848d721f). All five fresh workflows and 8 package jobs pass for the three ordinary Linux CPU variants, Windows x64, macOS ARM64, Android ARM64 and separate experimental Linux FSR/Windows FSR-DLSS-adapter packages: [Experimental frame generation packages 41909881512](https://github.com/dev-zetta/HeavenBench/actions/runs/41909881512), [macOS Apple Silicon build and package 41909878875](https://github.com/dev-zetta/HeavenBench/actions/runs/41909878875), [Windows build and package 41909878881](https://github.com/dev-zetta/HeavenBench/actions/runs/41909878881), [Android APK 41909878815](https://github.com/dev-zetta/HeavenBench/actions/runs/41909878815), [Linux AppImage 41909878863](https://github.com/dev-zetta/HeavenBench/actions/runs/41909878863). This publication checkpoint supersedes the earlier preparation status below.

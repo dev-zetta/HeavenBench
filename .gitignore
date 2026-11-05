@@ -40,6 +40,12 @@ imgui.ini
 /android/local.properties
 *.iml
 
+# Private signing containers stay outside the checkout; public certificates are source.
+*.[jJ][kK][sS]
+*.[kK][eE][yY][sS][tT][oO][rR][eE]
+*.[pP]12
+*.[pP][fF][xX]
+
 # Local editor/agent state and instructions, including nested tool workspaces.
 .vscode/
 .idea/

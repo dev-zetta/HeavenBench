@@ -18,8 +18,17 @@ jobs:
   apk:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # Environment branch policy is the credential boundary, including when a
+    # branch changes this workflow. Only trusted main runs receive signing secrets.
+    environment:
+      name: ${{ github.repository == 'dev-zetta/HeavenBench' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && 'android-signing' || 'android-development' }}
+    env:
+      HEAVEN_ANDROID_PERSISTENT_SIGNING: ${{ github.repository == 'dev-zetta/HeavenBench' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Test Android signing contracts
+        run: python3 tests/android_signing_test.py && python3 tests/android_signing_workflow_test.py
 
       - uses: docker/setup-buildx-action@v4
 
@@ -28,10 +37,64 @@ jobs:
           ./scripts/build_docker.sh android --abi arm64-v8a --jobs 2 \
             --output-dir build/release/android
 
-      - name: Upload APK, matching source, checksums and provenance
+      - name: Apply pinned persistent Android signature
+        if: env.HEAVEN_ANDROID_PERSISTENT_SIGNING == 'true'
+        env:
+          HEAVEN_ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          HEAVEN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="${JAVA_HOME_17_X64:?Java 17 is required for APK signing}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          tools="${ANDROID_HOME:?Android SDK is required}/build-tools/35.0.0"
+          shopt -s nullglob
+          apks=(build/release/android/HeavenBench-*-android-arm64-v8a-debug.apk)
+          [[ ${#apks[@]} == 1 ]] || { echo 'Expected exactly one built APK' >&2; exit 1; }
+          (cd build/release/android && sha256sum --check "$(basename "${apks[0]}").sha256")
+          version="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          print(re.search(r'project\(HeavenBench VERSION ([0-9.]+)', Path('benchmark/CMakeLists.txt').read_text())[1])
+          PY
+          )"
+          version_code="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          print(re.search(r'\bversionCode\s+(\d+)', Path('android/app/build.gradle').read_text())[1])
+          PY
+          )"
+          python3 scripts/sign_android_apk.py --input "${apks[0]}" \
+            --output-dir build/release/android-signed \
+            --expected-certificate android/signing-certificate.sha256 \
+            --apksigner "$tools/apksigner" --zipalign "$tools/zipalign" --aapt "$tools/aapt" \
+            --expected-version-code "$version_code" --expected-version-name "$version" \
+            --source-manifest build/release/android/source-manifest.json
+          cp build/release/android/*-source.tar.gz build/release/android/*-source.tar.gz.sha256 \
+            build/release/android/source-manifest.json build/release/android/build-environment.txt \
+            build/release/android-signed/
+
+      - name: Upload persistently signed APK, matching source and public provenance
+        if: env.HEAVEN_ANDROID_PERSISTENT_SIGNING == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: HeavenBench-android-arm64-v8a-debug
+          path: |
+            build/release/android-signed/HeavenBench-*-android-arm64-v8a-debug.apk
+            build/release/android-signed/HeavenBench-*-android-arm64-v8a-debug.apk.sha256
+            build/release/android-signed/*-source.tar.gz
+            build/release/android-signed/*-source.tar.gz.sha256
+            build/release/android-signed/source-manifest.json
+            build/release/android-signed/build-environment.txt
+            build/release/android-signed/signing-certificate.json
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload development APK without distribution credentials
+        if: env.HEAVEN_ANDROID_PERSISTENT_SIGNING != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: HeavenBench-android-arm64-v8a-development
           path: |
             build/release/android/HeavenBench-*-android-arm64-v8a-debug.apk
             build/release/android/HeavenBench-*-android-arm64-v8a-debug.apk.sha256
