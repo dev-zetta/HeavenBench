@@ -31,6 +31,10 @@ The post-build helper requires an exact certificate-pin match, one signer, and s
 
 Re-signing must retain every non-signature ZIP entry and its uncompressed contents, including the manifest, native libraries, resources, assets and ordinary `META-INF` data. The public signing receipt must bind the original and signed APK hashes, certificate pin, signature verification and payload comparison to the workflow source commit, run ID and run attempt. It must contain no private keystore, password or secret environment dump. Preserve the receipt with the APK and its checksum. Local signing controls and package verification are separate from proving that a later fresh CI runner restores the same identity.
 
+## Verified CI checkpoint
+
+[Android CI run 41947953242](https://github.com/dev-zetta/HeavenBench/actions/runs/41947953242) passes from source `b0d5836b625af5953e74ff6925d0e30d3aac6030` on a fresh runner with the retained environment secrets. Independent downloaded-artifact verification confirms the committed single certificate pin, v2/v3 signatures, 16 KiB alignment, package/version identity, 158 payload hashes and 1,076 exact source entries. All 158 non-signature entry payloads also match the unchanged published 1.1.1 APK byte-for-byte. The public receipt binds this source, run and attempt to the signed APK SHA-256 `35ba714567ca67f4cac8eb0be161317bf0ee03a6a0bf159b6db78ebdda3f4928`. [Release readiness](RELEASE_READINESS.md#persistent-android-signing-follow-up) records the evidence and its scope; physical-device upgrade acceptance remains unverified.
+
 ## Migration from the published development APK
 
 Published HeavenBench 1.1.1 remains bound to source `7930b9eaae5feef8dfae7396e479d534848d721f`, Android versionCode `5` and certificate SHA-256 `e9ada48557382df3482a55a610bac47870dbff5cf78ca367a911c180653d85cf`. Its APK, release assets, version tag and recorded checksums remain unchanged. Its private development key was not retained and cannot be recovered from the APK.
