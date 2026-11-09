@@ -1,5 +1,9 @@
 # First-release readiness
 
+## November 9 published videos
+
+The user reported publishing the refreshed [HeavenBench 1.1.1 4K60 showcase (9:30)](https://youtu.be/ChFH_zX_q4U) and [narrated update since 1.0.0 (4:24)](https://youtu.be/f4JlHzZyq1w). YouTube metadata confirms both titles on Gabe "Zetta" Max's `@OpenArcanum` channel. The README now links both videos and uses the new showcase's published thumbnail; the [original 1.0.0 video](https://youtu.be/v-s5fNxlnVw) remains an archive. [Video production notes](VIDEO_PRODUCTION.md) record capture provenance, credits, technical checks and publication separately from the retained pre-publication receipts. Cinematic playback is offline rendered, archived UI/tablet inserts are labelled, and video publication does not qualify release packages or establish benchmark performance.
+
 ## Persistent Android signing follow-up
 
 The post-1.1.1 signing path retains one Android CI job and adds a conditional post-build signing step. Only an exact-repository `main` push or manual dispatch on `main` uses the `android-signing` environment restricted to that branch; other builds use the empty `android-development` environment and retain development artifacts. Persistent keystore/password secrets enter only the signing step, with a committed public certificate pin, strict failure on missing/mismatched credentials and no Docker/Gradle/cache exposure. The APK remains debuggable development software. [The signing guide](ANDROID_SIGNING.md) documents setup, private backup/recovery and the one-time migration.

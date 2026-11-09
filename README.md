@@ -12,11 +12,15 @@ The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is
 
 For future trusted Android CI builds, [persistent signing](docs/ANDROID_SIGNING.md) provides a retained update identity through a separate post-build step. Published 1.1.1 keeps its original development certificate and assets; moving from it to the new identity requires one final backup/uninstall/reinstall migration. The APK remains debuggable development software, and subsequent official updates require the same application ID and key with an incremented versionCode.
 
-## Watch the showcase
+## Watch the videos
 
-[![Watch the HeavenBench 1.0.0 feature showcase on YouTube](docs/images/heavenbench-showcase.png)](https://youtu.be/v-s5fNxlnVw)
+[![Watch the HeavenBench 1.1.1 feature showcase on YouTube](docs/images/heavenbench-1.1.1-showcase.jpg)](https://youtu.be/ChFH_zX_q4U)
 
-[Watch the 9-minute-30-second showcase in 4K on YouTube](https://youtu.be/v-s5fNxlnVw): rendering features, comparisons, benchmark reports, the microprofiler and Android controls. Cinematic sequences are offline rendered; their playback frame rate is not measured benchmark performance.
+[Watch the HeavenBench 1.1.1 showcase in 4K60 (9:30)](https://youtu.be/ChFH_zX_q4U): rendering features, comparisons, benchmark reports, the microprofiler and Android controls. Cinematic sequences are offline rendered; their playback frame rate is not measured benchmark performance. Retained UI, browser and tablet inserts are labelled `Archive 1.0.0`.
+
+[Watch the narrated update: what changed since 1.0.0 (4:24)](https://youtu.be/f4JlHzZyq1w): lighting changes, experimental frame generation, GPU selection, cache and loading improvements, rain optimization and OpenGL fixes.
+
+See the [video production notes](docs/VIDEO_PRODUCTION.md) for source bindings, credits and the editing workflow. The [original 1.0.0 showcase](https://youtu.be/v-s5fNxlnVw) remains available as an archive.
 
 ## Features
 
