@@ -13,6 +13,8 @@ The user reported uploading both videos to YouTube on November 9, 2026. YouTube'
 
 The README uses the showcase's published YouTube thumbnail, retained at `docs/images/heavenbench-1.1.1-showcase.jpg` from `https://i.ytimg.com/vi/ChFH_zX_q4U/maxresdefault.jpg`. The original 1.0.0 thumbnail remains unchanged. YouTube transcodes are separate from the hash-bound local exports below; metadata verification does not establish byte identity with those exports.
 
+The README hero image is now `docs/images/heavenbench-1.1.1-village.png` (SHA-256 `2df7e69366fc0b060ed1daeb22e05bf20b7b2a1aa7705f6e1d2f74514038242a`), replacing the first-release screenshot. It is frame 300 of the released 1.1.1 `U01-village-12` master (SHA-256 `c9ee2167503b0a9bfe109087694c9bebcca8442d91d34f465ee699e03653c080`), captured with Intel Vulkan, Balanced System and original textures. FFmpeg extracts the actual rendered frame, downsamples 3840×2160 to 1920×1080 with Lanczos and converts limited Rec.709 to full-range sRGB for the web PNG. The capture receipt and frame-specific configuration/metadata remain in the versioned production directory; the old image is retained for historical references.
+
 ## Source and capture
 
 All refreshed cinematic footage uses the ordinary released Linux portable 1.1.1 AppImage, SHA-256 `5781cf0f74974fc2fbed55af943811d9e1e3e377a25fc06ed9efebeb92942dc5`, bound to release source `7930b9eaae5feef8dfae7396e479d534848d721f`. The extracted executable is SHA-256 `1b10975c1b941a5023224624a8d0113bdb01c98a734bd1a9a05605c3990eacdf`. Current development sources are not substituted for that package. Original Heaven assets remain external and retain their original ownership and terms.

@@ -2,6 +2,8 @@
 
 ## November 9 published videos
 
+Both video links are also published in the [1.1.1 release notes](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.1.1). Readback matches the prepared notes, with all 24 assets and the release identity unchanged. The README hero image now comes from the released 1.1.1 village capture using Balanced System and original textures; [image provenance](VIDEO_PRODUCTION.md#published-videos) records the source frame, settings and hashes.
+
 The user reported publishing the refreshed [HeavenBench 1.1.1 4K60 showcase (9:30)](https://youtu.be/ChFH_zX_q4U) and [narrated update since 1.0.0 (4:24)](https://youtu.be/f4JlHzZyq1w). YouTube metadata confirms both titles on Gabe "Zetta" Max's `@OpenArcanum` channel. The README now links both videos and uses the new showcase's published thumbnail; the [original 1.0.0 video](https://youtu.be/v-s5fNxlnVw) remains an archive. [Video production notes](VIDEO_PRODUCTION.md) record capture provenance, credits, technical checks and publication separately from the retained pre-publication receipts. Cinematic playback is offline rendered, archived UI/tablet inserts are labelled, and video publication does not qualify release packages or establish benchmark performance.
 
 ## Persistent Android signing follow-up

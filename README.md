@@ -2,9 +2,9 @@
 
 **HeavenBench** is a CPU and GPU benchmark for Linux, Windows, macOS on Apple Silicon and Android. Take a tour through the floating islands and medieval village of the original Unigine Heaven scene, compare hardware performance, or explore the world at your own pace.
 
-![HeavenBench showing the dragon plaza, village rooftops and airship](docs/images/heavenbench-screenshot.png)
+![HeavenBench 1.1.1 showing the dragon plaza, village rooftops and airship](docs/images/heavenbench-1.1.1-village.png)
 
-*Captured in HeavenBench on Linux with Vulkan, Visual Ultra and the enhanced 4K texture pack enabled, at 1920×1080.*
+*Captured in released HeavenBench 1.1.1 on Linux with Intel Vulkan, Balanced System and original textures, at 3840×2160; shown at 1920×1080.*
 
 **Downloads:** [HeavenBench 1.1.1 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.1.1), with separate experimental Linux FSR 3.1 and Windows FSR/DLSS-adapter packages. Generation remains off by default. The Android APK is development-signed with a different certificate from published 1.1.0 and cannot update that installation in place; back up imported assets and user data before uninstalling and reinstalling. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
