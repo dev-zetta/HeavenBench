@@ -31,9 +31,9 @@ The normal asset location is an `assets/` directory containing compatible ZIP pa
 | macOS | On an Apple Silicon Mac with macOS 15+, extract the ZIP, place `assets.zip` beside `HeavenBench.app`, then open the app. See [macOS launch instructions](MACOS.md#run-the-app) for the signing prompt. |
 | Android | Install the APK, import `assets.zip` through the file picker, then choose **Run benchmark** or **Explore**. |
 
-**Android 1.1.1 upgrade:** the published 1.1.1 development APK has a different signing certificate from published 1.1.0. Back up imported assets and user data before uninstalling 1.1.0 and installing 1.1.1; an in-place update from that release is not supported. Other installed builds require a matching signing certificate for an in-place update.
+**Android 1.2.0 upgrade:** the official APK uses the retained signing certificate and versionCode **6**. Published 1.1.1 uses a different certificate and cannot be updated in place. Back up imported assets, configuration and reports before uninstalling that app and installing 1.2.0; uninstalling removes app-specific storage.
 
-Future APKs from the protected persistent-signing path introduce a new identity after published 1.1.1. That first migration also requires backing up app data, uninstalling the old app and reinstalling; published 1.1.1 is unchanged. Later official updates can install in place with the same application ID and retained signing key plus an incremented versionCode. Pull-request, other-branch and independently signed local development APKs do not share that update guarantee. See [Android signing and migration](ANDROID_SIGNING.md).
+Builds already signed with the retained certificate can update in place when the application ID matches and versionCode increases. Later official updates use this identity; pull-request, other-branch and independently signed local APKs do not share that guarantee. Published 1.1.1 and its historical records remain unchanged. See [Android signing and migration](ANDROID_SIGNING.md).
 
 On Linux systems without FUSE, launch the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1 ./HeavenBench-*.AppImage`. Linux packages use host graphics drivers and the ALSA audio library; see [platform package requirements](BUILDING.md#platform-packages) if startup fails.
 
@@ -85,8 +85,8 @@ Completed runs automatically save matched JSON and self-contained HTML reports u
 Desktop launchers accept `HEAVEN_USER_DIR` to override the user directory. An unpackaged development binary without that override saves reports beside its executable. Configuration is stored as `config.json`; packages accept `--config FILE` and ordinary renderer flags. `HEAVEN_DATA` selects assets in the desktop launchers, and saved configuration can retain its own data path.
 
 ```text
-results/HeavenBench_1.1.1_YYYYMMDD_HHMMSS_mmm.json
-results/HeavenBench_1.1.1_YYYYMMDD_HHMMSS_mmm.html
+results/HeavenBench_1.2.0_YYYYMMDD_HHMMSS_mmm.json
+results/HeavenBench_1.2.0_YYYYMMDD_HHMMSS_mmm.html
 ```
 
 Results use schema version 2 and score version 3. Compare scores only when application and score versions, workloads and effective settings match. Rendering updates can change the GPU workload even when the preset name stays the same. [Development and measurement](DEVELOPMENT.md#benchmark-measurement-and-report-format) describes the score calculations and machine-readable fields.
