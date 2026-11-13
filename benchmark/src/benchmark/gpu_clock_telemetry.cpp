@@ -66,12 +66,15 @@ struct GpuClockTelemetry::Impl {
     GpuClockDiscovery discovery;
     std::mutex mutex;
     std::condition_variable_any wake;
+#if defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
     std::jthread worker;
+#endif
 
     Impl(Recorder& target, GpuClockDiscovery sources) : recorder(target), discovery(std::move(sources)) {
         recorder.set_metadata("gpu_clock_telemetry_pci", discovery.pci_address);
         recorder.set_metadata("gpu_clock_telemetry_reason", discovery.reason);
         if (discovery.sources.empty()) return;
+#if defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
         worker = std::jthread([this](const std::stop_token& stop) {
             // Cache names before polling so steady-state callbacks allocate no strings.
             struct Names { std::string actual, requested, minimum, maximum, available; };
@@ -106,6 +109,10 @@ struct GpuClockTelemetry::Impl {
                 wake.wait_for(lock, stop, std::chrono::seconds(1), [] { return false; });
             }
         });
+#else
+        recorder.set_metadata("gpu_clock_telemetry_reason",
+            "Read-only xe clock telemetry unavailable: the C++ standard library does not provide std::jthread/stop-token support");
+#endif
     }
 };
 

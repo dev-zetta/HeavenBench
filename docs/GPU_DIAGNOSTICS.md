@@ -36,6 +36,8 @@ Compiler-cache limits apply to the engine's diagnostic lifetime, including pipel
 
 ## Intel clocks
 
+The optional sampler also checks standard-library support for `std::jthread` and stop tokens. Toolchains without that capability, including the pinned Android NDK, compile without the worker and report an explicit unavailable reason if clock sources are discovered. This does not fabricate clock readings or disable the independent GPU query/compiler diagnostics.
+
 On Linux, an explicitly requested diagnostic session can sample read-only `xe` frequency files once per second on a worker. Discovery verifies the renderer's complete PCI address and vendor/device identity before looking for tile/GT sources. Missing files, malformed values and other drivers remain unavailable; an idle value of zero is retained as a valid observation. The capture records actual/requested/minimum/maximum MHz separately for each source.
 
 These samples use host observation timestamps and do not align GPU and CPU clocks. Frequency limits are configuration, not measured frequency or power consumption. The sampler makes no clock, power, driver or thermal-setting changes and performs no main-loop file reads. Normal launches do not create this worker.

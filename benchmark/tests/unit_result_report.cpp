@@ -354,8 +354,8 @@ bool unit_result_report_variable_rate_shading() {
         const auto active_report = heaven::build_benchmark_report(
             result, config, {"test", "test"}, std::chrono::system_clock::time_point{});
         const auto active_json = Json::parse(active_report.json);
-        ok = check(active_json.at("variable_rate_shading").at("requested") == heaven::variable_rate_shading_mode_id(mode) &&
-                       active_json.at("variable_rate_shading").at("effective") == heaven::variable_rate_shading_mode_id(mode) &&
+        ok = check(active_json.at("variable_rate_shading").at("requested").get_ref<const std::string&>() == heaven::variable_rate_shading_mode_id(mode) &&
+                       active_json.at("variable_rate_shading").at("effective").get_ref<const std::string&>() == heaven::variable_rate_shading_mode_id(mode) &&
                        active_json.at("scores").at("overall") == result.performance.scores.overall,
                    "effective VRS rate was lost or made an ordinary run unscored") && ok;
     }

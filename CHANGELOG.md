@@ -20,6 +20,8 @@ A matched full-Heaven Intel Vulkan/X11 view measures 327.928→329.834 ms mean a
 
 Register-pressure optimization remains open. All rejected November 12 shader rewrites stay excluded; smaller compiler output alone did not improve their measured workload, and this entry makes no general scene-FPS gain claim.
 
+The first release-candidate CI found two project portability issues: the pinned Android standard library lacks `std::jthread`, and MSVC rejects ambiguous JSON/string-view comparisons in the VRS report test. The sampler now has an explicit unavailable path when the library capability is absent, and the report test extracts its string type without weakening assertions. Real NDK compilation, unavailable-path controls, repeated 50/43 host tests and focused analysis pass; supported Linux renderer and smoke binaries remain byte-exact. Fresh CI and package acceptance still gate publication.
+
 ## 1.1.1 — 2026-11-05
 
 Enforce concrete Linux Vulkan GPU requests through Mesa device isolation and actual device/PCI identity checks. Preserve default/environment preferences and the OpenGL fallback with explicit verification limits. Distinguish original source-surface ordinals in neutral tessellation cache keys, advance ZIP semantics to 37 with conservative v34 loose import, and verify logical EOF/CRC before accepting cache or asset-pack manifest bytes.
