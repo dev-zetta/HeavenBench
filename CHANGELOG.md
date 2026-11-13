@@ -20,7 +20,7 @@ A matched full-Heaven Intel Vulkan/X11 view measures 327.928→329.834 ms mean a
 
 Register-pressure optimization remains open. All rejected November 12 shader rewrites stay excluded; smaller compiler output alone did not improve their measured workload, and this entry makes no general scene-FPS gain claim.
 
-The first release-candidate CI found two project portability issues: the pinned Android standard library lacks `std::jthread`, and MSVC rejects ambiguous JSON/string-view comparisons in the VRS report test. The sampler now has an explicit unavailable path when the library capability is absent, and the report test extracts its string type without weakening assertions. Real NDK compilation, unavailable-path controls, repeated 50/43 host tests and focused analysis pass; supported Linux renderer and smoke binaries remain byte-exact. Fresh CI and package acceptance still gate publication.
+The first release-candidate CI found two project portability issues: the pinned Android standard library lacks `std::jthread`, and MSVC rejects ambiguous JSON/string-view comparisons in the VRS report test. The sampler now has an explicit unavailable path when the library capability is absent, and the report test extracts its string type without weakening assertions. Real NDK compilation, unavailable-path controls, repeated 50/43 host tests and focused analysis pass; supported Linux renderer and smoke binaries remain byte-exact. Fresh CI and package acceptance still gate publication. Make synthetic clock paths portable on Windows and staging-control failure messages deterministic without changing renderer behavior.
 
 ## 1.1.1 — 2026-11-05
 

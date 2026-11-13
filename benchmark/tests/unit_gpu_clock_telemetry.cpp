@@ -38,7 +38,12 @@ bool gpu_clock_telemetry_test() {
         std::filesystem::path path;
         ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
     } cleanup{root};
+#ifdef _WIN32
+    // Windows cannot create Linux PCI BDF names containing colons.
+    const auto adapter = root / "adapter";
+#else
     const auto adapter = root / "0000:03:00.0";
+#endif
     const auto clocks = adapter / "tile0/gt1/freq0";
     std::filesystem::create_directories(clocks);
     std::ofstream(adapter / "vendor") << "0x8086\n";
@@ -53,9 +58,17 @@ bool gpu_clock_telemetry_test() {
         if (!ok) std::printf("[unit_gpu_clock_telemetry] %s\n", message);
         return ok;
     };
+#ifdef _WIN32
+    if (!check(found.pci_address == "0000:03:00.0" && found.sources.empty() &&
+            found.reason == "PCI sysfs identity differs from the active rendering adapter or is unreadable",
+            "unavailable Linux BDF path lost its PCI identity or invented clock sources")) return false;
+    const GpuClockSource source{clocks, "tile0/gt1"};
+#else
     if (!check(found.pci_address == "0000:03:00.0" && found.sources.size() == 1 &&
             found.sources.front().label == "tile0/gt1", "sparse xe topology discovery failed")) return false;
-    const auto sample = read_xe_clocks(found.sources.front());
+    const auto& source = found.sources.front();
+#endif
+    const auto sample = read_xe_clocks(source);
     if (!check(sample.actual_mhz == 0 && sample.requested_mhz == 400 &&
             sample.minimum_mhz == 1200 && sample.maximum_mhz == 2800,
             "clock units changed or idle zero was reported unavailable")) return false;
@@ -63,7 +76,7 @@ bool gpu_clock_telemetry_test() {
     std::ofstream(clocks / "cur_freq") << "-1\n";
     std::ofstream(clocks / "min_freq") << "4294967296\n";
     std::filesystem::remove(clocks / "max_freq");
-    const auto unavailable = read_xe_clocks(found.sources.front());
+    const auto unavailable = read_xe_clocks(source);
     if (!check(!unavailable.actual_mhz && !unavailable.requested_mhz &&
             !unavailable.minimum_mhz && !unavailable.maximum_mhz,
             "malformed or missing sysfs values became invented measurements")) return false;

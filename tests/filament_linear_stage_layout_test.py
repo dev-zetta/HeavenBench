@@ -35,7 +35,12 @@ template<class H> H token(unsigned index=0) {
     if constexpr(std::is_pointer_v<H>) return reinterpret_cast<H>(&values[index]);
     else return static_cast<H>(reinterpret_cast<uintptr_t>(&values[index]));
 }
-void require(bool valid,const char* reason) { if(!valid) throw std::runtime_error(reason); }
+void require(bool valid,const char* reason) {
+    if(valid) return;
+    std::fprintf(stderr,"FAIL: %s\n",reason);
+    std::fflush(stderr);
+    throw std::runtime_error(reason);
+}
 std::vector<std::string> operations;
 unsigned barriers=0,blits=0,stage_transitions=0;
 VkImageTiling active_tiling=VK_IMAGE_TILING_LINEAR;
@@ -312,7 +317,7 @@ def run_layout_contract(cxx, vulkan_include, work, filament_source=None):
         # fake-device rejection terminates there and the fixture's SIGABRT handler returns87.
         expected_exit = 87 if name == "optimal-uses-host-barrier" else (1 if failure else 0)
         if executed.returncode != expected_exit or (failure and failure not in executed.stderr):
-            raise RuntimeError(f"{name} failed its specific oracle: {executed.stdout}{executed.stderr}")
+            raise RuntimeError(f"{name} failed its specific oracle (exit={executed.returncode}, expected={expected_exit}, reason={failure!r}): {executed.stdout}{executed.stderr}")
         observations.append({"variant": name, "compile_argv": command,
                              "exit_code": executed.returncode, "expected_exit": expected_exit,
                              "expected_failure": failure})
