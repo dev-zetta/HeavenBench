@@ -67,7 +67,7 @@ const filament::Texture* upload_png_texture(filament::Engine& engine,
         std::to_underlying(filament::Texture::Usage::GEN_MIPMAPPABLE));
     const filament::Texture::Usage usage = mipmaps
         ? mipmapped_usage : filament::Texture::Usage::DEFAULT;
-    const filament::Texture* tex = filament::Texture::Builder()
+    filament::Texture* tex = filament::Texture::Builder()
         .width(image->width)
         .height(image->height)
         .levels(levels)

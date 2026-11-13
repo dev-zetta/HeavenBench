@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <span>
+#include <string>
 #include <unordered_set>
 
 namespace heaven::smoke {
@@ -59,25 +60,44 @@ CaseResult run_microprofiler_case(const CaseContext& ctx) {
     for (uint64_t attempt = 57; attempt <= 64; ++attempt) frame(attempt);
     const auto snapshot = recorder.snapshot();
     bool valid = accepted > 0 && !snapshot.spans.empty() && !snapshot.gpu_samples.empty();
+    const auto check = [&](bool condition, const char* reason) {
+        if (!condition) std::printf("[smoke_microprofiler] FAIL: %s\n", reason);
+        valid &= condition;
+    };
+    check(valid, "initial capture has accepted frames, CPU spans and GPU samples");
     size_t available = 0, unavailable = 0;
     bool submitted_instances = false;
     std::unordered_set<uint64_t> views;
     for (const auto& sample : snapshot.gpu_samples) {
-        valid &= sample.context.capture_id == recorder.session_id() &&
+        const bool correlated = sample.context.capture_id == recorder.session_id() &&
             sample.context.attempt_id > 0 && sample.context.attempt_id <= 56 &&
             sample.context.renderer_id != 0 && sample.context.filament_frame_id != 0 &&
             sample.context.view_id != 0 && sample.pass_id != 0;
+        if (!correlated) {
+            std::printf("[smoke_microprofiler] invalid correlation: capture=%llu expected=%llu attempt=%llu renderer=%llu frame=%llu view=%llu pass=%llu\n",
+                static_cast<unsigned long long>(sample.context.capture_id),
+                static_cast<unsigned long long>(recorder.session_id()),
+                static_cast<unsigned long long>(sample.context.attempt_id),
+                static_cast<unsigned long long>(sample.context.renderer_id),
+                static_cast<unsigned long long>(sample.context.filament_frame_id),
+                static_cast<unsigned long long>(sample.context.view_id),
+                static_cast<unsigned long long>(sample.pass_id));
+        }
+        check(correlated, "GPU sample correlation");
         views.insert(sample.context.view_id);
         if (sample.status == profile::SampleStatus::Available) {
             ++available;
-            valid &= sample.source == profile::TimerSource::HardwareTimestamp && sample.end_ns >= sample.begin_ns;
+            check(sample.source == profile::TimerSource::HardwareTimestamp && sample.end_ns >= sample.begin_ns,
+                "available GPU sample has a hardware source and ordered timestamps");
             submitted_instances |= sample.command_count > 0 && sample.primitive_count > 0 &&
                 sample.draw_instance_invocations > 0;
         } else ++unavailable;
     }
-    valid &= views.size() > 1;
-    valid &= capabilities.hardware_timestamps ? available > 0 && submitted_instances : unavailable > 0;
-    valid &= profile::parse_snapshot(profile::snapshot_json(snapshot)).has_value();
+    check(views.size() > 1, "multiple views are correlated");
+    check(capabilities.hardware_timestamps ? available > 0 && submitted_instances : unavailable > 0,
+        "timer capability agrees with sample availability and submitted workload");
+    check(profile::parse_snapshot(profile::snapshot_json(snapshot)).has_value(),
+        "initial snapshot JSON round-trip");
     if (const char* output = std::getenv("HEAVEN_SMOKE_MICROPROFILE_OUTPUT")) {
         profile::ReportWriter writer;
         valid &= writer.submit(snapshot, std::filesystem::path(output));
@@ -85,16 +105,33 @@ CaseResult run_microprofiler_case(const CaseContext& ctx) {
         valid &= writer.status().state == profile::ReportState::Complete;
     }
     // A fresh capture rejects outstanding callbacks from the old generation.
+    const auto accepted_before_restart = accepted;
     recorder.begin_capture();
     for (uint64_t attempt = 10001; attempt <= 10016; ++attempt) frame(attempt);
     valid &= backend.reconfigure_for_reload(ctx.config).has_value();
     render.engine->flushAndWait();
     for (uint64_t attempt = 10017; attempt <= 10024; ++attempt) frame(attempt);
+    // Drain this fixture's accepted work while the new capture is still active.
+    // Frontend acceptance does not mean the driver has published even Pending
+    // samples yet. The ordinary recording path continues to poll asynchronously.
+    render.engine->flushAndWait();
     recorder.set_active(false);
     const auto next = recorder.snapshot();
-    valid &= !next.gpu_samples.empty() && std::ranges::all_of(next.gpu_samples, [&](const auto& sample) {
+    const bool restart_valid = !next.gpu_samples.empty() && std::ranges::all_of(next.gpu_samples, [&](const auto& sample) {
         return sample.context.capture_id == recorder.session_id() && sample.context.attempt_id >= 10001;
     });
+    check(restart_valid, "restarted capture has GPU samples exclusively from the new generation");
+    std::printf("[smoke_microprofiler] restarted accepted=%llu CPU=%zu GPU=%zu capture=%llu\n",
+        static_cast<unsigned long long>(accepted - accepted_before_restart), next.spans.size(),
+        next.gpu_samples.size(), static_cast<unsigned long long>(recorder.session_id()));
+    if (const char* output = std::getenv("HEAVEN_SMOKE_MICROPROFILE_OUTPUT")) {
+        profile::ReportWriter writer;
+        check(writer.submit(next, std::filesystem::path(std::string(output) + ".next")),
+            "restarted snapshot export submission");
+        writer.wait();
+        check(writer.status().state == profile::ReportState::Complete,
+            "restarted snapshot export completion");
+    }
     std::printf("[smoke_microprofiler] accepted=%llu CPU=%zu GPU=%zu available=%zu unavailable=%zu views=%zu instances=%s hardware=%s reason=%s: %s\n",
         static_cast<unsigned long long>(accepted), snapshot.spans.size(), snapshot.gpu_samples.size(),
         available, unavailable, views.size(), submitted_instances ? "yes" : "no",

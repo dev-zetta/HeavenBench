@@ -1,0 +1,25 @@
+#version 460
+#extension GL_EXT_integer_dot_product : require
+layout(local_size_x=16, local_size_y=16) in;
+layout(set=0, binding=0, std430) readonly buffer InputA { uint a[]; };
+layout(set=0, binding=1, std430) readonly buffer InputB { uint b[]; };
+layout(set=0, binding=2, std430) writeonly buffer OutputC { int c[]; };
+const uint size = 256;
+shared uint tile_a[16][4];
+shared uint tile_b[16][4];
+void main() {
+    uint x=gl_LocalInvocationID.x, y=gl_LocalInvocationID.y;
+    uint row=gl_WorkGroupID.y*16+y, col=gl_WorkGroupID.x*16+x;
+    uint base=gl_WorkGroupID.z*size*size;
+    int sum=0;
+    for (uint k=0; k<size; k+=16) {
+        if (x<4) {
+            tile_a[y][x]=a[(base+row*size+k)/4+x];
+            tile_b[y][x]=b[(base+(gl_WorkGroupID.x*16+y)*size+k)/4+x];
+        }
+        barrier();
+        for (uint t=0; t<4; ++t) sum+=dotPacked4x8EXT(int(tile_a[y][t]), int(tile_b[x][t]));
+        barrier();
+    }
+    c[base+row*size+col]=sum;
+}

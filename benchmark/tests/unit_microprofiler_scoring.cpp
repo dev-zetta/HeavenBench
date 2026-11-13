@@ -71,6 +71,21 @@ bool microprofiler_scoring() {
     system.tick(1.0f, camera);
     if (!check(system.status().result.diagnostic, "recording at tour start was not sticky")) return false;
     system.dismiss_result();
+    system.set_gpu_diagnostics_requested(true);
+    if (!system.request_start()) return false;
+    system.set_gpu_diagnostics_requested(false);
+    system.tick(1.0f, camera);
+    if (!check(system.status().result.diagnostic &&
+               system.status().result.diagnostic_reason == "GPU diagnostics requested" &&
+               system.status().result.performance.scores.overall == 0.0,
+               "diagnostic pipeline creation request must suppress score without recording")) return false;
+    system.dismiss_result();
+    if (!system.request_start()) return false;
+    system.set_gpu_diagnostics_requested(true);
+    system.set_gpu_diagnostics_requested(false);
+    system.tick(1.0f, camera);
+    if (!check(system.status().result.diagnostic, "mid-tour GPU request was not sticky")) return false;
+    system.dismiss_result();
     if (!system.request_start()) return false;
     system.set_microprofile_recording(true);
     system.cancel();

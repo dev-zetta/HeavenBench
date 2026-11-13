@@ -80,8 +80,13 @@ struct CaseContext {
 // Production loading UI readback: progress fill and stage text remain visible.
 [[nodiscard]] CaseResult run_loading_progress_case(const CaseContext& ctx);
 [[nodiscard]] CaseResult run_microprofiler_case(const CaseContext& ctx);
+[[nodiscard]] CaseResult run_gpu_diagnostics_case(const CaseContext& ctx);
 // Separately opted-in actual FSR SDK/UI/toggle/resize/reload lifecycle.
 [[nodiscard]] CaseResult run_frame_generation_case(const CaseContext& ctx);
+// Native fragment-coordinate raster oracle, full-rate masked/unlit and Off-return controls.
+[[nodiscard]] CaseResult run_variable_rate_shading_case(const CaseContext& ctx);
+// FLOAT-to-HALF cubemap staging through unlit RGBA8 native pixel readback.
+[[nodiscard]] CaseResult run_linear_staging_case(const CaseContext& ctx);
 
 // Offscreen readback of the actual HDR encode material. Checks numerical PQ,
 // color conversion, premultiplied UI composition and transparent-layer clearing.

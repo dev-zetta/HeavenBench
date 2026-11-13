@@ -73,10 +73,11 @@ bool BenchmarkSystem::request_start() {
     result_      = RunResult{};
     has_result_  = false;
     diagnostic_microprofile_ = microprofile_recording_;
+    diagnostic_gpu_diagnostics_ = gpu_diagnostics_requested_;
     diagnostic_frame_generation_ = frame_generation_requested_;
     diagnostic_presentation_trace_ = presentation_trace_requested_;
     diagnostic_input_response_ = input_response_requested_;
-    diagnostic_ = diagnostic_microprofile_ || diagnostic_frame_generation_ ||
+    diagnostic_ = diagnostic_microprofile_ || diagnostic_gpu_diagnostics_ || diagnostic_frame_generation_ ||
         diagnostic_presentation_trace_ || diagnostic_input_response_;
     state_       = BenchmarkState::Running;
     return true;
@@ -179,7 +180,12 @@ void BenchmarkSystem::enter_complete() {
     result_.diagnostic = diagnostic_;
     result_.frame_generation_requested = diagnostic_frame_generation_;
     result_.frame_generation = frame_generation_status_;
+    result_.variable_rate_shading = variable_rate_shading_status_;
     if (diagnostic_microprofile_) result_.diagnostic_reason = "microprofiler recording";
+    if (diagnostic_gpu_diagnostics_) {
+        if (!result_.diagnostic_reason.empty()) result_.diagnostic_reason += "; ";
+        result_.diagnostic_reason += "GPU diagnostics requested";
+    }
     if (diagnostic_frame_generation_) {
         if (!result_.diagnostic_reason.empty()) result_.diagnostic_reason += "; ";
         result_.diagnostic_reason += "frame generation requested";

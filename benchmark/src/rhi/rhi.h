@@ -174,6 +174,11 @@ struct TonemapParams {
 // main-thread submission stages; gpu_ms is Filament's completed whole-frame
 // timestamp and can lag the submitted frame by a few frames. A negative GPU
 // value means the driver has not completed a timestamped frame yet.
+struct GpuDiagnosticsOptions {
+    bool enabled = false;
+    bool shader_internal_representations = false;
+};
+
 struct TraceCapabilities {
     bool hardware_timestamps = false;
     bool cpu_clock_calibrated = false;
@@ -181,6 +186,16 @@ struct TraceCapabilities {
     std::string reason = "GPU timestamp capabilities have not been reported yet";
     unsigned timestamp_valid_bits = 0;
     double timestamp_period_ns = 0;
+    bool diagnostics_requested = false;
+    bool pipeline_statistics_supported = false;
+    bool pipeline_statistics_enabled = false;
+    bool executable_properties_supported = false;
+    bool executable_info_supported = false;
+    bool executable_info_enabled = false;
+    bool internal_representations_requested = false;
+    bool internal_representations_enabled = false;
+    std::string pipeline_statistics_reason = "GPU invocation diagnostics were not requested";
+    std::string executable_info_reason = "GPU compiler diagnostics were not requested";
 };
 
 namespace profile { class Recorder; struct Context; }
@@ -550,6 +565,10 @@ public:
                                         const QualityKnobs& /*quality*/) {}
 
     virtual void request_frame_generation(FrameGenerationMode /*mode*/) {}
+    virtual void set_variable_rate_shading(VariableRateShadingMode /*mode*/) {}
+    [[nodiscard]] virtual VariableRateShadingStatus variable_rate_shading_status() const {
+        return {};
+    }
     // Optional latency-provider ticket and sleep precede input sampling. The
     // same ticket follows simulation and submission; rejected attempts retire it.
     virtual void begin_application_frame(uint64_t /*application_frame*/) {}
@@ -757,7 +776,8 @@ struct WindowHandle {
 
 //Create a rendering backend for the specified API.
 [[nodiscard]] Result<std::unique_ptr<IRhiBackend>> create_backend(
-    GraphicsApi api, WindowHandle& window, const AppConfig& config);
+    GraphicsApi api, WindowHandle& window, const AppConfig& config,
+    GpuDiagnosticsOptions diagnostics = {});
 
 } // namespace heaven
 

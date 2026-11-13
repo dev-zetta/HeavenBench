@@ -9,6 +9,7 @@
 
 #include "engine/number_parse.h"
 #include "engine/frame_generation.h"
+#include "engine/variable_rate_shading.h"
 #include "render_tuning.h"
 
 #include <glm/glm.hpp>
@@ -1740,6 +1741,9 @@ struct AppConfig {
     // Requested provider only. Runtime capability decides effective operation;
     // any request during a benchmark tour makes that tour diagnostic/unscored.
     FrameGenerationMode frame_generation = FrameGenerationMode::Off;
+    // Coarse fragment shading is an explicit quality/workload choice. Runtime
+    // capability determines its effective rate; Off retains full-rate shading.
+    VariableRateShadingMode variable_rate_shading = VariableRateShadingMode::Off;
     // Android preview submission cap only; scored runs and captures remain
     // uncapped. Zero disables it. Desktop retains these config fields but does
     // not apply preview pacing or an Android Surface render scale.

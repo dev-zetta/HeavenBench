@@ -84,7 +84,7 @@ const std::vector<SettingId>& all_setting_ids() {
         SettingId::Width, SettingId::Height, SettingId::Fullscreen, SettingId::Hdr,
         SettingId::HdrPeakNits, SettingId::HdrPaperWhiteNits, SettingId::ClothSimHz,
         // Quality
-        SettingId::TextureQuality, SettingId::FeatureGrass, SettingId::FeatureParticles,
+        SettingId::TextureQuality, SettingId::VariableRateShading, SettingId::FeatureGrass, SettingId::FeatureParticles,
         SettingId::FeatureGodRays, SettingId::FeatureVolumetricFog,
         SettingId::FeatureClouds, SettingId::FeatureLensFlares,
         SettingId::FeatureVolumetricClouds, SettingId::FeatureSsgi,
@@ -133,6 +133,9 @@ SettingValue gen_setting_value() {
                 *rc::gen::inRange(0, 2))};
         case 6:
             return SettingValue{static_cast<heaven::TextureQuality>(
+                *rc::gen::inRange(0, 3))};
+        case 7:
+            return SettingValue{static_cast<heaven::VariableRateShadingMode>(
                 *rc::gen::inRange(0, 3))};
         default:
             return SettingValue{*rc::gen::arbitrary<std::string>()};

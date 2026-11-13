@@ -56,6 +56,7 @@ struct SDL_Window;
 // because ~FilamentBackend() is defined in the.cpp where it is complete.
 namespace filagui { class ImGuiHelper; }
 namespace filament { class FrameHistoryStream; }
+namespace filament::backend { class VulkanPlatform; }
 
 namespace heaven {
 
@@ -76,13 +77,15 @@ class ProfileBridge;
 class FrameGenerationRuntime;
 class FrameGenerationPlatform;
 class DlssPlatform;
+class VariableRateShadingController;
 #ifdef __APPLE__
 class MacOsSurface;
 #endif
 
 class FilamentBackend final : public IRhiBackend, public IResourceProvider {
 public:
-    explicit FilamentBackend(SDL_Window* window, const AppConfig& config);
+    explicit FilamentBackend(SDL_Window* window, const AppConfig& config,
+            GpuDiagnosticsOptions diagnostics = {});
     ~FilamentBackend() override;
     void set_trace_sink(profile::Recorder* recorder) override;
     void set_trace_frame_context(const profile::Context& context) override;
@@ -188,6 +191,8 @@ public:
     void end_application_simulation() override;
     void native_window_message(uint32_t message) override;
     [[nodiscard]] FrameGenerationStatus frame_generation_status() const override;
+    void set_variable_rate_shading(VariableRateShadingMode mode) override;
+    [[nodiscard]] VariableRateShadingStatus variable_rate_shading_status() const override;
 #if defined(HEAVEN_FG_FAULT_INJECTION) && HEAVEN_FG_FAULT_INJECTION
     [[nodiscard]] bool debug_frame_generation_out_of_date_once();
     [[nodiscard]] bool debug_frame_generation_work_failure_once();
@@ -308,6 +313,9 @@ public:
 
 private:
     std::unique_ptr<ProfileBridge> profile_bridge_;
+    uint64_t diagnostics_capture_id_ = 0;
+    std::unique_ptr<VariableRateShadingController> variable_rate_shading_;
+    std::unique_ptr<filament::backend::VulkanPlatform> ordinary_vulkan_platform_;
     // Consume newly completed Filament FrameInfo entries exactly once. The
     // latest duration from each drain is stored for the live performance log;
     // benchmark samples are accumulated independently.

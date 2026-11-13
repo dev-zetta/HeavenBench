@@ -121,6 +121,7 @@ using heaven::SettingValue;
     cfg.cloth_sim_hz         = gen_finite_float();
 
     // ── Quality — feature toggles ──
+    cfg.variable_rate_shading = static_cast<heaven::VariableRateShadingMode>(*rc::gen::inRange(0, 3));
     cfg.features.grass               = *rc::gen::arbitrary<bool>();
     cfg.features.particles           = *rc::gen::arbitrary<bool>();
     cfg.features.god_rays            = *rc::gen::arbitrary<bool>();
@@ -219,6 +220,7 @@ using heaven::SettingValue;
 
         // ── Quality — feature toggles ──
         case SettingId::TextureQuality:           return cfg.texture_quality;
+        case SettingId::VariableRateShading:      return cfg.variable_rate_shading;
         case SettingId::FeatureGrass:             return cfg.features.grass;
         case SettingId::FeatureParticles:         return cfg.features.particles;
         case SettingId::FeatureGodRays:           return cfg.features.god_rays;

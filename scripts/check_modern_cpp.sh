@@ -114,6 +114,7 @@ owned_directories=(
     "${REPO_ROOT}/benchmark/tests"
     "${REPO_ROOT}/benchmark/smoke"
     "${REPO_ROOT}/tools/asset_packer"
+    "${REPO_ROOT}/tools/gpu_lab"
 )
 mapfile -t renderer_sources < <(
     rg --files --no-ignore "${owned_directories[@]}" -g '*.cpp' \

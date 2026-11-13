@@ -1,5 +1,7 @@
 # Microprofiler
 
+Optional [GPU diagnostics](GPU_DIAGNOSTICS.md) add actual Vulkan shader-invocation counters, typed compiler statistics and bounded internal shader representations to the same live view and portable reports. These device/pipeline options require an explicit diagnostic launch and keep benchmark tours unscored; opening the panel does not enable them.
+
 The microprofiler records instrumented application, loading, simulation, Filament and render-pass work for diagnosis. It provides an in-app viewer and self-contained JSON/HTML exports. It does not replace benchmark scores or the existing fixed-camera `--profile` measurement. Focused CPU/widget checks, native Vulkan/OpenGL query/lifecycle checks and a sequential Linux overhead cohort have saved evidence. Each measured checkpoint below is tied to its frozen executable. Native Windows and real browser interaction remain open; bounded Android fixture captures and touch/lifecycle checks have separate device receipts.
 
 ## Interactive controls

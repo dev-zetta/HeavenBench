@@ -40,6 +40,7 @@
 #include "rhi/frame_generation/dlss_platform.h"
 #endif
 #include "rhi/profile_bridge.h"
+#include "rhi/variable_rate_shading.h"
 #include "engine/render_presets.h"
 #include "engine/startup_timer.h"
 #ifdef __APPLE__
@@ -74,6 +75,15 @@
 #include <backend/Platform.h>
 #include <backend/PixelBufferDescriptor.h>
 #include <backend/platforms/VulkanPlatform.h>
+#ifdef __ANDROID__
+#include <backend/platforms/VulkanPlatformAndroid.h>
+#elifdef _WIN32
+#include <backend/platforms/VulkanPlatformWindows.h>
+#elifdef __APPLE__
+#include <backend/platforms/VulkanPlatformApple.h>
+#else
+#include <backend/platforms/VulkanPlatformLinux.h>
+#endif
 
 #include <math/mat4.h>
 #include <math/vec3.h>
@@ -414,7 +424,8 @@ void* FilamentBackend::get_native_window(SDL_Window* sdl_window) {
 
 // ── Constructor / Destructor ────────────────────────────────────
 
-FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
+FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config,
+        GpuDiagnosticsOptions diagnostics)
     : window_(window), hdr_(config.hdr)
 {
     config_ = config;
@@ -467,6 +478,24 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config)
             presentation_platform = dlss_platform_.get();
         }
 #endif
+        if (!presentation_platform) {
+#ifdef __ANDROID__
+            ordinary_vulkan_platform_ = std::make_unique<filament::backend::VulkanPlatformAndroid>();
+#elifdef _WIN32
+            ordinary_vulkan_platform_ = std::make_unique<filament::backend::VulkanPlatformWindows>();
+#elifdef __APPLE__
+            ordinary_vulkan_platform_ = std::make_unique<filament::backend::VulkanPlatformApple>();
+#else
+            ordinary_vulkan_platform_ = std::make_unique<filament::backend::VulkanPlatformLinux>();
+#endif
+            presentation_platform = ordinary_vulkan_platform_.get();
+        }
+        // Enable the optional device feature before creation so live Off/2x1/2x2
+        // changes need no device rebuild. Other Filament clients retain the default.
+        static_cast<filament::backend::VulkanPlatform*>(presentation_platform)
+            ->setFragmentShadingRateEnabled(true);
+        static_cast<filament::backend::VulkanPlatform*>(presentation_platform)
+            ->setGpuDiagnosticsEnabled(diagnostics.enabled, diagnostics.shader_internal_representations);
         engine_ = filament::Engine::Builder()
             .backend(filament::Engine::Backend::VULKAN)
             .platform(presentation_platform)
@@ -621,11 +650,31 @@ void FilamentBackend::set_trace_sink(profile::Recorder* recorder) {
 void FilamentBackend::set_trace_frame_context(const profile::Context& context) {
     if (!profile_bridge_) return;
     profile_bridge_->update(context);
+    if (engine_ && profile_bridge_->recording() && context.capture_id != 0 &&
+            context.capture_id != diagnostics_capture_id_ &&
+            engine_->getBackend() == filament::Engine::Backend::VULKAN) {
+        auto* platform = static_cast<filament::backend::VulkanPlatform*>(engine_->getPlatform());
+        platform->requestGpuDiagnosticsSnapshot(utils::profiling::getContext());
+        diagnostics_capture_id_ = context.capture_id;
+    }
     if (renderer_) renderer_->setProfilerContext(utils::profiling::getContext());
 }
 
 TraceCapabilities FilamentBackend::trace_capabilities() const {
     return profile_bridge_ ? profile_bridge_->capabilities() : TraceCapabilities{};
+}
+
+void FilamentBackend::set_variable_rate_shading(VariableRateShadingMode mode) {
+    config_.variable_rate_shading = mode;
+    if (variable_rate_shading_) variable_rate_shading_->apply(mode);
+}
+
+VariableRateShadingStatus FilamentBackend::variable_rate_shading_status() const {
+    if (variable_rate_shading_) return variable_rate_shading_->status();
+    VariableRateShadingStatus status;
+    status.requested = config_.variable_rate_shading;
+    status.reason = "Rendering pipeline is not initialized";
+    return status;
 }
 
 void FilamentBackend::set_input_response_context(InputResponseRecorder* recorder,
@@ -647,6 +696,7 @@ FilamentBackend::~FilamentBackend() {
     destroy_screenshot_target();
 
     gpu_history_stream_.reset();
+    variable_rate_shading_.reset();
     loading_screen_.reset();
 
     // Tear down the overlay first: the filagui helper frees its own
@@ -741,6 +791,7 @@ FilamentBackend::~FilamentBackend() {
     engine_->destroy(swapchain_);
 
     filament::Engine::destroy(&engine_);
+    ordinary_vulkan_platform_.reset();
 #if HEAVEN_HAS_FSR3
     frame_generation_platform_.reset();
 #endif
@@ -1567,6 +1618,8 @@ void FilamentBackend::build_render_context() {
     core_.renderer = renderer_;
     core_.camera   = fil_camera_;
 
+    variable_rate_shading_ = std::make_unique<VariableRateShadingController>(core_);
+
     // Construct backend-owned collaborator subsystems now that the core
     // objects exist. They create their GPU resources lazily on first use.
     depth_prepass_ = std::make_unique<DepthPrePass>(core_);
@@ -2250,6 +2303,10 @@ FrameResult FilamentBackend::render_frame(
                 particle_feature_->temporal_distortion_texture() : nullptr, true)) coherent_heat = false;
         particle_feature_->set_temporal_distortion_enabled(coherent_heat);
     }
+
+    // Post-processing may change the effective MSAA count; gate VRS on that
+    // actual count before building any main-color commands.
+    variable_rate_shading_->apply(config_.variable_rate_shading);
 
     // Depth pre-pass → main view → composite, inside one begin/endFrame.
     stage_start = FrameClock::now();

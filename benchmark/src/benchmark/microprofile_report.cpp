@@ -23,6 +23,8 @@ constexpr std::array kOutcomes{"Pending", "Accepted", "Rejected", "Cancelled"};
 constexpr std::array kPhases{"Begin", "Step", "End"};
 constexpr std::array kStatuses{"Available", "Pending", "Unsupported", "Disjoint", "Error", "Dropped"};
 constexpr std::array kSources{"HardwareTimestamp", "FenceEstimate", "Unavailable"};
+constexpr std::array kPipelineKinds{"Pipeline", "Statistic", "InternalRepresentation", "Use", "Loss"};
+constexpr std::array kStatisticFormats{"Bool32", "Int64", "Uint64", "Float64"};
 template<class E, std::size_t N>
 const char* enum_name(E value, const std::array<const char*, N>& names) {
     return names.at(static_cast<std::size_t>(value));
@@ -54,6 +56,14 @@ std::string read_label(const Json& value) {
     if (out.size() > 4096) throw std::invalid_argument("Microprofile label exceeds limit");
     return out;
 }
+std::int64_t read_signed_id(const Json& value) {
+    const auto text = value.get<std::string>();
+    std::int64_t out = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), out);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size())
+        throw std::invalid_argument("Invalid microprofile int64 statistic");
+    return out;
+}
 Json context_json(const Context& c) {
     return {{"attempt_id", id(c.attempt_id)}, {"submission_id", id(c.submission_id)},
         {"filament_frame_id", id(c.filament_frame_id)}, {"renderer_id", id(c.renderer_id)},
@@ -74,9 +84,20 @@ Json make_json(const Snapshot& s) {
         {"dropped_events", s.dropped_events}, {"overwritten_events", s.overwritten_events},
         {"truncated_labels", s.truncated_labels}, {"memory_bytes", s.memory_bytes},
         {"stale_epoch_events", s.stale_epoch_events},
+        {"dropped_pipeline_events", s.dropped_pipeline_events},
+        {"overwritten_pipeline_events", s.overwritten_pipeline_events},
+        {"truncated_pipeline_artifacts", s.truncated_pipeline_artifacts},
+        {"pipeline_loss_breakdown_available", s.pipeline_loss_breakdown_available},
         {"metadata", s.metadata}, {"clock", {{"unit", "nanoseconds"},
         {"cpu", "steady-clock-relative"}, {"gpu", "frame-relative-uncalibrated"}}}};
-    for (const char* key : {"threads", "spans", "frames", "counters", "flows", "gpu_samples"})
+    if (s.pipeline_loss_breakdown_available) {
+        out["dropped_pipeline_headers"] = s.dropped_pipeline_headers;
+        out["dropped_pipeline_statistics"] = s.dropped_pipeline_statistics;
+        out["overwritten_pipeline_statistics"] = s.overwritten_pipeline_statistics;
+        out["dropped_pipeline_artifacts"] = s.dropped_pipeline_artifacts;
+        out["overwritten_pipeline_artifacts"] = s.overwritten_pipeline_artifacts;
+    }
+    for (const char* key : {"threads", "spans", "frames", "counters", "flows", "gpu_samples", "pipeline_events"})
         out[key] = Json::array();
     for (const auto& t : s.threads) out["threads"].push_back({{"id", id(t.id)}, {"name", t.name}});
     for (const auto& p : s.spans) out["spans"].push_back({{"id", id(p.id)},
@@ -92,13 +113,56 @@ Json make_json(const Snapshot& s) {
     for (const auto& f : s.flows) out["flows"].push_back({{"id", id(f.id)},
         {"thread_id", id(f.thread_id)}, {"timestamp_ns", f.timestamp_ns}, {"name", f.name},
         {"phase", enum_name(f.phase, kPhases)}, {"context", context_json(f.context)}});
-    for (const auto& g : s.gpu_samples) out["gpu_samples"].push_back({{"context", context_json(g.context)},
+    for (const auto& g : s.gpu_samples) {
+        Json sample{{"context", context_json(g.context)},
         {"pass_id", id(g.pass_id)}, {"parent_pass_id", id(g.parent_pass_id)},
         {"begin_ns", g.begin_ns}, {"end_ns", g.end_ns}, {"name", g.name},
         {"status", enum_name(g.status, kStatuses)}, {"source", enum_name(g.source, kSources)},
         {"capability", g.capability}, {"command_count", id(g.command_count)},
         {"primitive_count", id(g.primitive_count)}, {"visible_renderables", id(g.visible_renderables)},
-        {"draw_instance_invocations", id(g.draw_instance_invocations)}});
+        {"draw_instance_invocations", id(g.draw_instance_invocations)},
+        {"native_draw_commands_available", g.native_draw_commands_available}};
+        if (g.native_draw_commands_available) {
+            sample["native_draw_commands_full"] = id(g.native_draw_commands_full);
+            sample["native_draw_commands_2x1"] = id(g.native_draw_commands_2x1);
+            sample["native_draw_commands_2x2"] = id(g.native_draw_commands_2x2);
+        }
+        Json statistics{{"status", enum_name(g.pipeline_statistics_status, kStatuses)},
+            {"reason", g.pipeline_statistics_reason}};
+        if (g.pipeline_statistics_status == SampleStatus::Available) {
+            statistics["input_assembly_vertices"] = id(g.input_assembly_vertices);
+            statistics["input_assembly_primitives"] = id(g.input_assembly_primitives);
+            statistics["vertex_shader_invocations"] = id(g.vertex_shader_invocations);
+            statistics["clipping_invocations"] = id(g.clipping_invocations);
+            statistics["clipping_primitives"] = id(g.clipping_primitives);
+            statistics["fragment_shader_invocations"] = id(g.fragment_shader_invocations);
+        }
+        sample["pipeline_statistics"] = std::move(statistics);
+        out["gpu_samples"].push_back(std::move(sample));
+    }
+    for (const auto& e : s.pipeline_events) {
+        Json event{{"context", context_json(e.context)}, {"kind", enum_name(e.kind, kPipelineKinds)},
+            {"pipeline_id", id(e.pipeline_id)}, {"program_id", id(e.program_id)}, {"pass_id", id(e.pass_id)},
+            {"executable_index", e.executable_index}, {"stages", e.stages}, {"subgroup_size", e.subgroup_size},
+            {"program_name", e.program_name}, {"name", e.name}, {"description", e.description},
+            {"status", enum_name(e.status, kStatuses)}, {"reason", e.reason},
+            {"format", enum_name(e.format, kStatisticFormats)}, {"original_size", id(e.original_size)},
+            {"truncated", e.truncated}, {"text", e.text}};
+        if (e.kind == PipelineEventKind::Statistic && e.status == SampleStatus::Available) {
+            switch (e.format) {
+            case PipelineStatisticFormat::Bool32: event["value"] = e.bool_value; break;
+            case PipelineStatisticFormat::Int64: event["value"] = std::to_string(e.signed_value); break;
+            case PipelineStatisticFormat::Uint64: event["value"] = id(e.unsigned_value); break;
+            case PipelineStatisticFormat::Float64:
+                if (!std::isfinite(e.float_value)) throw std::invalid_argument("Nonfinite driver statistic");
+                event["value"] = e.float_value;
+                break;
+            }
+        }
+        if (e.kind == PipelineEventKind::Loss && e.unsigned_value != 0)
+            event["loss_count"] = id(e.unsigned_value);
+        out["pipeline_events"].push_back(std::move(event));
+    }
     // First-occurrence ordering makes label references deterministic for a
     // snapshot. Inline labels remain for schema-1 readers without table support.
     out["strings"] = Json::array();
@@ -157,6 +221,17 @@ std::expected<Snapshot, std::string> parse_snapshot(std::string_view text) {
         s.overwritten_events = j.at("overwritten_events").get<std::uint64_t>();
         s.truncated_labels = j.at("truncated_labels").get<std::uint64_t>();
         if (j.contains("stale_epoch_events")) s.stale_epoch_events = read_time(j.at("stale_epoch_events"));
+        s.dropped_pipeline_events = j.value("dropped_pipeline_events", std::uint64_t{0});
+        s.overwritten_pipeline_events = j.value("overwritten_pipeline_events", std::uint64_t{0});
+        s.truncated_pipeline_artifacts = j.value("truncated_pipeline_artifacts", std::uint64_t{0});
+        s.pipeline_loss_breakdown_available = j.value("pipeline_loss_breakdown_available", false);
+        if (s.pipeline_loss_breakdown_available) {
+            s.dropped_pipeline_headers = j.at("dropped_pipeline_headers").get<std::uint64_t>();
+            s.dropped_pipeline_statistics = j.at("dropped_pipeline_statistics").get<std::uint64_t>();
+            s.overwritten_pipeline_statistics = j.at("overwritten_pipeline_statistics").get<std::uint64_t>();
+            s.dropped_pipeline_artifacts = j.at("dropped_pipeline_artifacts").get<std::uint64_t>();
+            s.overwritten_pipeline_artifacts = j.at("overwritten_pipeline_artifacts").get<std::uint64_t>();
+        }
         s.memory_bytes = j.at("memory_bytes").get<std::size_t>();
         s.metadata = j.at("metadata").get<std::map<std::string, std::string>>();
         if (s.metadata.size() > 128) throw std::invalid_argument("Microprofile metadata too large");
@@ -164,6 +239,10 @@ std::expected<Snapshot, std::string> parse_snapshot(std::string_view text) {
         for (const char* key : {"threads", "spans", "frames", "counters", "flows", "gpu_samples"}) {
             if (!j.at(key).is_array()) throw std::invalid_argument("Microprofile records must be arrays");
             total += j.at(key).size();
+        }
+        if (j.contains("pipeline_events")) {
+            if (!j.at("pipeline_events").is_array()) throw std::invalid_argument("Pipeline events must be an array");
+            total += j.at("pipeline_events").size();
         }
         if (total > 1'000'000) throw std::invalid_argument("Too many microprofile records");
         const Json* strings = j.contains("strings") ? &j.at("strings") : nullptr;
@@ -218,8 +297,70 @@ std::expected<Snapshot, std::string> parse_snapshot(std::string_view text) {
                 read_id(g.at("command_count")), read_id(g.at("primitive_count")),
                 read_id(g.at("visible_renderables")),
                 g.contains("draw_instance_invocations") ? read_id(g.at("draw_instance_invocations")) : 0};
+            sample.native_draw_commands_available = g.value("native_draw_commands_available", false);
+            if (sample.native_draw_commands_available) {
+                sample.native_draw_commands_full = read_id(g.at("native_draw_commands_full"));
+                sample.native_draw_commands_2x1 = read_id(g.at("native_draw_commands_2x1"));
+                sample.native_draw_commands_2x2 = read_id(g.at("native_draw_commands_2x2"));
+            }
+            if (g.contains("pipeline_statistics")) {
+                const auto& statistics = g.at("pipeline_statistics");
+                sample.pipeline_statistics_status = read_enum<SampleStatus>(statistics.at("status"), kStatuses);
+                sample.pipeline_statistics_reason = read_label(statistics.at("reason"));
+                if (sample.pipeline_statistics_status == SampleStatus::Available) {
+                    sample.input_assembly_vertices = read_id(statistics.at("input_assembly_vertices"));
+                    sample.input_assembly_primitives = read_id(statistics.at("input_assembly_primitives"));
+                    sample.vertex_shader_invocations = read_id(statistics.at("vertex_shader_invocations"));
+                    sample.clipping_invocations = read_id(statistics.at("clipping_invocations"));
+                    sample.clipping_primitives = read_id(statistics.at("clipping_primitives"));
+                    sample.fragment_shader_invocations = read_id(statistics.at("fragment_shader_invocations"));
+                }
+            }
             if (sample.status == SampleStatus::Available) interval(sample.begin_ns, sample.end_ns);
             s.gpu_samples.push_back(std::move(sample));
+        }
+        if (j.contains("pipeline_events")) for (const auto& value : j.at("pipeline_events")) {
+            PipelineEvent event;
+            event.context = read_context(value.at("context"));
+            event.kind = read_enum<PipelineEventKind>(value.at("kind"), kPipelineKinds);
+            event.pipeline_id = read_id(value.at("pipeline_id"));
+            event.program_id = read_id(value.at("program_id"));
+            event.pass_id = read_id(value.at("pass_id"));
+            for (const char* field : {"executable_index", "stages", "subgroup_size"})
+                if (!value.at(field).is_number_unsigned() || value.at(field).get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+                    throw std::invalid_argument("Invalid pipeline executable uint32 field");
+            event.executable_index = value.at("executable_index").get<std::uint32_t>();
+            event.stages = value.at("stages").get<std::uint32_t>();
+            event.subgroup_size = value.at("subgroup_size").get<std::uint32_t>();
+            event.program_name = read_label(value.at("program_name"));
+            event.name = read_label(value.at("name"));
+            event.description = read_label(value.at("description"));
+            event.reason = read_label(value.at("reason"));
+            event.text = read_label(value.at("text"));
+            event.status = read_enum<SampleStatus>(value.at("status"), kStatuses);
+            event.format = read_enum<PipelineStatisticFormat>(value.at("format"), kStatisticFormats);
+            event.original_size = read_id(value.at("original_size"));
+            event.truncated = value.at("truncated").get<bool>();
+            if (value.contains("loss_count")) {
+                if (event.kind != PipelineEventKind::Loss)
+                    throw std::invalid_argument("Loss count attached to a non-Loss pipeline event");
+                event.unsigned_value = read_id(value.at("loss_count"));
+                if (event.unsigned_value == 0) throw std::invalid_argument("Empty pipeline loss delta");
+            }
+            if (event.kind == PipelineEventKind::Statistic && event.status == SampleStatus::Available) {
+                switch (event.format) {
+                case PipelineStatisticFormat::Bool32: event.bool_value = value.at("value").get<bool>(); break;
+                case PipelineStatisticFormat::Int64: event.signed_value = read_signed_id(value.at("value")); break;
+                case PipelineStatisticFormat::Uint64: event.unsigned_value = read_id(value.at("value")); break;
+                case PipelineStatisticFormat::Float64:
+                    if (!value.at("value").is_number() || value.at("value").is_boolean())
+                        throw std::invalid_argument("Invalid floating driver statistic");
+                    event.float_value = value.at("value").get<double>();
+                    if (!std::isfinite(event.float_value)) throw std::invalid_argument("Nonfinite driver statistic");
+                    break;
+                }
+            }
+            s.pipeline_events.push_back(std::move(event));
         }
         return s;
     } catch (const std::exception& e) { return std::unexpected(e.what()); }
@@ -240,7 +381,7 @@ std::string snapshot_html(const Snapshot& snapshot) {
     return R"HTML(<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HeavenBench microprofiler</title>
 <style>body{margin:0;background:#111923;color:#dce5ed;font:14px system-ui}header{position:sticky;top:0;background:#182332;padding:12px;z-index:2}button,input,select{background:#243447;color:inherit;border:1px solid #53677b;padding:6px;margin:3px}canvas{display:block;width:100%;touch-action:none}#cpuBox{max-height:55vh;overflow:auto}h2{font-size:15px;margin:14px}pre{white-space:pre-wrap;padding:14px;background:#172332;max-height:30vh;overflow:auto}.muted{color:#a5b5c5}table{border-collapse:collapse;margin:12px;font:12px ui-monospace,monospace}td,th{text-align:left;padding:5px 12px;border-bottom:1px solid #304051;white-space:nowrap}</style>
 <header><b>HeavenBench microprofiler</b> <button id="fit">Fit CPU</button><input id="filter" placeholder="Filter name / category / thread"><span id="summary"></span><div class="muted">CPU: wheel zoom, drag pan, click a span for details. GPU time is relative to its own frame; it is not aligned to the CPU clock.</div></header>
-<div id="warning" style="padding:8px;color:#ffd077"></div><div id="cpuBox"><canvas id="cpu"></canvas></div><h2>Complete accepted CPU frame durations (not presentation or GPU timing)</h2><canvas id="frames"></canvas><h2>CPU scope distributions</h2><div class="muted">p50/p95/p99 use linear interpolation (R7). Incomplete spans are excluded. Exclusive costs are unavailable on trace loss or incomplete child intervals.</div><div style="overflow:auto"><table id="cpuStats"></table></div><h2>GPU pass distributions</h2><div class="muted">Per-pass inclusive samples may overlap. Hardware timestamps and fence estimates remain separate; neither is added to CPU cost.</div><div style="overflow:auto"><table id="gpuStats"></table></div><h2>Counter graph <select id="counter"></select></h2><canvas id="graph"></canvas><h2>GPU frame <select id="gpuFrame"></select></h2><canvas id="gpu"></canvas><pre id="details">Select a CPU or GPU span. Missing, overwritten and incomplete events are not measured time.</pre><details><summary>Metadata and flows</summary><pre id="metadata"></pre></details>
+<div id="warning" style="padding:8px;color:#ffd077"></div><div id="cpuBox"><canvas id="cpu"></canvas></div><h2>Complete accepted CPU frame durations (not presentation or GPU timing)</h2><canvas id="frames"></canvas><h2>CPU scope distributions</h2><div class="muted">p50/p95/p99 use linear interpolation (R7). Incomplete spans are excluded. Exclusive costs are unavailable on trace loss or incomplete child intervals.</div><div style="overflow:auto"><table id="cpuStats"></table></div><h2>GPU pass distributions by renderer and view</h2><div class="muted">Identically named passes retain separate renderer/view identities. Per-pass inclusive samples may overlap. Hardware timestamps and fence estimates remain separate; neither is added to CPU cost.</div><div style="overflow:auto"><table id="gpuStats"></table></div><h2>Hardware pipeline counters</h2><div class="muted">Per-pass query observations, independent of timestamp status. Named passes may overlap; counts are not summed into frame totals.</div><div style="overflow:auto"><table id="pipelineStats"></table></div><h2>Compiled pipeline executables</h2><div class="muted">Driver-provided compile-time properties are not per-frame costs. IDs are device-local. Select a row to inspect names, types and bounded IR text; missing metrics are unavailable.</div><div style="overflow:auto"><table id="pipelineExecutables"></table></div><h2>Counter graph <select id="counter"></select></h2><canvas id="graph"></canvas><h2>GPU frame <select id="gpuFrame"></select></h2><canvas id="gpu"></canvas><pre id="details">Select a CPU or GPU span. Missing, overwritten and incomplete events are not measured time.</pre><details><summary>Metadata and flows</summary><pre id="metadata"></pre></details>
 <script id="data" type="application/json">)HTML" + data + R"HTML(</script><script>
 'use strict';
 const data=JSON.parse(document.getElementById('data').textContent), $=id=>document.getElementById(id);
@@ -256,7 +397,7 @@ const[c,w]=setup($('cpu'),Math.max(120,y));hits=[];c.fillStyle='#111923';c.fillR
 for(let i=0;i<=10;i++){const x=left+i*(w-left-10)/10;c.strokeStyle='#304051';c.beginPath();c.moveTo(x,20);c.lineTo(x,y);c.stroke();c.fillStyle='#a5b5c5';c.fillText(((lo+(hi-lo)*i/10)/1e6).toFixed(2)+' ms',x,14);}
 for(const lane of lanes){c.fillStyle='#dce5ed';c.fillText(lane.name.slice(0,23),6,lane.y+14);for(const s of visible){if(s.thread_id!==lane.id||s.end_ns<lo||s.begin_ns>hi)continue;const x=Math.max(left,left+(s.begin_ns-lo)*scale),end=Math.min(w,left+(s.end_ns-lo)*scale),yy=lane.y+s.depth*22;c.fillStyle=color(s);c.fillRect(x,yy,Math.max(1,end-x),19);if(end-x>35){c.save();c.beginPath();c.rect(x,yy,end-x,19);c.clip();c.fillStyle='white';c.fillText(s.name,x+3,yy+14);c.restore();}hits.push({x,y:yy,w:Math.max(1,end-x),h:19,item:s});}}
 $('summary').textContent=` ${data.active?'Recording':'Stopped'} · ${data.spans.length} CPU spans · dropped ${data.dropped_events}, overwritten ${data.overwritten_events}, truncated labels ${data.truncated_labels}, stale-epoch imports ${data.stale_epoch_events||0}`;graph();drawFrames();renderStats();}
-function detail(item){$('details').textContent=JSON.stringify(item,null,2);}
+function detail(item){let note='';if('source' in item){note='GPU timing and hardware counters have independent availability.\n'+(item.native_draw_commands_available?'Native draw commands are classified by bound pipeline rate, not fragment invocations or hardware rate-clamp measurements.\n':'Native draw commands by rate: unavailable.\n');const uses=(data.pipeline_events||[]).filter(e=>e.kind==='Use'&&e.pass_id===item.pass_id&&gpuKey({context:e.context})===gpuKey(item));const ids=new Set(uses.map(e=>e.pipeline_id));item={...item,pipeline_uses:uses,compiled_executables:(data.pipeline_events||[]).filter(e=>e.kind!=='Use'&&ids.has(e.pipeline_id))};}if(item.kind==='InternalRepresentation')note='Optional driver IR text. original_size and truncated disclose incomplete artifacts.\n';$('details').textContent=note+JSON.stringify(item,null,2);}
 $('cpu').onwheel=e=>{e.preventDefault();const r=$('cpu').getBoundingClientRect(),t=Math.max(0,Math.min(1,(e.clientX-r.left-165)/(r.width-175))),center=lo+t*(hi-lo),range=Math.max(100,Math.min(Math.max(1,data.end_ns-data.begin_ns)*10,(hi-lo)*Math.exp(e.deltaY*.001)));lo=center-t*range;hi=lo+range;cpu();};
 $('cpu').onpointerdown=e=>{drag={x:e.clientX,lo,hi};$('cpu').setPointerCapture(e.pointerId);};
 $('cpu').onpointermove=e=>{if(!drag)return;const shift=(e.clientX-drag.x)*(drag.hi-drag.lo)/Math.max(1,$('cpu').clientWidth-175);lo=drag.lo-shift;hi=drag.hi-shift;cpu();};
@@ -276,10 +417,11 @@ const childMap=new Map;for(const s of data.spans){let key=s.thread_id+':'+s.pare
 function renderStats(){let groups=new Map,filter=$('filter').value.toLowerCase(),loss=data.dropped_events>0||data.overwritten_events>0;
 for(const s of data.spans){if(s.incomplete)continue;let label=(names.get(s.thread_id)||s.thread_id)+' / '+s.category+' / '+s.name;if(!label.toLowerCase().includes(filter))continue;let key=s.thread_id+':'+s.category+':'+s.name;if(!groups.has(key))groups.set(key,{label,inc:[],exc:[],valid:true});let row=groups.get(key),duration=s.end_ns-s.begin_ns;row.inc.push(duration);let ranges=[],valid=!loss;for(const c of childMap.get(s.thread_id+':'+s.id)||[]){if(c.incomplete||c.begin_ns<s.begin_ns||c.end_ns>s.end_ns)valid=false;let a=Math.max(s.begin_ns,c.begin_ns),b=Math.min(s.end_ns,c.end_ns);if(b>a)ranges.push([a,b]);}if(valid)row.exc.push(duration-unionLength(ranges));else row.valid=false;}
 let rows=[...groups.values()].map(r=>{let a=distribution(r.inc),b=r.valid?distribution(r.exc):null;return[r.label,a.count,ms(a.sum),...quant(a),b?ms(b.sum):'unavailable',...quant(b)];});table('cpuStats',['Thread / category / scope','Count','Inclusive sum ms','Inc p50 ms','Inc p95 ms','Inc p99 ms','Exclusive sum ms','Exc p50 ms','Exc p95 ms','Exc p99 ms'],rows);
-let gg=new Map;for(const s of data.gpu_samples){if(s.status!=='Available')continue;let key=s.source+' / '+s.name;if(!key.toLowerCase().includes(filter))continue;if(!gg.has(key))gg.set(key,[]);gg.get(key).push(s.end_ns-s.begin_ns);}table('gpuStats',['Source / pass','Count','p50 ms','p95 ms','p99 ms','Max ms'],[...gg].map(([name,v])=>{let d=distribution(v);return[name,d.count,...quant(d),ms(d.max)];}));}
+let gg=new Map;for(const s of data.gpu_samples){if(s.status!=='Available')continue;let key=s.source+' / renderer '+s.context.renderer_id+' / view '+s.context.view_id+' / '+s.name;if(!key.toLowerCase().includes(filter))continue;if(!gg.has(key))gg.set(key,[]);gg.get(key).push(s.end_ns-s.begin_ns);}table('gpuStats',['Source / renderer / view / pass','Count','p50 ms','p95 ms','p99 ms','Max ms'],[...gg].map(([name,v])=>{let d=distribution(v);return[name,d.count,...quant(d),ms(d.max)];}));}
 function drawFrames(){const[c,w]=setup($('frames'),110),ss=data.frames.filter(f=>f.kind==='Render'&&f.outcome==='Accepted'&&!f.incomplete&&f.begin_ns>=lo&&f.end_ns<=hi);c.clearRect(0,0,w,110);if(!ss.length){c.fillStyle='#a5b5c5';c.fillText('No complete accepted CPU frame intervals in this window',12,25);return;}let max=ss.reduce((m,f)=>Math.max(m,f.end_ns-f.begin_ns),1);c.strokeStyle='#dca561';c.beginPath();ss.forEach((f,i)=>{let x=165+(f.begin_ns-lo)*(w-175)/(hi-lo),y=100-(f.end_ns-f.begin_ns)*80/max;i?c.lineTo(x,y):c.moveTo(x,y);});c.stroke();c.fillStyle='#a5b5c5';c.fillText('Maximum '+ms(max)+' ms CPU attempt duration',12,14);}
 $('warning').textContent=data.metadata.settings_mixed==='true'?'Mixed settings: this capture contains configuration changes. It is unsuitable for a matched fixed-settings comparison.':'';
-$('metadata').textContent=JSON.stringify({clock:data.clock,metadata:data.metadata,flows:data.flows},null,2);window.onresize=()=>{cpu();gpu();};cpu();gpu();
+function renderPipelineDiagnostics(){const fields=['input_assembly_vertices','input_assembly_primitives','vertex_shader_invocations','clipping_invocations','clipping_primitives','fragment_shader_invocations'];table('pipelineStats',['Renderer','View','Pass','Timing','Query status','IA vertices','IA primitives','VS invocations','Clip invocations','Clip primitives','FS invocations','Reason'],data.gpu_samples.map(s=>{const q=s.pipeline_statistics||{status:'Unsupported',reason:'Not recorded by this trace version'};return[s.context.renderer_id,s.context.view_id,s.name,s.status,q.status,...fields.map(f=>q.status==='Available'?q[f]:'unavailable'),q.reason];}));const events=(data.pipeline_events||[]).filter(e=>e.kind!=='Use');table('pipelineExecutables',['Pipeline','Program / material variant','Executable','Kind','Driver name','Status','Type','Compile value / artifact'],events.map(e=>[e.pipeline_id,e.program_name,e.executable_index,e.kind,e.name,e.status,e.format,e.kind==='Loss'&&e.loss_count?`lost metadata delta ${e.loss_count}`:e.kind==='Statistic'&&e.status==='Available'?e.value:e.kind==='InternalRepresentation'?`${e.text.length} retained / ${e.original_size} bytes${e.truncated?' (truncated)':''}`:e.reason]));[...$('pipelineExecutables').rows].slice(1).forEach((row,i)=>{row.style.cursor='pointer';row.onclick=()=>detail(events[i]);});}renderPipelineDiagnostics();
+$('metadata').textContent=JSON.stringify({clock:data.clock,metadata:data.metadata,flows:data.flows,pipeline_loss:{dropped:data.dropped_pipeline_events||0,overwritten:data.overwritten_pipeline_events||0,truncated_artifacts:data.truncated_pipeline_artifacts||0,breakdown_available:data.pipeline_loss_breakdown_available||false,dropped_headers:data.dropped_pipeline_headers??null,dropped_statistics:data.dropped_pipeline_statistics??null,overwritten_statistics:data.overwritten_pipeline_statistics??null,dropped_artifacts:data.dropped_pipeline_artifacts??null,overwritten_artifacts:data.overwritten_pipeline_artifacts??null}},null,2);window.onresize=()=>{cpu();gpu();};cpu();gpu();
 </script></html>)HTML";
 }
 

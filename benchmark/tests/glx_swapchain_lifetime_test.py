@@ -67,6 +67,7 @@ using GLXContext = void*;
 using Bool = int;
 struct Display {} display;
 constexpr GLXDrawable None = 0;
+constexpr unsigned GL_FRAMEBUFFER = 0x8D40;
 struct NativeState {
     GLXDrawable draw = 11, read = 12;
     GLXContext context = reinterpret_cast<GLXContext>(std::uintptr_t(27));
@@ -132,16 +133,28 @@ class OpenGLDriver {
 public:
     GLSwapChain* mCurrentDrawSwapChain = nullptr;
     DriverPlatform mPlatform{this};
+    std::vector<std::string> retirement_calls;
+    struct BackendState {
+        std::vector<std::string>* calls;
+        unsigned invalid_target = 0;
+        void unbindFramebuffer(unsigned target) {
+            if (target != GL_FRAMEBUFFER) ++invalid_target;
+            calls->emplace_back("unbind");
+        }
+    } backend_state{&retirement_calls};
+    BackendState& getBackendState() { return backend_state; }
     unsigned destructs = 0, stale_at_destruct = 0;
     GLSwapChain const* destructed = nullptr;
     void destroySwapChain(Handle<HwSwapChain> sch);
     void destruct(Handle<HwSwapChain>, GLSwapChain const* object) {
+        retirement_calls.emplace_back("destruct");
         ++destructs;
         if (mCurrentDrawSwapChain == object) ++stale_at_destruct;
         destructed = object;
     }
 };
 void DriverPlatform::destroySwapChain(Platform::SwapChain* swapChain) {
+    owner->retirement_calls.emplace_back("platform");
     ++destroys; last = swapChain;
     if (owner->mCurrentDrawSwapChain && owner->mCurrentDrawSwapChain->swapChain == swapChain)
         ++stale_at_platform_destroy;
@@ -198,6 +211,9 @@ void driver_cases() {
         check(driver.mPlatform.destroys == 1 && driver.mPlatform.last == a.swapChain &&
                 driver.destructs == 1 && driver.destructed == &a, "driver-current",
                 "platform/arena retirement identity or count changed");
+        check(driver.retirement_calls == std::vector<std::string>{"unbind", "platform", "destruct"} &&
+                !driver.backend_state.invalid_target, "driver-current",
+                "framebuffer unbind must precede platform and arena retirement");
     }
     {
         OpenGLDriver driver; driver.mCurrentDrawSwapChain = &b;
@@ -205,10 +221,12 @@ void driver_cases() {
         check(driver.mCurrentDrawSwapChain == &b && !driver.stale_at_destruct &&
                 !driver.mPlatform.stale_at_platform_destroy && driver.destructed == &a,
                 "driver-noncurrent", "unrelated draw swapchain cache changed");
+        const auto calls_before_null = driver.retirement_calls;
         const unsigned destroys = driver.mPlatform.destroys, destructs = driver.destructs;
         driver.destroySwapChain(Handle<HwSwapChain>{});
         check(driver.mCurrentDrawSwapChain == &b && driver.mPlatform.destroys == destroys &&
-                driver.destructs == destructs, "driver-null", "null retirement mutated state");
+                driver.destructs == destructs && driver.retirement_calls == calls_before_null,
+                "driver-null", "null retirement mutated state");
     }
     {
         OpenGLDriver driver; driver.destroySwapChain(Handle<HwSwapChain>{&a});
@@ -258,11 +276,16 @@ def main():
     destroy_glx = raw_body(glx, "void PlatformGLX::destroySwapChain(")
     make_current = raw_body(glx, "bool PlatformGLX::makeCurrent(")
     destroy_driver = raw_body(driver, "void OpenGLDriver::destroySwapChain(")
+    unbind = "getBackendState().unbindFramebuffer(GL_FRAMEBUFFER);"
+    if destroy_driver.count(unbind) != 1:
+        raise RuntimeError("Expected one actual framebuffer retirement unbind")
     variants = (
         ("positive", destroy_glx, destroy_driver, ()),
         ("original-glx", ORIGINAL_GLX, destroy_driver,
          ("FAIL both-current:", "FAIL draw-current:", "FAIL read-current:")),
         ("original-driver", destroy_glx, ORIGINAL_DRIVER, ("FAIL driver-current:",)),
+        ("missing-framebuffer-unbind", destroy_glx, destroy_driver.replace(unbind, ""),
+         ("framebuffer unbind must precede platform and arena retirement",)),
     )
     msvc = Path(args.cxx).name.lower() in ("cl", "cl.exe", "clang-cl", "clang-cl.exe")
     work, observations, passed = args.work_dir.resolve(), [], True

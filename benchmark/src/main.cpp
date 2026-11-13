@@ -53,6 +53,7 @@
 #include "benchmark/benchmark_system.h"
 #include "benchmark/result_report.h"
 #include "benchmark/microprofiler.h"
+#include "benchmark/gpu_clock_telemetry.h"
 #include "benchmark/microprofile_report.h"
 #include "benchmark/input_response.h"
 #include "json.hpp"
@@ -448,6 +449,7 @@ public:
     // and safe when start() was a no-op or was never reached (init failure).
     ~Application() {
         if (music_player_) music_player_->stop();
+        gpu_clock_telemetry_.reset();
         // Producer callbacks borrow the recorder. Drain the backend before
         // removing that recorder, including error and interrupted-load paths.
         backend_.reset();
@@ -607,6 +609,10 @@ private:
             micro_recorder_.set_metadata("resolution", std::to_string(window_.width) + "x" + std::to_string(window_.height));
         }
         micro_recorder_.set_metadata("phase", std::string(phase));
+        micro_recorder_.set_metadata("gpu_diagnostics_requested", microprofile_.gpu_diagnostics ? "true" : "false");
+        micro_recorder_.set_metadata("gpu_shader_ir_requested", microprofile_.shader_ir ? "true" : "false");
+        micro_recorder_.set_metadata("gpu_diagnostics_comparability",
+            microprofile_.gpu_diagnostics ? "diagnostic pipeline flags and counters may change performance" : "ordinary pipelines");
         micro_recorder_.set_metadata("application_version", HEAVENBENCH_VERSION);
         micro_recorder_.set_metadata("architecture", HEAVENBENCH_ARCHITECTURE);
         micro_recorder_.set_metadata("benchmark_score", "false");
@@ -621,6 +627,9 @@ private:
             camera_.position.x, camera_.position.y, camera_.position.z,
             camera_.yaw, camera_.pitch, camera_.fov}.dump());
         if (backend_) {
+            nlohmann::json rendering;
+            append_render_metadata(rendering);
+            micro_recorder_.set_metadata("rendering", rendering.dump());
             micro_recorder_.set_metadata("api", backend_->render_api_name());
             micro_recorder_.set_metadata("gpu", active_gpu_name_);
             micro_recorder_.set_metadata("driver", active_gpu_info_.driver_name);
@@ -631,6 +640,19 @@ private:
             micro_recorder_.set_metadata("gpu_timer_backend", capability.backend);
             micro_recorder_.set_metadata("gpu_timestamp_valid_bits", std::to_string(capability.timestamp_valid_bits));
             micro_recorder_.set_metadata("gpu_timestamp_period_ns", std::to_string(capability.timestamp_period_ns));
+            micro_recorder_.set_metadata("gpu_diagnostics", nlohmann::json{
+                {"requested", microprofile_.gpu_diagnostics},
+                {"pipeline_statistics_supported", capability.pipeline_statistics_supported},
+                {"pipeline_statistics_enabled", capability.pipeline_statistics_enabled},
+                {"pipeline_statistics_reason", capability.pipeline_statistics_reason},
+                {"executable_properties_supported", capability.executable_properties_supported},
+                {"executable_info_supported", capability.executable_info_supported},
+                {"executable_info_enabled", capability.executable_info_enabled},
+                {"executable_info_reason", capability.executable_info_reason},
+                {"internal_representations_requested", microprofile_.shader_ir},
+                {"internal_representations_enabled", capability.internal_representations_enabled},
+                {"runtime_performance_query_counters", "not implemented; driver compile statistics are not runtime cache or occupancy counters"}
+            }.dump());
             micro_recorder_.set_metadata("gpu_pass_limit", "256");
             micro_recorder_.set_metadata("gpu_unresolved_frame_limit", "16");
             micro_recorder_.set_metadata("gpu_clock", "frame-relative; uncalibrated with CPU");
@@ -1130,6 +1152,16 @@ private:
         }
         const auto render_scale = backend_->render_resolution_scale();
         metadata["render_resolution_scale"] = {render_scale.x, render_scale.y};
+        const auto shading_rate = backend_->variable_rate_shading_status();
+        metadata["variable_rate_shading"] = {
+            {"requested", variable_rate_shading_mode_id(shading_rate.requested)},
+            {"effective", variable_rate_shading_mode_id(shading_rate.effective)},
+            {"supported_2x1", shading_rate.supported_2x1},
+            {"supported_2x2", shading_rate.supported_2x2},
+            {"reason", shading_rate.reason},
+            {"scope", "Eligible opaque lit main-color draws; masked, transparent, unlit, depth, shadows, SSR, post-processing and UI stay full-rate"},
+            {"execution_evidence", "Effective request and native draw counts do not measure fragment invocations or display FPS"}
+        };
         metadata["fixture_dynamic_resolution_fixed"] =
             !config_.render_test_scene.empty() && config_.features.dynamic_resolution;
         const auto features = backend_->renderer_feature_stats();
@@ -1297,7 +1329,8 @@ private:
         // Create rendering backend
         {
             ScopedStartupTimer timer("create backend");
-            auto backend = create_backend(config_.graphics_api, window_, config_);
+            auto backend = create_backend(config_.graphics_api, window_, config_,
+                {microprofile_.gpu_diagnostics, microprofile_.shader_ir});
             if (!backend) return std::unexpected(backend.error());
             backend_ = std::move(*backend);
             backend_->set_trace_sink(&micro_recorder_);
@@ -1332,6 +1365,14 @@ private:
                 clean_text_field(active_gpu_info_.model_name, kUnknownGpu);
             check_active_graphics_driver();
             active_system_info_ = gather_system_info(host_info_source_, active_gpu_raw());
+            if (microprofile_.gpu_diagnostics) {
+                auto clocks = profile::discover_xe_clocks({
+                    active_gpu_info_.vendor_id, active_gpu_info_.device_id,
+                    active_gpu_info_.pci_domain, active_gpu_info_.pci_bus,
+                    active_gpu_info_.pci_device, active_gpu_info_.pci_function});
+                gpu_clock_telemetry_ = std::make_unique<profile::GpuClockTelemetry>(micro_recorder_, std::move(clocks));
+                std::fprintf(stderr, "GPU diagnostics requested: counters and compilation capture may change performance; benchmark tours are unscored.\n");
+            }
         }
 
         std::printf("%s\n", backend_->api_version().c_str());
@@ -2366,6 +2407,8 @@ private:
                 : 0.0f;
             config_ui_.frame_generation = backend_->frame_generation_status();
             bench_->set_frame_generation_status(config_ui_.frame_generation);
+            config_ui_.variable_rate_shading = backend_->variable_rate_shading_status();
+            bench_->set_variable_rate_shading_status(config_ui_.variable_rate_shading);
             // Keep hardware polling far out of the hot path: the accepted-frame
             // statistics tick at most once per second, which is also a useful
             // cadence for DRM sensors and Vulkan heap-budget estimates.
@@ -2392,6 +2435,7 @@ private:
                         bench_->set_gpu_benchmark_times(
                             backend_->finalize_benchmark_gpu_times());
                         bench_->set_frame_generation_status(backend_->frame_generation_status());
+                        bench_->set_variable_rate_shading_status(backend_->variable_rate_shading_status());
                     }
                     bench_->record_presented_frame(
                         presented_interval);
@@ -2527,6 +2571,9 @@ private:
         // startup configuration copy.
         void apply_live(SettingId id, const BenchConfig& active) override {
             switch (id) {
+                case SettingId::VariableRateShading:
+                    if (app.backend_) app.backend_->set_variable_rate_shading(active.variable_rate_shading);
+                    break;
                 case SettingId::FrameGeneration:
                     if (app.backend_) app.backend_->request_frame_generation(active.frame_generation);
                     if (app.bench_) app.bench_->set_frame_generation_requested(
@@ -2888,6 +2935,7 @@ private:
         if (!bench_ || bench_->state() != BenchmarkState::Idle) return false;
         bench_->set_microprofile_recording(micro_recorder_.active());
         profile::Scope cpu_score_scope("CPU benchmark preparation", "Benchmark");
+        bench_->set_gpu_diagnostics_requested(microprofile_.gpu_diagnostics);
         if (window_.width != config_.width ||
             window_.height != config_.height) {
             std::fprintf(
@@ -3198,6 +3246,7 @@ private:
     MicroprofileOptions           microprofile_;
     profile::Recorder             micro_recorder_;
     profile::ReportWriter         micro_writer_;
+    std::unique_ptr<profile::GpuClockTelemetry> gpu_clock_telemetry_;
     uint64_t                      microprofile_attempt_id_ = 0;
     uint64_t                      microprofile_submission_id_ = 0;
     uint64_t                      microprofile_flow_id_ = 0;

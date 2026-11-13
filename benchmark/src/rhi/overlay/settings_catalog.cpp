@@ -140,6 +140,7 @@ constexpr std::array kCatalogUiOrder = {
     // Image quality — high GPU impact
     SettingId::FeatureMsaa,
     SettingId::MsaaSamples,
+    SettingId::VariableRateShading,
     SettingId::FeatureTaa,
     SettingId::TaaQuality,
     SettingId::FeatureAmbientOcclusion,
@@ -260,6 +261,7 @@ constexpr std::array kCatalogUiOrder = {
 
         case SettingId::FeatureMsaa:
         case SettingId::MsaaSamples:
+        case SettingId::VariableRateShading:
         case SettingId::FeatureTaa:
         case SettingId::TaaQuality:
         case SettingId::FeatureAmbientOcclusion:
@@ -497,6 +499,17 @@ const std::vector<CatalogEntry>& build_catalog() {
                         *mode == FrameGenerationMode::Dlss) cfg.frame_generation = *mode;
                 }
                 return cfg.frame_generation;
+            }});
+        c.push_back(CatalogEntry{
+            SettingId::VariableRateShading, Panel::Quality, Apply::Live,
+            Widget::Combo, "Variable-rate shading", 0.0f, 2.0f,
+            [](const BenchConfig& cfg) -> SettingValue { return cfg.variable_rate_shading; },
+            [](BenchConfig& cfg, const SettingValue& v) -> SettingValue {
+                if (const auto* mode = std::get_if<VariableRateShadingMode>(&v)) {
+                    if (*mode == VariableRateShadingMode::Off || *mode == VariableRateShadingMode::Rate2x1 ||
+                        *mode == VariableRateShadingMode::Rate2x2) cfg.variable_rate_shading = *mode;
+                }
+                return cfg.variable_rate_shading;
             }});
         c.push_back(CatalogEntry{
             SettingId::Hdr, Panel::Settings, Apply::Reload,
@@ -1084,6 +1097,8 @@ std::optional<PerformanceImpact> catalog_performance_impact(SettingId id) noexce
             return PerformanceImpact{"GPU / VRAM: High as resolution rises", "More output pixels increase shading, screen-space effects and render-target memory. Doubling both dimensions creates four times as many pixels."};
         case SettingId::Fullscreen:
             return PerformanceImpact{"GPU: Depends on pixel resolution", "The actual drawable resolution determines the rendering workload; fullscreen alone has no fixed cost."};
+        case SettingId::VariableRateShading:
+            return PerformanceImpact{"GPU: May reduce fragment work", "Shares a fragment result across 2x1 or 2x2 pixels in eligible opaque lit main-color geometry. Fine detail and shader-derived edges can lose quality. Masked, blended and unlit materials, depth, shadows, SSR, post-processing and UI retain full-rate shading. Geometry work is unchanged; availability depends on the active Vulkan device and sample count."};
         case SettingId::FrameGeneration:
             return PerformanceImpact{"GPU / VRAM: Provider dependent", "Interpolation adds GPU work and presentation latency. It does not accelerate simulation or real rendering. Requested benchmark tours are diagnostic and unscored."};
         case SettingId::Hdr:

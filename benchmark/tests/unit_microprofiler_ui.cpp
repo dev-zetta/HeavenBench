@@ -125,10 +125,35 @@ bool microprofiler_ui() {
     available.primitive_count = 11;
     available.visible_renderables = 13;
     available.draw_instance_invocations = 17;
+    available.native_draw_commands_full = 19;
+    available.native_draw_commands_2x1 = 23;
+    available.native_draw_commands_2x2 = 29;
+    available.native_draw_commands_available = true;
+    available.pipeline_statistics_status = heaven::profile::SampleStatus::Available;
+    available.pipeline_statistics_reason = "Hardware pipeline query";
+    available.input_assembly_vertices = 0;
+    available.input_assembly_primitives = 11;
+    available.vertex_shader_invocations = 31;
+    available.clipping_invocations = 11;
+    available.clipping_primitives = 7;
+    available.fragment_shader_invocations = 37;
     auto later = available;
     later.name = "GPU later frame";
     later.context = {11, 21, 31, 41, 51, 1};
     snapshot->gpu_samples = {available, unsupported, later};
+    heaven::profile::PipelineEvent use;
+    use.context = available.context;
+    use.kind = heaven::profile::PipelineEventKind::Use;
+    use.pipeline_id = 77;
+    use.program_id = 88;
+    use.pass_id = available.pass_id;
+    auto statistic = use;
+    statistic.kind = heaven::profile::PipelineEventKind::Statistic;
+    statistic.program_name = "heaven_lit [variant 23]";
+    statistic.name = "Driver arbitrary property";
+    statistic.status = heaven::profile::SampleStatus::Available;
+    statistic.unsigned_value = 123;
+    snapshot->pipeline_events = {use, statistic};
     ui.set_snapshot(snapshot);
     bool ok = check(!frame(ui).start && !ui.is_open(), "closed viewer emitted recording intent");
     ui.toggle();
@@ -168,7 +193,10 @@ bool microprofiler_ui() {
                std::strstr(detail_text, saved_path.c_str()) &&
                std::strstr(detail_text, "GPU frame 30 / renderer 40") &&
                std::strstr(detail_text, "Commands 7 | primitives 11 | visible renderables 13") &&
-               std::strstr(detail_text, "Draw-instance invocations 17 (sum over draws, not unique placements)"),
+               std::strstr(detail_text, "Draw-instance invocations 17 (sum over draws, not unique placements)") &&
+               std::strstr(detail_text, "Query available: Hardware pipeline query (independent of timestamp validity)") &&
+               std::strstr(detail_text, "IA vertices 0 | IA primitives 11") &&
+               std::strstr(detail_text, "Vertex shader invocations 31 | fragment shader invocations 37"),
                "viewer lost separate stale-capture count or actual GPU workload details") && ok;
     const std::string export_error = "Export failed: output directory is not writable";
     ui.set_snapshot(snapshot, export_error);
@@ -207,7 +235,8 @@ bool microprofiler_ui() {
         const char* unavailable_text = ImGui::GetClipboardText();
         ok = check(!unavailable.start && unavailable_text &&
                    std::strstr(unavailable_text, "GPU unavailable: unsupported") &&
-                   std::strstr(unavailable_text, "Native timestamp unavailable"),
+                   std::strstr(unavailable_text, "Native timestamp unavailable") &&
+                   std::strstr(unavailable_text, "Native draw commands by rate: unavailable"),
                    "selecting an unavailable GPU row lost status/capability") && ok;
     }
     frame(ui, "Focus linked CPU attempt");
@@ -284,6 +313,9 @@ bool microprofiler_ui() {
     ok = check(select_gpu_row(1) && gpu_details_contain("GPU selected measured pass: available",
                    "GPU frame 31 / renderer 41"),
                "manual measured GPU pass selection did not update details") && ok;
+    ok = check(gpu_details_contain("Native draw commands: full 19 | 2x1 23 | 2x2 29",
+                   "not fragment invocations or hardware rate-clamp measurements"),
+               "measured native rate counts or their meaning missing from task details") && ok;
     inspecting = std::make_shared<heaven::profile::Snapshot>(*inspecting);
     ui.set_snapshot(inspecting);
     ok = check(gpu_details_contain("GPU selected measured pass: available", "GPU frame 31 / renderer 41"),

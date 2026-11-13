@@ -309,6 +309,60 @@ bool unit_result_report() {
     return ok;
 }
 
+bool unit_result_report_variable_rate_shading() {
+    using heaven::VariableRateShadingMode;
+    bool ok = true;
+    heaven::BenchConfig config;
+    config.variable_rate_shading = VariableRateShadingMode::Rate2x2;
+    auto result = sample_result();
+    auto& status = result.variable_rate_shading;
+    status.requested = VariableRateShadingMode::Rate2x2;
+    status.effective = VariableRateShadingMode::Off;
+    status.supported_2x1 = true;
+    status.supported_2x2 = false;
+    status.reason = "2x2 unavailable with <4x MSAA> & this device";
+    const auto report = heaven::build_benchmark_report(
+        result, config, {"test", "test"}, std::chrono::system_clock::time_point{});
+    const auto json = Json::parse(report.json);
+    const auto& vrs = json.at("variable_rate_shading");
+    ok = check(json.at("schema_version") == 2 && json.at("scores").at("version") == 3 &&
+                   json.at("scores").at("overall") == result.performance.scores.overall &&
+                   !json.at("run").value("diagnostic", false),
+               "VRS changed schema, scoring version or ordinary score policy") && ok;
+    ok = check(json.at("configuration").at("variable_rate_shading") == "2x2" &&
+                   vrs.at("requested") == "2x2" && vrs.at("effective") == "off" &&
+                   vrs.at("supported_2x1") == true && vrs.at("supported_2x2") == false &&
+                   vrs.at("capability_reason") == status.reason,
+               "VRS report conflates a requested rate with an effective fallback") && ok;
+    ok = check(vrs.at("scope").get_ref<const std::string&>().find("main-color") != std::string::npos &&
+                   vrs.at("scope").get_ref<const std::string&>().find("alpha-to-coverage") != std::string::npos &&
+                   vrs.at("quality_tradeoff").get_ref<const std::string&>().find("lose quality") != std::string::npos &&
+                   vrs.at("comparison_policy").get_ref<const std::string&>().find("requested and effective") != std::string::npos,
+               "VRS report omits eligibility, quality or settings-matched comparison limits") && ok;
+    ok = check(report.html.find("Requested shading rate:</td><td><div class=\"highlight\">2x2</div>") != std::string::npos &&
+                   report.html.find("Effective shading rate:</td><td><div class=\"highlight\">off</div>") != std::string::npos &&
+                   report.html.find("2x1 support at current sample count:</td><td><div class=\"highlight\">Available</div>") != std::string::npos &&
+                   report.html.find("2x2 support at current sample count:</td><td><div class=\"highlight\">Unavailable</div>") != std::string::npos &&
+                   report.html.find("2x2 unavailable with &lt;4x MSAA&gt; &amp; this device") != std::string::npos &&
+                   report.html.find("Compare only matching hardware, driver, API, resolution and effective settings") != std::string::npos,
+               "VRS HTML does not match structured status or escape capability metadata") && ok;
+    for (const auto mode : {VariableRateShadingMode::Off, VariableRateShadingMode::Rate2x1, VariableRateShadingMode::Rate2x2}) {
+        config.variable_rate_shading = mode;
+        status.requested = status.effective = mode;
+        status.supported_2x1 = status.supported_2x2 = true;
+        status.reason = "Available";
+        const auto active_report = heaven::build_benchmark_report(
+            result, config, {"test", "test"}, std::chrono::system_clock::time_point{});
+        const auto active_json = Json::parse(active_report.json);
+        ok = check(active_json.at("variable_rate_shading").at("requested") == heaven::variable_rate_shading_mode_id(mode) &&
+                       active_json.at("variable_rate_shading").at("effective") == heaven::variable_rate_shading_mode_id(mode) &&
+                       active_json.at("scores").at("overall") == result.performance.scores.overall,
+                   "effective VRS rate was lost or made an ordinary run unscored") && ok;
+    }
+    return ok;
+}
+
 const heaven::testing::Register reg_unit_result_report{unit_result_report};
+const heaven::testing::Register reg_unit_result_report_vrs{unit_result_report_variable_rate_shading};
 
 } // namespace

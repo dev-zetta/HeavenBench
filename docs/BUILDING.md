@@ -14,7 +14,7 @@ Linux and Android use the same Docker entry point locally and in GitHub Actions.
 pwsh -File scripts/ci_windows.ps1 -Jobs 6
 ```
 
-Package names and application metadata derive from the benchmark version in `benchmark/CMakeLists.txt`, currently **1.1.1**. Android also uses versionCode **5** for upgrade ordering; the extraction tools retain their independent version.
+Package names and application metadata derive from the benchmark version in `benchmark/CMakeLists.txt`, currently **1.2.0**. Android also uses versionCode **6** for upgrade ordering; the extraction tools retain their independent version.
 
 Docker packages appear under `build/release/linux-<arch>/` or `build/release/android-<abi>/`, together with checksums, logs, exact build sources and package-version provenance. Linux portable builds run extraction/asset tests, renderer host tests, static analysis and AppImage relocation checks in a separate minimal runtime image. Android builds validate native libraries, run lint and verify APK signing/alignment. See [Docker builds](DOCKER_BUILDS.md) for caches, clean builds, outputs and validation scope.
 
@@ -83,9 +83,9 @@ The setup helper also accepts `--archive /path/to/aocc-compiler-5.2.0.tar` for a
 
 Optional native Vulkan frame generation is documented separately in [Frame generation](FRAME_GENERATION.md). FSR requires an explicitly fetched, verified SDK source tree and `HEAVEN_ENABLE_FSR3=ON`; Windows DLSS requires verified Streamline headers, `HEAVEN_ENABLE_DLSS=ON` and user-supplied signed runtime plugins. Both options default off, and standard packages disable both SDKs. Separately marked experimental packages enable FSR on Linux/Windows and the Windows DLSS adapter; signed NVIDIA runtime plugins are supplied separately and NVIDIA runtime execution remains untested. Native execution and visual acceptance limits are recorded in that guide.
 
-Filament is based on public upstream v1.77.2 with the reviewed [HeavenBench rendering patch](../patches/filament/README.md). `scripts/fetch_dependencies.sh` verifies the upstream revision, patch checksum and final source tree, preserving existing local edits. The same bootstrap runs inside Docker and the Windows pipeline.
+Filament is based on public upstream v1.80.1 with the reviewed [HeavenBench rendering patch](../patches/filament/README.md). `scripts/fetch_dependencies.sh` verifies the upstream revision, patch checksum and final source tree, preserving existing local edits. The same bootstrap runs inside Docker and the Windows pipeline.
 
-Committed `.filamat` files use matching material package version 77. Ordinary builds embed those packages without recompiling them. After editing a material source, use the incremental Linux host path:
+Committed `.filamat` files use matching material package version 80. Ordinary builds embed those packages without recompiling them. After editing a material source, use the incremental Linux host path:
 
 ```bash
 ./scripts/build.sh --materials

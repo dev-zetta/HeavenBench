@@ -661,5 +661,92 @@ void MicroprofilerUI::draw_gpu(const profile::Snapshot& snapshot) {
         static_cast<unsigned long long>(sample.visible_renderables));
     ImGui::TextWrapped("Draw-instance invocations %llu (sum over draws, not unique placements)",
         static_cast<unsigned long long>(sample.draw_instance_invocations));
+    if (sample.native_draw_commands_available) {
+        ImGui::TextWrapped("Native draw commands: full %llu | 2x1 %llu | 2x2 %llu",
+            static_cast<unsigned long long>(sample.native_draw_commands_full),
+            static_cast<unsigned long long>(sample.native_draw_commands_2x1),
+            static_cast<unsigned long long>(sample.native_draw_commands_2x2));
+        ImGui::TextWrapped("Bound pipeline rates, not fragment invocations or hardware rate-clamp measurements.");
+    } else {
+        ImGui::TextWrapped("Native draw commands by rate: unavailable");
+    }
+    ImGui::SeparatorText("Hardware pipeline counters");
+    ImGui::TextWrapped("Query %s: %s (independent of timestamp validity)",
+        sample_status(sample.pipeline_statistics_status), sample.pipeline_statistics_reason.c_str());
+    if (sample.pipeline_statistics_status == profile::SampleStatus::Available) {
+        ImGui::TextWrapped("IA vertices %llu | IA primitives %llu",
+            static_cast<unsigned long long>(sample.input_assembly_vertices),
+            static_cast<unsigned long long>(sample.input_assembly_primitives));
+        ImGui::TextWrapped("Vertex shader invocations %llu | fragment shader invocations %llu",
+            static_cast<unsigned long long>(sample.vertex_shader_invocations),
+            static_cast<unsigned long long>(sample.fragment_shader_invocations));
+        ImGui::TextWrapped("Clipping invocations %llu | clipping primitives %llu",
+            static_cast<unsigned long long>(sample.clipping_invocations),
+            static_cast<unsigned long long>(sample.clipping_primitives));
+    }
+    ImGui::TextWrapped("Per-pass hardware observations can overlap. They are not summed into frame totals.");
+    if (ImGui::CollapsingHeader("Compiled pipelines used by this pass")) {
+        ImGui::TextWrapped("Driver compile-time statistics are not runtime timings. IDs are device-local; unavailable driver metrics are not inferred.");
+        ImGui::TextWrapped("Pipeline metadata lost %llu | overwritten %llu | truncated artifacts %llu",
+            static_cast<unsigned long long>(snapshot.dropped_pipeline_events),
+            static_cast<unsigned long long>(snapshot.overwritten_pipeline_events),
+            static_cast<unsigned long long>(snapshot.truncated_pipeline_artifacts));
+        if (snapshot.pipeline_loss_breakdown_available) ImGui::TextWrapped("Headers dropped %llu | statistics dropped %llu / overwritten %llu | IR dropped %llu / overwritten %llu",
+            static_cast<unsigned long long>(snapshot.dropped_pipeline_headers),
+            static_cast<unsigned long long>(snapshot.dropped_pipeline_statistics),
+            static_cast<unsigned long long>(snapshot.overwritten_pipeline_statistics),
+            static_cast<unsigned long long>(snapshot.dropped_pipeline_artifacts),
+            static_cast<unsigned long long>(snapshot.overwritten_pipeline_artifacts));
+        else ImGui::TextWrapped("Separate header/statistics/IR loss was not recorded in this trace.");
+        for (const auto& event : snapshot.pipeline_events) {
+            if (event.kind != profile::PipelineEventKind::Loss || event.pipeline_id != 0) continue;
+            ImGui::TextWrapped("Driver metadata loss: %s", event.reason.c_str());
+            if (event.unsigned_value != 0) ImGui::Text("Retained lost metadata delta: %llu",
+                static_cast<unsigned long long>(event.unsigned_value));
+        }
+        std::set<std::uint64_t> pipelines;
+        for (const auto& event : snapshot.pipeline_events)
+            if (event.kind == profile::PipelineEventKind::Use && event.pass_id == sample.pass_id &&
+                event.context.capture_id == sample.context.capture_id &&
+                event.context.renderer_id == sample.context.renderer_id &&
+                event.context.filament_frame_id == sample.context.filament_frame_id)
+                pipelines.insert(event.pipeline_id);
+        if (pipelines.empty()) ImGui::TextWrapped("No pipeline-use observations retained for this pass.");
+        for (const auto pipeline : pipelines) {
+            const auto label = "Pipeline " + std::to_string(pipeline);
+            ImGui::PushID(label.c_str());
+            if (ImGui::TreeNode(label.c_str())) {
+                bool found = false;
+                for (const auto& event : snapshot.pipeline_events) {
+                    if (event.pipeline_id != pipeline || event.kind == profile::PipelineEventKind::Use) continue;
+                    found = true;
+                    ImGui::TextWrapped("%s | program %llu | executable %u | stages 0x%x | subgroup %u",
+                        event.program_name.c_str(), static_cast<unsigned long long>(event.program_id),
+                        event.executable_index, event.stages, event.subgroup_size);
+                    ImGui::TextWrapped("%s: %s | %s", event.name.c_str(), sample_status(event.status), event.reason.c_str());
+                    if (!event.description.empty()) ImGui::TextWrapped("%s", event.description.c_str());
+                    if (event.kind == profile::PipelineEventKind::Statistic && event.status == profile::SampleStatus::Available) {
+                        switch (event.format) {
+                        case profile::PipelineStatisticFormat::Bool32: ImGui::Text("Bool32: %s", event.bool_value ? "true" : "false"); break;
+                        case profile::PipelineStatisticFormat::Int64: ImGui::Text("Int64: %lld", static_cast<long long>(event.signed_value)); break;
+                        case profile::PipelineStatisticFormat::Uint64: ImGui::Text("Uint64: %llu", static_cast<unsigned long long>(event.unsigned_value)); break;
+                        case profile::PipelineStatisticFormat::Float64: ImGui::Text("Float64: %.17g", event.float_value); break;
+                        }
+                    }
+                    if (event.kind == profile::PipelineEventKind::Loss && event.unsigned_value != 0)
+                        ImGui::Text("Driver lost metadata delta: %llu", static_cast<unsigned long long>(event.unsigned_value));
+                    if (event.kind == profile::PipelineEventKind::InternalRepresentation) {
+                        ImGui::TextWrapped("IR: %zu retained / %llu original bytes%s", event.text.size(),
+                            static_cast<unsigned long long>(event.original_size), event.truncated ? " (truncated)" : "");
+                        if (!event.text.empty()) ImGui::TextWrapped("%s", event.text.c_str());
+                    }
+                    ImGui::Separator();
+                }
+                if (!found) ImGui::TextWrapped("Compile metadata unavailable or overwritten; export retains the explicit loss counters.");
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
+    }
 }
 } // namespace heaven

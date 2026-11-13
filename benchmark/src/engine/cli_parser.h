@@ -102,6 +102,10 @@ struct MicroprofileOptions {
     std::optional<std::string> output_base;
     float seconds = 10.0f;
     bool visible = false;
+    // Device/pipeline creation options, never persisted in renderer settings.
+    // Enabling them can change compiled shaders even while recording is off.
+    bool gpu_diagnostics = false;
+    bool shader_ir = false;
     bool invalid = false;
 };
 

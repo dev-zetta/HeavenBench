@@ -1,0 +1,24 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(local_size_x=16, local_size_y=16) in;
+layout(set=0, binding=0, std430) readonly buffer InputA { float16_t a[]; };
+layout(set=0, binding=1, std430) readonly buffer InputB { float16_t b[]; };
+layout(set=0, binding=2, std430) writeonly buffer OutputC { float c[]; };
+const uint size = 256;
+shared float tile_a[16][16];
+shared float tile_b[16][16];
+void main() {
+    uint x = gl_LocalInvocationID.x, y = gl_LocalInvocationID.y;
+    uint row = gl_WorkGroupID.y * 16 + y, col = gl_WorkGroupID.x * 16 + x;
+    uint base = gl_WorkGroupID.z * size * size;
+    float sum = 0;
+    for (uint k=0; k<size; k+=16) {
+        tile_a[y][x] = float(a[base + row*size + k+x]);
+        tile_b[y][x] = float(b[base + (k+y)*size + col]);
+        barrier();
+        for (uint t=0; t<16; ++t) sum = fma(tile_a[y][t], tile_b[t][x], sum);
+        barrier();
+    }
+    c[base + row*size + col] = sum;
+}

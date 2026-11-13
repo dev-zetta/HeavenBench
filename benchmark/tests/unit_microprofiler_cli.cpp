@@ -23,6 +23,16 @@ bool microprofiler_cli() {
     if (!check(!defaults.microprofile.output_base && defaults.microprofile.seconds == 10.0f &&
                !defaults.microprofile.visible && !defaults.microprofile.invalid,
                "default must not record or open UI")) return false;
+    if (!check(!defaults.microprofile.gpu_diagnostics && !defaults.microprofile.shader_ir,
+               "GPU diagnostic device flags must default off")) return false;
+    for (const auto flag : {"--gpu-diagnostics", "--gpu-shader-ir"}) {
+        const auto parsed = parse_cli(std::array<std::string_view, 2>{"heaven", flag});
+        if (!check(parsed.microprofile.gpu_diagnostics && !parsed.microprofile.invalid &&
+                   !parsed.microprofile.output_base && !parsed.microprofile.visible &&
+                   parsed.microprofile.shader_ir == (std::string_view(flag) == "--gpu-shader-ir") &&
+                   parsed.diagnostics.empty() && parsed.seen_keys.empty() && parsed.config_operations.empty(),
+                   "GPU diagnostics must be transient and must not auto-record")) return false;
+    }
     for (const auto seconds : {"0.1", "10", "3600"}) {
         const auto parsed = parse_cli(std::array<std::string_view, 6>{
             "heaven", "--microprofile", "trace with spaces/run", "--microprofile-seconds", seconds,

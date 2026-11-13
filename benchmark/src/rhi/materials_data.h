@@ -5,151 +5,151 @@
 #include <cstdint>
 #include <cstddef>
 
-extern const std::uint8_t k_heaven_lit_filamat[832051];
+extern const std::uint8_t k_heaven_lit_filamat[628054];
 inline constexpr std::size_t k_heaven_lit_filamat_size = sizeof(k_heaven_lit_filamat);
 
-extern const std::uint8_t k_heaven_lit_twosided_filamat[877777];
+extern const std::uint8_t k_heaven_lit_twosided_filamat[705364];
 inline constexpr std::size_t k_heaven_lit_twosided_filamat_size = sizeof(k_heaven_lit_twosided_filamat);
 
-extern const std::uint8_t k_heaven_lit_doublesided_filamat[803235];
+extern const std::uint8_t k_heaven_lit_doublesided_filamat[612513];
 inline constexpr std::size_t k_heaven_lit_doublesided_filamat_size = sizeof(k_heaven_lit_doublesided_filamat);
 
-extern const std::uint8_t k_heaven_unlit_filamat[114293];
+extern const std::uint8_t k_heaven_unlit_filamat[115385];
 inline constexpr std::size_t k_heaven_unlit_filamat_size = sizeof(k_heaven_unlit_filamat);
 
-extern const std::uint8_t k_heaven_lit_clearcoat_filamat[859491];
+extern const std::uint8_t k_heaven_lit_clearcoat_filamat[640786];
 inline constexpr std::size_t k_heaven_lit_clearcoat_filamat_size = sizeof(k_heaven_lit_clearcoat_filamat);
 
-extern const std::uint8_t k_heaven_lit_aniso_filamat[820235];
+extern const std::uint8_t k_heaven_lit_aniso_filamat[621754];
 inline constexpr std::size_t k_heaven_lit_aniso_filamat_size = sizeof(k_heaven_lit_aniso_filamat);
 
-extern const std::uint8_t k_heaven_lit_colored_penumbra_filamat[828091];
+extern const std::uint8_t k_heaven_lit_colored_penumbra_filamat[625970];
 inline constexpr std::size_t k_heaven_lit_colored_penumbra_filamat_size = sizeof(k_heaven_lit_colored_penumbra_filamat);
 
-extern const std::uint8_t k_heaven_window_filamat[940263];
+extern const std::uint8_t k_heaven_window_filamat[768103];
 inline constexpr std::size_t k_heaven_window_filamat_size = sizeof(k_heaven_window_filamat);
 
-extern const std::uint8_t k_heaven_subsurface_filamat[891999];
+extern const std::uint8_t k_heaven_subsurface_filamat[712464];
 inline constexpr std::size_t k_heaven_subsurface_filamat_size = sizeof(k_heaven_subsurface_filamat);
 
-extern const std::uint8_t k_heaven_cloth_filamat[780811];
+extern const std::uint8_t k_heaven_cloth_filamat[601554];
 inline constexpr std::size_t k_heaven_cloth_filamat_size = sizeof(k_heaven_cloth_filamat);
 
-extern const std::uint8_t k_heaven_foliage_shadow_filamat[755155];
+extern const std::uint8_t k_heaven_foliage_shadow_filamat[626243];
 inline constexpr std::size_t k_heaven_foliage_shadow_filamat_size = sizeof(k_heaven_foliage_shadow_filamat);
 
-extern const std::uint8_t k_heaven_grass_filamat[711700];
+extern const std::uint8_t k_heaven_grass_filamat[548057];
 inline constexpr std::size_t k_heaven_grass_filamat_size = sizeof(k_heaven_grass_filamat);
 
-extern const std::uint8_t k_heaven_godrays_filamat[120060];
+extern const std::uint8_t k_heaven_godrays_filamat[121096];
 inline constexpr std::size_t k_heaven_godrays_filamat_size = sizeof(k_heaven_godrays_filamat);
 
-extern const std::uint8_t k_heaven_clouds_filamat[102488];
+extern const std::uint8_t k_heaven_clouds_filamat[120689];
 inline constexpr std::size_t k_heaven_clouds_filamat_size = sizeof(k_heaven_clouds_filamat);
 
-extern const std::uint8_t k_heaven_smoke_filamat[618195];
+extern const std::uint8_t k_heaven_smoke_filamat[477411];
 inline constexpr std::size_t k_heaven_smoke_filamat_size = sizeof(k_heaven_smoke_filamat);
 
-extern const std::uint8_t k_heaven_sky_filamat[120646];
+extern const std::uint8_t k_heaven_sky_filamat[121513];
 inline constexpr std::size_t k_heaven_sky_filamat_size = sizeof(k_heaven_sky_filamat);
 
-extern const std::uint8_t k_heaven_volumetric_fog_filamat[105058];
+extern const std::uint8_t k_heaven_volumetric_fog_filamat[105943];
 inline constexpr std::size_t k_heaven_volumetric_fog_filamat_size = sizeof(k_heaven_volumetric_fog_filamat);
 
-extern const std::uint8_t k_heaven_blit_filamat[111860];
+extern const std::uint8_t k_heaven_blit_filamat[112907];
 inline constexpr std::size_t k_heaven_blit_filamat_size = sizeof(k_heaven_blit_filamat);
 
-extern const std::uint8_t k_heaven_heat_haze_filamat[129059];
+extern const std::uint8_t k_heaven_heat_haze_filamat[165556];
 inline constexpr std::size_t k_heaven_heat_haze_filamat_size = sizeof(k_heaven_heat_haze_filamat);
 
-extern const std::uint8_t k_heaven_debug_arrow_filamat[110650];
+extern const std::uint8_t k_heaven_debug_arrow_filamat[111698];
 inline constexpr std::size_t k_heaven_debug_arrow_filamat_size = sizeof(k_heaven_debug_arrow_filamat);
 
-extern const std::uint8_t k_heaven_flame_filamat[115292];
+extern const std::uint8_t k_heaven_flame_filamat[133789];
 inline constexpr std::size_t k_heaven_flame_filamat_size = sizeof(k_heaven_flame_filamat);
 
-extern const std::uint8_t k_heaven_glow_filamat[102713];
+extern const std::uint8_t k_heaven_glow_filamat[122921];
 inline constexpr std::size_t k_heaven_glow_filamat_size = sizeof(k_heaven_glow_filamat);
 
-extern const std::uint8_t k_heaven_lens_flare_filamat[114506];
+extern const std::uint8_t k_heaven_lens_flare_filamat[135344];
 inline constexpr std::size_t k_heaven_lens_flare_filamat_size = sizeof(k_heaven_lens_flare_filamat);
 
-extern const std::uint8_t k_heaven_firefly_filamat[108177];
+extern const std::uint8_t k_heaven_firefly_filamat[129713];
 inline constexpr std::size_t k_heaven_firefly_filamat_size = sizeof(k_heaven_firefly_filamat);
 
-extern const std::uint8_t k_heaven_rain_filamat[133536];
+extern const std::uint8_t k_heaven_rain_filamat[161368];
 inline constexpr std::size_t k_heaven_rain_filamat_size = sizeof(k_heaven_rain_filamat);
 
-extern const std::uint8_t k_heaven_splash_filamat[120634];
+extern const std::uint8_t k_heaven_splash_filamat[121528];
 inline constexpr std::size_t k_heaven_splash_filamat_size = sizeof(k_heaven_splash_filamat);
 
-extern const std::uint8_t k_heaven_glass_filamat[709561];
+extern const std::uint8_t k_heaven_glass_filamat[485716];
 inline constexpr std::size_t k_heaven_glass_filamat_size = sizeof(k_heaven_glass_filamat);
 
-extern const std::uint8_t k_heaven_volumetric_clouds_filamat[202354];
+extern const std::uint8_t k_heaven_volumetric_clouds_filamat[203261];
 inline constexpr std::size_t k_heaven_volumetric_clouds_filamat_size = sizeof(k_heaven_volumetric_clouds_filamat);
 
-extern const std::uint8_t k_heaven_ssgi_filamat[140068];
+extern const std::uint8_t k_heaven_ssgi_filamat[141119];
 inline constexpr std::size_t k_heaven_ssgi_filamat_size = sizeof(k_heaven_ssgi_filamat);
 
-extern const std::uint8_t k_heaven_hdr_encode_filamat[116761];
+extern const std::uint8_t k_heaven_hdr_encode_filamat[127826];
 inline constexpr std::size_t k_heaven_hdr_encode_filamat_size = sizeof(k_heaven_hdr_encode_filamat);
 
-extern const std::uint8_t k_heaven_depth_filamat[189673];
+extern const std::uint8_t k_heaven_depth_filamat[231706];
 inline constexpr std::size_t k_heaven_depth_filamat_size = sizeof(k_heaven_depth_filamat);
 
-extern const std::uint8_t k_heaven_depth_masked_filamat[200949];
+extern const std::uint8_t k_heaven_depth_masked_filamat[247652];
 inline constexpr std::size_t k_heaven_depth_masked_filamat_size = sizeof(k_heaven_depth_masked_filamat);
 
-extern const std::uint8_t k_heaven_grass_depth_filamat[113147];
+extern const std::uint8_t k_heaven_grass_depth_filamat[138727];
 inline constexpr std::size_t k_heaven_grass_depth_filamat_size = sizeof(k_heaven_grass_depth_filamat);
 
-extern const std::uint8_t k_heaven_height_sample_filamat[90523];
+extern const std::uint8_t k_heaven_height_sample_filamat[91359];
 inline constexpr std::size_t k_heaven_height_sample_filamat_size = sizeof(k_heaven_height_sample_filamat);
 
-extern const std::uint8_t k_heaven_motion_filamat[243116];
+extern const std::uint8_t k_heaven_motion_filamat[297216];
 inline constexpr std::size_t k_heaven_motion_filamat_size = sizeof(k_heaven_motion_filamat);
 
-extern const std::uint8_t k_heaven_motion_masked_filamat[251228];
+extern const std::uint8_t k_heaven_motion_masked_filamat[309702];
 inline constexpr std::size_t k_heaven_motion_masked_filamat_size = sizeof(k_heaven_motion_masked_filamat);
 
-extern const std::uint8_t k_heaven_motion_grass_filamat[134390];
+extern const std::uint8_t k_heaven_motion_grass_filamat[164619];
 inline constexpr std::size_t k_heaven_motion_grass_filamat_size = sizeof(k_heaven_motion_grass_filamat);
 
-extern const std::uint8_t k_heaven_temporal_extract_filamat[121454];
+extern const std::uint8_t k_heaven_temporal_extract_filamat[132452];
 inline constexpr std::size_t k_heaven_temporal_extract_filamat_size = sizeof(k_heaven_temporal_extract_filamat);
 
-extern const std::uint8_t k_heaven_temporal_smoke_filamat[208692];
+extern const std::uint8_t k_heaven_temporal_smoke_filamat[254172];
 inline constexpr std::size_t k_heaven_temporal_smoke_filamat_size = sizeof(k_heaven_temporal_smoke_filamat);
 
-extern const std::uint8_t k_heaven_temporal_flame_filamat[176627];
+extern const std::uint8_t k_heaven_temporal_flame_filamat[213823];
 inline constexpr std::size_t k_heaven_temporal_flame_filamat_size = sizeof(k_heaven_temporal_flame_filamat);
 
-extern const std::uint8_t k_heaven_temporal_glow_filamat[145289];
+extern const std::uint8_t k_heaven_temporal_glow_filamat[177267];
 inline constexpr std::size_t k_heaven_temporal_glow_filamat_size = sizeof(k_heaven_temporal_glow_filamat);
 
-extern const std::uint8_t k_heaven_temporal_firefly_filamat[153782];
+extern const std::uint8_t k_heaven_temporal_firefly_filamat[187832];
 inline constexpr std::size_t k_heaven_temporal_firefly_filamat_size = sizeof(k_heaven_temporal_firefly_filamat);
 
-extern const std::uint8_t k_heaven_temporal_rain_filamat[197006];
+extern const std::uint8_t k_heaven_temporal_rain_filamat[242322];
 inline constexpr std::size_t k_heaven_temporal_rain_filamat_size = sizeof(k_heaven_temporal_rain_filamat);
 
-extern const std::uint8_t k_heaven_temporal_lens_flare_filamat[171300];
+extern const std::uint8_t k_heaven_temporal_lens_flare_filamat[209194];
 inline constexpr std::size_t k_heaven_temporal_lens_flare_filamat_size = sizeof(k_heaven_temporal_lens_flare_filamat);
 
-extern const std::uint8_t k_heaven_temporal_clouds_filamat[130865];
+extern const std::uint8_t k_heaven_temporal_clouds_filamat[158261];
 inline constexpr std::size_t k_heaven_temporal_clouds_filamat_size = sizeof(k_heaven_temporal_clouds_filamat);
 
-extern const std::uint8_t k_heaven_temporal_volumetric_clouds_filamat[395143];
+extern const std::uint8_t k_heaven_temporal_volumetric_clouds_filamat[474540];
 inline constexpr std::size_t k_heaven_temporal_volumetric_clouds_filamat_size = sizeof(k_heaven_temporal_volumetric_clouds_filamat);
 
-extern const std::uint8_t k_heaven_heat_haze_field_filamat[150177];
+extern const std::uint8_t k_heaven_heat_haze_field_filamat[180434];
 inline constexpr std::size_t k_heaven_heat_haze_field_filamat_size = sizeof(k_heaven_heat_haze_field_filamat);
 
-extern const std::uint8_t k_heaven_fg_distortion_filamat[123134];
+extern const std::uint8_t k_heaven_fg_distortion_filamat[134124];
 inline constexpr std::size_t k_heaven_fg_distortion_filamat_size = sizeof(k_heaven_fg_distortion_filamat);
 
-extern const std::uint8_t k_heaven_fg_composite_filamat[110366];
+extern const std::uint8_t k_heaven_fg_composite_filamat[121356];
 inline constexpr std::size_t k_heaven_fg_composite_filamat_size = sizeof(k_heaven_fg_composite_filamat);
 
 #endif // HEAVENBENCH_RHI_MATERIALS_DATA_H

@@ -98,6 +98,7 @@ bool configs_equal(const BenchConfig& a, const BenchConfig& b) {
     if (a.node_file != b.node_file) return false;
     if (a.texture_quality != b.texture_quality) return false;
     if (a.frame_generation != b.frame_generation) return false;
+    if (a.variable_rate_shading != b.variable_rate_shading) return false;
     // quality_preset_label is a deprecated read alias. Canonical writes emit
     // only quality_preset, so the free-form legacy label is not round-tripped.
 
@@ -196,6 +197,7 @@ BenchConfig gen_valid_config() {
     c.texture_quality = static_cast<heaven::TextureQuality>(
         *rc::gen::inRange(0, 3));
     c.frame_generation = static_cast<heaven::FrameGenerationMode>(*rc::gen::inRange(0, 3));
+    c.variable_rate_shading = static_cast<heaven::VariableRateShadingMode>(*rc::gen::inRange(0, 3));
 
     // Ints (no validation) — kept to a sane positive resolution range.
     c.width  = *rc::gen::inRange(1, 16384);

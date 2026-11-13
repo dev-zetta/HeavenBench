@@ -7,9 +7,9 @@ from pathlib import Path
 import subprocess
 
 from dlss_lifecycle_contract_test import raw_body
+from filament_linear_stage_layout_test import run_layout_contract
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "lib/filament/filament/backend/src/vulkan/VulkanTexture.cpp"
 
 PREFIX = r'''
 #define VK_NO_PROTOTYPES
@@ -21,6 +21,7 @@ PREFIX = r'''
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -33,6 +34,7 @@ void panic(const char* function, const char* file, int line, const char* asserti
 }
 }
 using namespace filament::backend;
+#define FVK_LOGE std::cerr
 '''
 
 UPLOAD_PREFIX = r'''
@@ -178,6 +180,12 @@ def upload_body(text):
     boundary = "    VulkanCommandBuffer& commands = mState->mCommands->get();"
     if body.count(boundary) != 1:
         raise RuntimeError("Actual staging boundary changed; explicit fixture review required")
+    if "if (stage->tiling() == VK_IMAGE_TILING_LINEAR)" in body:
+        setup = body.split(boundary)[0]
+        linear = raw_body(body, "if (stage->tiling() == VK_IMAGE_TILING_LINEAR)")
+        # Only the actual LINEAR host-copy block is isolated here. The complete production
+        # method, including the independent OPTIMAL route, executes in the layout contract.
+        return setup + linear.split("        stage->prepareForRead(cmdbuf);", 1)[0]
     return body.split(boundary)[0]
 
 
@@ -186,20 +194,24 @@ def main():
     parser.add_argument("--cxx", required=True)
     parser.add_argument("--vulkan-include", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
+    parser.add_argument("--filament-source", type=Path, default=ROOT / "lib/filament",
+                        help="Explicit source tree, including a staging rebase; never mix fixture/source includes")
     parser.add_argument("--original-source", type=Path,
                         help="Optional preserved pre-fix source for the exact old-source negative")
     args = parser.parse_args()
     work = args.work_dir.resolve()
-    text = SOURCE.read_text()
+    filament = args.filament_source.resolve()
+    source_path = filament / "filament/backend/src/vulkan/VulkanTexture.cpp"
+    text = source_path.read_text()
     packed = "void adjustedMemcpy(void* mapped, PixelBufferDescriptor const& p, size_t width, size_t height, size_t depth) {\n" + raw_body(text, "void adjustedMemcpy(") + "\n}\n"
     linear = "VkDeviceSize copyToLinearImage(void* mapped, PixelBufferDescriptor const& p, size_t width, size_t height, size_t depth, VkSubresourceLayout const& layout) {\n" + raw_body(text, "VkDeviceSize copyToLinearImage(") + "\n}\n"
     upload = upload_body(text)
-    copy_call = "VkDeviceSize const writeSize = copyToLinearImage(mapped, data, width, height, depth, layout);"
-    flush_call = "vmaFlushAllocation(mState->mAllocator, stage->memory(), layout.offset, writeSize);"
+    copy_call = "VkDeviceSize const writtenSize = copyToLinearImage(mapped, data, width, height, depth, layout);"
+    flush_call = "vmaFlushAllocation(mState->mAllocator, stage->memory(), layout.offset, writtenSize);"
     if upload.count(copy_call) != 1 or upload.count(flush_call) != 1:
         raise RuntimeError("Actual linear staging bindings changed; explicit fixture review required")
     tight_size = "PixelBufferDescriptor::computeDataSize(data.format, data.type, 1, 1, 1) * width * height * depth"
-    old_copy = upload.replace(copy_call, "size_t const writeSize = " + tight_size + ";\n    adjustedMemcpy(mapped, data, width, height, depth);")
+    old_copy = upload.replace(copy_call, "size_t const writtenSize = " + tight_size + ";\n    adjustedMemcpy(mapped, data, width, height, depth);")
     variants = [("positive", linear, upload, None),
                 ("old-tight-copy", linear, old_copy, "linear staging pixels or padding differ"),
                 ("missing-offset", linear.replace("static_cast<uint8_t*>(mapped) + layout.offset", "static_cast<uint8_t*>(mapped)"), upload, "linear staging pixels or padding differ"),
@@ -208,7 +220,7 @@ def main():
         variants.append(("actual-original-source", linear, upload_body(args.original_source.read_text()), "linear staging pixels or padding differ"))
     observations = []
     msvc = Path(args.cxx).name.lower() in ("cl", "cl.exe", "clang-cl", "clang-cl.exe")
-    includes = [args.vulkan_include.resolve()] + [ROOT / "lib/filament" / p for p in
+    includes = [args.vulkan_include.resolve()] + [filament / p for p in
         ("filament/backend/include", "libs/utils/include", "libs/filabridge/include", "libs/math/include")]
     for name, helper, staging, failure in variants:
         directory = work / name
@@ -236,14 +248,15 @@ def main():
         observations.append({"variant": name, "compile_argv": command,
                              "exit_code": executed.returncode, "expected_failure": failure,
                              "assertion_probe_exit": assertion.returncode})
-    sources = [SOURCE, ROOT / "tests/filament_linear_staging_test.py",
-               ROOT / "lib/filament/filament/backend/include/backend/PixelBufferDescriptor.h"]
+    sources = [source_path, ROOT / "tests/filament_linear_staging_test.py",
+               filament / "filament/backend/include/backend/PixelBufferDescriptor.h"]
     if args.original_source:
         sources.append(args.original_source.resolve())
+    layout = run_layout_contract(args.cxx, args.vulkan_include, work, filament)
     receipt = {"passed": True, "gpu_execution": False,
                "scope": "Actual PixelBufferDescriptor, existing packed copy, linear copy and blit staging body; fake layout/map/flush only. Native driver row pitch and corrected readback remain separate.",
                "sources": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
-               "controls": observations}
+               "controls": observations, "host_image_layout": layout}
     (work / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))
 

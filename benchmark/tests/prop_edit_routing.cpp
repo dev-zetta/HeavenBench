@@ -85,6 +85,7 @@ using heaven::QualityLevel;
 using heaven::RenderPreset;
 using heaven::SettingValue;
 using heaven::TextureQuality;
+using heaven::VariableRateShadingMode;
 using heaven::testing::FakeRendererEffects;
 using heaven::testing::gen_finite_float;
 using heaven::testing::gen_quality_level;
@@ -132,6 +133,9 @@ using heaven::testing::gen_ranged_int;
                     *rc::gen::inRange(0, 3))};
             } else if constexpr (std::is_same_v<T, FrameGenerationMode>) {
                 return SettingValue{static_cast<FrameGenerationMode>(
+                    *rc::gen::inRange(0, 3))};
+            } else if constexpr (std::is_same_v<T, VariableRateShadingMode>) {
+                return SettingValue{static_cast<VariableRateShadingMode>(
                     *rc::gen::inRange(0, 3))};
             } else {
                 return SettingValue{*rc::gen::arbitrary<std::string>()};

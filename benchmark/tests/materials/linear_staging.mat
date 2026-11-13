@@ -1,0 +1,25 @@
+// Test-only FLOAT-to-HALF cubemap upload oracle; no lighting or float readback.
+material {
+    name : smoke_linear_staging,
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    parameters : [ { type : samplerCubemap, name : source } ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        highp vec2 pixel = getFragCoord(vec2(192.0, 128.0));
+        float face = floor(pixel.x / 32.0);
+        vec2 uv = vec2(fract(pixel.x / 32.0), pixel.y / 128.0) * 1.6 - 0.8;
+        vec3 direction;
+        if (face < 1.0) direction = vec3(1.0, uv.y, uv.x);
+        else if (face < 2.0) direction = vec3(-1.0, uv.y, uv.x);
+        else if (face < 3.0) direction = vec3(uv.x, 1.0, uv.y);
+        else if (face < 4.0) direction = vec3(uv.x, -1.0, uv.y);
+        else if (face < 5.0) direction = vec3(uv.x, uv.y, 1.0);
+        else direction = vec3(uv.x, uv.y, -1.0);
+        material.baseColor = texture(materialParams_source, direction);
+    }
+}

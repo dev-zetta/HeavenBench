@@ -251,14 +251,14 @@ class ClangTidyGateTest(unittest.TestCase):
                         self.assertFalse(gate.permitted_texture_usage_report(report))
 
     def test_texture_bitmask_previous_vendor_offsets_are_not_accepted(self):
-        # The NativeCommand include moved only the enum declaration. Keep the
+        # The v1.80.1 index-count constants move the unchanged declaration. Keep the
         # complete current trace pinned instead of ignoring dependency offsets.
         for report in texture_usage_reports():
             def previous_offsets(value):
                 if isinstance(value, dict):
                     if (value.get("FilePath") == str(ROOT / gate.DRIVER_ENUMS_PATH)
                             and "FileOffset" in value):
-                        value["FileOffset"] -= 35
+                        value["FileOffset"] -= 251
                     for child in value.values():
                         previous_offsets(child)
                 elif isinstance(value, list):
@@ -268,7 +268,7 @@ class ClangTidyGateTest(unittest.TestCase):
             self.assertEqual(self.run_wrapper(report).returncode, 1)
 
     def test_texture_bitmask_previous_vendor_source_is_not_accepted(self):
-        previous = "5d51ce7e896c626644c1d7765c45388e35229d7f977938a2844eeccda74fdd4c"
+        previous = "af1176a7dafff84fc5dd025d1f1052d15cb32539fb3bdcb008421b30442dd343"
         for report in texture_usage_reports():
             with patch.dict(gate.TEXTURE_USAGE_SOURCES, {gate.DRIVER_ENUMS_PATH: previous}):
                 self.assertFalse(gate.permitted_texture_usage_report(report))

@@ -21,6 +21,7 @@
 #include "benchmark/stats_collector.h"
 #include "engine/camera_path.h"
 #include "engine/frame_generation.h"
+#include "engine/variable_rate_shading.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,7 @@ struct RunResult {
     std::string diagnostic_reason;
     bool frame_generation_requested = false;
     FrameGenerationStatus frame_generation;
+    VariableRateShadingStatus variable_rate_shading;
     HardwareScoreResult performance{};
     double   average_fps = 0.0;
     float    min_fps     = 0.0f;
@@ -163,6 +165,16 @@ public:
         }
     }
 
+    // Compilation capture flags can affect pipelines even outside a recording.
+    // A request retires this tour's score even if the device lacks the feature.
+    void set_gpu_diagnostics_requested(bool requested) {
+        gpu_diagnostics_requested_ = requested;
+        if (requested && state_ == BenchmarkState::Running) {
+            diagnostic_ = true;
+            diagnostic_gpu_diagnostics_ = true;
+        }
+    }
+
     // Requested means unscored even when the provider is unavailable. Turning
     // the request off cannot restore comparability for this already-started tour.
     void set_frame_generation_requested(bool requested) {
@@ -176,6 +188,12 @@ public:
     void set_frame_generation_status(const FrameGenerationStatus& status) {
         frame_generation_status_ = status;
         set_frame_generation_requested(status.requested != FrameGenerationMode::Off);
+    }
+
+    // An explicit quality setting retains ordinary scoring. The completed
+    // result owns its effective-status snapshot for settings-matched comparison.
+    void set_variable_rate_shading_status(const VariableRateShadingStatus& status) {
+        variable_rate_shading_status_ = status;
     }
 
     // Presentation observation is diagnostic even with generation Off. Its
@@ -249,12 +267,15 @@ private:
     bool                diagnostic_ = false;
     bool                frame_generation_requested_ = false;
     bool                diagnostic_microprofile_ = false;
+    bool                gpu_diagnostics_requested_ = false;
+    bool                diagnostic_gpu_diagnostics_ = false;
     bool                diagnostic_frame_generation_ = false;
     bool                presentation_trace_requested_ = false;
     bool                diagnostic_presentation_trace_ = false;
     bool                input_response_requested_ = false;
     bool                diagnostic_input_response_ = false;
     FrameGenerationStatus frame_generation_status_;
+    VariableRateShadingStatus variable_rate_shading_status_;
 };
 
 } // namespace heaven

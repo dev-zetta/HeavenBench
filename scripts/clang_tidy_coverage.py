@@ -19,6 +19,8 @@ FSR_SOURCES = frozenset(Path("benchmark/src/rhi/frame_generation") / name for na
     "spirv_reflect_json.cpp",
 ))
 FSR_NATIVE_SOURCE = Path("benchmark/src/rhi/frame_generation/fsr31_vulkan_test.cpp")
+GPU_LAB_SOURCE = Path("tools/gpu_lab/main.cpp")
+GPU_LAB_SOURCES = frozenset((GPU_LAB_SOURCE, Path("tools/gpu_lab/int8_contract_test.cpp")))
 
 
 def cache_options(path):
@@ -64,15 +66,19 @@ def check_coverage(root, sources, compile_db, cmake_cache=None):
     for source in sources:
         source = source.resolve()
         relative = source.relative_to(root.resolve())
-        optional = relative in FSR_SOURCES or relative == FSR_NATIVE_SOURCE
-        expected = fsr_enabled if relative in FSR_SOURCES else native_enabled
+        optional = relative in FSR_SOURCES or relative == FSR_NATIVE_SOURCE or relative in GPU_LAB_SOURCES
+        if relative in GPU_LAB_SOURCES:
+            expected = cmake_enabled(options, "HEAVEN_BUILD_GPU_LAB")
+            option = "HEAVEN_BUILD_GPU_LAB"
+        else:
+            expected = fsr_enabled if relative in FSR_SOURCES else native_enabled
+            option = "HEAVEN_ENABLE_FSR3" if not fsr_enabled else "HEAVEN_FSR31_NATIVE_TEST"
         if source in available:
             if optional and (not cmake_cache or not expected):
                 errors.append(f"{relative.as_posix()}: optional source contradicts CMake configuration")
             else:
                 selected.append(relative.as_posix())
         elif optional and cmake_cache and not expected:
-            option = "HEAVEN_ENABLE_FSR3" if not fsr_enabled else "HEAVEN_FSR31_NATIVE_TEST"
             unavailable.append({"source": relative.as_posix(), "reason": f"{option} is disabled"})
         else:
             errors.append(f"{relative.as_posix()}: owned source is missing from {compile_db}")

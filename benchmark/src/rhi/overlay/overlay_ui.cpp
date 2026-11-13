@@ -703,6 +703,12 @@ void render_control(const CatalogEntry& entry,
                                  static_cast<int>(kFrameGenerationItems.size()))) {
                     emit_edit(intents, entry.id, SettingValue{static_cast<FrameGenerationMode>(idx)});
                 }
+            } else if (std::holds_alternative<VariableRateShadingMode>(cur)) {
+                constexpr std::array kVrsItems = {"Off (full rate)", "2x1 pixels", "2x2 pixels"};
+                int idx = std::clamp(static_cast<int>(std::get<VariableRateShadingMode>(cur)), 0, 2);
+                if (ImGui::Combo(ui_label.c_str(), &idx, kVrsItems.data(), static_cast<int>(kVrsItems.size()))) {
+                    emit_edit(intents, entry.id, SettingValue{static_cast<VariableRateShadingMode>(idx)});
+                }
             } else if (std::holds_alternative<TextureQuality>(cur)) {
                 constexpr std::array kTextureItems = {
                     "Original (authored)", "High 2K", "Ultra 4K"};
@@ -842,6 +848,13 @@ void render_panel_body(Panel                panel,
 #endif
         if (e.id == SettingId::TessEnabled) render_tessellation_level(working, intents);
         render_control(e, working, intents);
+        if (e.id == SettingId::VariableRateShading) {
+            const auto& vrs = ui_state.variable_rate_shading;
+            ImGui::Text("Effective: %s", std::string(variable_rate_shading_mode_id(vrs.effective)).c_str());
+            ImGui::TextWrapped("%s", vrs.reason.c_str());
+            ImGui::TextDisabled("Available at current sample count: 2x1 %s | 2x2 %s",
+                                vrs.supported_2x1 ? "yes" : "no", vrs.supported_2x2 ? "yes" : "no");
+        }
         if (e.id == SettingId::FrameGeneration) {
             const auto& fg = ui_state.frame_generation;
             ImGui::Text("Effective: %s", std::string(frame_generation_mode_id(fg.effective)).c_str());

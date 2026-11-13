@@ -29,6 +29,54 @@ enum class FrameOutcome { Pending, Accepted, Rejected, Cancelled };
 enum class FlowPhase { Begin, Step, End };
 enum class SampleStatus { Available, Pending, Unsupported, Disjoint, Error, Dropped };
 enum class TimerSource { HardwareTimestamp, FenceEstimate, Unavailable };
+enum class PipelineEventKind { Pipeline, Statistic, InternalRepresentation, Use, Loss };
+enum class PipelineStatisticFormat { Bool32, Int64, Uint64, Float64 };
+
+// Pipeline query availability is independent of timestamp validity. Counts are
+// hardware query results, not estimates inferred from submitted geometry.
+struct PipelineStatisticsView {
+    SampleStatus status = SampleStatus::Unsupported;
+    std::string_view reason = "Pipeline statistics were not recorded";
+    std::uint64_t input_assembly_vertices = 0, input_assembly_primitives = 0;
+    std::uint64_t vertex_shader_invocations = 0;
+    std::uint64_t clipping_invocations = 0, clipping_primitives = 0;
+    std::uint64_t fragment_shader_invocations = 0;
+};
+
+// IDs are device-local correlation identities, never native handle addresses.
+// Compile-time driver properties/IR and runtime pipeline uses remain separate
+// events; compile statistics are not measured per-frame costs. Views borrow
+// callback strings only for this call. Snapshot events own their strings.
+struct PipelineEventView {
+    Context context;
+    PipelineEventKind kind = PipelineEventKind::Pipeline;
+    std::uint64_t pipeline_id = 0, program_id = 0, pass_id = 0;
+    std::uint32_t executable_index = 0, stages = 0, subgroup_size = 0;
+    std::string_view program_name, name, description, text, reason;
+    SampleStatus status = SampleStatus::Unsupported;
+    PipelineStatisticFormat format = PipelineStatisticFormat::Uint64;
+    bool bool_value = false;
+    std::int64_t signed_value = 0;
+    std::uint64_t unsigned_value = 0;
+    double float_value = 0.0;
+    std::uint64_t original_size = 0;
+    bool truncated = false;
+};
+struct PipelineEvent {
+    Context context;
+    PipelineEventKind kind = PipelineEventKind::Pipeline;
+    std::uint64_t pipeline_id = 0, program_id = 0, pass_id = 0;
+    std::uint32_t executable_index = 0, stages = 0, subgroup_size = 0;
+    std::string program_name, name, description, text, reason;
+    SampleStatus status = SampleStatus::Unsupported;
+    PipelineStatisticFormat format = PipelineStatisticFormat::Uint64;
+    bool bool_value = false;
+    std::int64_t signed_value = 0;
+    std::uint64_t unsigned_value = 0;
+    double float_value = 0.0;
+    std::uint64_t original_size = 0;
+    bool truncated = false;
+};
 
 struct ThreadInfo { std::uint64_t id = 0; std::string name; };
 struct Span {
@@ -70,6 +118,20 @@ struct GpuSample {
     std::uint64_t command_count = 0, primitive_count = 0, visible_renderables = 0;
     // Sum of instances over executed draws, not unique visible placements.
     std::uint64_t draw_instance_invocations = 0;
+    // Native draw commands classified by the bound pipeline rate, not fragment
+    // invocations or proof of the hardware's final rate after clamping.
+    std::uint64_t native_draw_commands_full = 0;
+    std::uint64_t native_draw_commands_2x1 = 0;
+    std::uint64_t native_draw_commands_2x2 = 0;
+    // Older reports and callers do not supply these observations. Preserve
+    // unavailable separately from a measured zero, independently of timing.
+    bool native_draw_commands_available = false;
+    SampleStatus pipeline_statistics_status = SampleStatus::Unsupported;
+    std::string pipeline_statistics_reason = "Pipeline statistics were not recorded";
+    std::uint64_t input_assembly_vertices = 0, input_assembly_primitives = 0;
+    std::uint64_t vertex_shader_invocations = 0;
+    std::uint64_t clipping_invocations = 0, clipping_primitives = 0;
+    std::uint64_t fragment_shader_invocations = 0;
 };
 
 struct Limits {
@@ -91,6 +153,12 @@ struct Snapshot {
     std::uint64_t dropped_events = 0, overwritten_events = 0, truncated_labels = 0;
     // Expected imports from a previous capture are not lost current events.
     std::uint64_t stale_epoch_events = 0;
+    std::uint64_t dropped_pipeline_events = 0, overwritten_pipeline_events = 0;
+    std::uint64_t truncated_pipeline_artifacts = 0;
+    bool pipeline_loss_breakdown_available = false;
+    std::uint64_t dropped_pipeline_headers = 0;
+    std::uint64_t dropped_pipeline_statistics = 0, overwritten_pipeline_statistics = 0;
+    std::uint64_t dropped_pipeline_artifacts = 0, overwritten_pipeline_artifacts = 0;
     std::size_t memory_bytes = 0;
     std::map<std::string, std::string> metadata;
     std::vector<ThreadInfo> threads;
@@ -99,6 +167,7 @@ struct Snapshot {
     std::vector<Counter> counters;
     std::vector<Flow> flows;
     std::vector<GpuSample> gpu_samples;
+    std::vector<PipelineEvent> pipeline_events;
 };
 
 class Scope;
@@ -114,6 +183,9 @@ public:
     // not allocate. Stopping preserves history. Capture/export is diagnostic.
     void set_active(bool enabled);
     [[nodiscard]] bool active() const noexcept;
+    // A producer has imported at least one GPU observation in this capture,
+    // including an explicitly unavailable result. Reset with the capture epoch.
+    [[nodiscard]] bool has_gpu_observations() const noexcept;
     [[nodiscard]] std::uint64_t session_id() const noexcept;
     // Control-thread operation. Clears retained events while disabled, then
     // changes the correlation epoch. Old callback contexts are rejected.
@@ -146,7 +218,16 @@ public:
                     SampleStatus status, TimerSource source,
                     std::string_view capability = {}, std::uint64_t command_count = 0,
                     std::uint64_t primitive_count = 0, std::uint64_t visible_renderables = 0,
-                    std::uint64_t draw_instance_invocations = 0) noexcept;
+                    std::uint64_t draw_instance_invocations = 0,
+                    std::uint64_t native_draw_commands_full = 0,
+                    std::uint64_t native_draw_commands_2x1 = 0,
+                    std::uint64_t native_draw_commands_2x2 = 0,
+                    bool native_draw_commands_available = false,
+                    PipelineStatisticsView pipeline_statistics = {}) noexcept;
+    // Bounded, allocation-free import. IR text retains at most 4096 bytes and
+    // records truncation/original size. Large driver artifacts never allocate
+    // in a backend callback. Late events require their original capture ID.
+    void pipeline_event(const PipelineEventView& event) noexcept;
     [[nodiscard]] Snapshot snapshot() const;
     [[nodiscard]] static std::uint64_t steady_now_ns() noexcept;
 

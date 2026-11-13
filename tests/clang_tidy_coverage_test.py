@@ -52,7 +52,8 @@ class ClangTidyCoverageTest(unittest.TestCase):
     def test_missing_ordinary_and_new_optional_sources_fail(self):
         self.configure([self.normal])
         for missing in (Path("benchmark/src/new_renderer.cpp"),
-                        Path("benchmark/src/rhi/frame_generation/new_provider.cpp")):
+                        Path("benchmark/src/rhi/frame_generation/new_provider.cpp"),
+                        Path("tools/gpu_lab/new_unregistered_test.cpp")):
             result = self.check([*self.sources, missing])
             self.assertEqual(len(result["errors"]), 1)
             self.assertIn(missing.as_posix(), result["errors"][0])
@@ -86,6 +87,25 @@ class ClangTidyCoverageTest(unittest.TestCase):
     def test_disabled_option_with_stale_database_entry_fails(self):
         self.configure(self.sources)
         self.assertEqual(len(self.check()["errors"]), len(self.optional))
+
+    def test_gpu_lab_is_explicitly_optional_but_required_when_enabled(self):
+        for source in sorted(coverage.GPU_LAB_SOURCES):
+            with self.subTest(source=source):
+                self.configure([self.normal])
+                result = self.check([self.normal, source])
+                self.assertEqual(result["errors"], [])
+                self.assertEqual(result["unavailable"], [{"source": source.as_posix(),
+                                                        "reason": "HEAVEN_BUILD_GPU_LAB is disabled"}])
+                with self.cache.open("a") as stream:
+                    stream.write("HEAVEN_BUILD_GPU_LAB:BOOL=ON\n")
+                self.assertEqual(len(self.check([self.normal, source])["errors"]), 1)
+                self.configure([self.normal, source])
+                self.assertEqual(len(self.check([self.normal, source])["errors"]), 1)
+                with self.cache.open("a") as stream:
+                    stream.write("HEAVEN_BUILD_GPU_LAB:BOOL=ON\n")
+                result = self.check([self.normal, source])
+                self.assertEqual(result["errors"], [])
+                self.assertEqual(result["selected"], [self.normal.as_posix(), source.as_posix()])
 
     def test_invalid_database_and_missing_renderer_option_fail(self):
         self.configure([self.normal])

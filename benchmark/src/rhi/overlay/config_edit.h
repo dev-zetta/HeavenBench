@@ -64,6 +64,7 @@ enum class SettingId {
 
     // ── Quality (mix of Live and Reload) ──
     TextureQuality,
+    VariableRateShading,
     FeatureGrass,
     FeatureParticles,
     FeatureGodRays,
@@ -127,7 +128,8 @@ enum class SettingId {
 using SettingValue =
     std::variant<bool, int, float, heaven::QualityLevel,
                  heaven::RenderPreset, heaven::MaterialWorkflow,
-                 heaven::TextureQuality, heaven::FrameGenerationMode, std::string>;
+                 heaven::TextureQuality, heaven::FrameGenerationMode,
+                 heaven::VariableRateShadingMode, std::string>;
 
 // A single committed change surfaced by OverlayUI this frame:
 // exactly which setting changed and the new value the user committed.
@@ -182,6 +184,7 @@ struct ConfigUiState {
     uint64_t texture_2k_gpu_bytes = 0;
     uint64_t texture_4k_gpu_bytes = 0;
     FrameGenerationStatus frame_generation;
+    VariableRateShadingStatus variable_rate_shading;
 };
 
 // Append exactly one ConfigurationEdit carrying `id` and `value` to `intents`.

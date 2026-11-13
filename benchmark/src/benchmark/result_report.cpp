@@ -152,6 +152,7 @@ Json configuration_json(const BenchConfig& c) {
         {"data_dir", c.data_dir},
         {"texture_quality", texture_quality_id(c.texture_quality)},
         {"frame_generation", frame_generation_mode_id(c.frame_generation)},
+        {"variable_rate_shading", variable_rate_shading_mode_id(c.variable_rate_shading)},
         {"node_file", c.node_file},
         {"shader_dir", c.shader_dir},
         {"width", c.width},
@@ -478,6 +479,17 @@ Json report_json(const RunResult& result, const BenchConfig& config,
         }},
         {"configuration", configuration_json(config)},
     };
+    const auto& vrs = result.variable_rate_shading;
+    root["variable_rate_shading"] = {
+        {"requested", variable_rate_shading_mode_id(vrs.requested)},
+        {"effective", variable_rate_shading_mode_id(vrs.effective)},
+        {"supported_2x1", vrs.supported_2x1},
+        {"supported_2x2", vrs.supported_2x2},
+        {"capability_reason", vrs.reason},
+        {"scope", "Eligible opaque lit SURFACE geometry in the main-color pass. Masked, alpha-to-coverage, blended and unlit materials, depth, shadows, SSR, post-processing and UI retain full-rate shading."},
+        {"quality_tradeoff", "Coarse shading shares a fragment result across 2x1 or 2x2 pixels; fine material detail and shader-derived edges can lose quality. Geometry work is unchanged."},
+        {"comparison_policy", "Compare only matching hardware, driver, API, resolution and effective settings, including requested and effective variable-rate shading and sample count. VRS remains an explicit scored quality setting."},
+    };
     if (result.diagnostic) {
         root["run"]["diagnostic"] = true;
         root["run"]["scored"] = false;
@@ -600,6 +612,17 @@ footer { margin:42px 10px 10px; text-align:center; }
             "Unavailable (no presentation feedback)" : std::to_string(fg.at("confirmed_displayed_frames").get<uint64_t>()));
         out << "</table>\n";
     }
+    const auto& vrs = root.at("variable_rate_shading");
+    out << "<h2>Variable-rate shading</h2><table class=\"detail\">\n";
+    append_detail_row(out, "Requested shading rate", vrs.at("requested").get<std::string>());
+    append_detail_row(out, "Effective shading rate", vrs.at("effective").get<std::string>());
+    append_detail_row(out, "2x1 support at current sample count", vrs.at("supported_2x1").get<bool>() ? "Available" : "Unavailable");
+    append_detail_row(out, "2x2 support at current sample count", vrs.at("supported_2x2").get<bool>() ? "Available" : "Unavailable");
+    append_detail_row(out, "Capability", vrs.at("capability_reason").get<std::string>());
+    append_detail_row(out, "Eligible work", vrs.at("scope").get<std::string>());
+    out << "</table>\n<p class=\"meta\">"
+        << html_escape(vrs.at("quality_tradeoff").get<std::string>()) << "</p>\n<p class=\"meta\">"
+        << html_escape(vrs.at("comparison_policy").get<std::string>()) << "</p>\n";
     out << "<h2>Overall</h2><table class=\"detail\">\n";
     append_detail_row(out, "Average FPS",
         display_number(results.at("average_fps").get<double>(), 2));

@@ -31,6 +31,10 @@ Start with [Getting started](GETTING_STARTED.md) for asset preparation, platform
 - [Rendering test scenes](RENDER_TEST_SCENES.md): procedural and real-mesh fixtures, feature pairs and capture replay.
 - [Visual audit](VISUAL_AUDIT.md): full-scene findings, evidence and acceptance limits.
 - [Microprofiler](MICROPROFILER.md): live controls, trace schema, clock domains and offline analysis.
+- [GPU diagnostics](GPU_DIAGNOSTICS.md): Vulkan invocation counters, compiled shaders, bounded IR capture and read-only Intel clock telemetry.
+- [Intel GPU workloads](INTEL_GPU_FEATURES.md): optional FP16 and signed INT8 reference/DP4a/cooperative-matrix measurements, correctness controls, capability inventory and XeSS platform limits.
+- [Variable-rate shading](VARIABLE_RATE_SHADING.md): optional Vulkan coarse shading, live controls, quality tradeoffs, eligible passes and actual-scene validation methodology.
+- [Intel Vulkan compatibility](INTEL_VULKAN_COMPATIBILITY.md): startup/readback diagnosis, the narrowly scoped Mesa CCS image workaround, source corrections and native validation limits.
 - [Experimental frame generation](FRAME_GENERATION.md): optional FSR/DLSS builds, temporal input contracts, presentation counters and native acceptance limits.
 - [Performance optimizations](PERFORMANCE_OPTIMIZATIONS.md): measured changes and feature costs.
 - [Instancing and culling audit](CULLING_AUDIT.md): batching, bounds, draw-command oracles and optimization limits.

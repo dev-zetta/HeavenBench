@@ -27,6 +27,8 @@ arguments are evaluated left to right.
 
 The AO resolution row describes each preset's base setting. Enabling contact shadows requires full-resolution structure depth and promotes AO resolution to full as well, because Filament shares that depth hierarchy. This applies even when AO itself is disabled; turning contact shadows off restores the selected AO resolution. TAA reduces the contact ray marcher's visible spatial dithering.
 
+[Variable-rate shading](VARIABLE_RATE_SHADING.md) is an independent quality setting, defaults to Off and is preserved across preset changes. `--vrs off|2x1|2x2` selects an optional Vulkan pipeline rate for eligible opaque lit main-color draws, subject to logical-device and actual MSAA support. Masked foliage, transparent effects, depth, shadows, SSR, post-processing and UI remain full-rate. Saved results disclose both requested and effective rates; compare only matching effective quality settings.
+
 Select with `--preset NAME`, the Quality panel, or `quality_preset`.
 Changing a preset-owned field makes the effective preset `custom`. The old
 label input is read for compatibility but is not emitted by new config files.
@@ -41,6 +43,7 @@ label input is read for compatibility but is not emitted by new config files.
 | Geometry | Cached CPU tessellation, persistent renderables, GPU instancing and GPU skinning |
 | Shadows | Four-cascade PCSS sun, contact shadows, independently sized/budgeted point shadows |
 | AA/AO | TAA plus 2x/4x MSAA, HDR custom resolve, cutout A2C, GTAO, bent normals and multi-bounce AO |
+| Shading frequency | Optional Vulkan 2×1/2×2 pipeline VRS for opaque lit main color; default Off, explicit fallback reasons and native per-rate command counters |
 | Reflections/GI | Prefiltered IBL, SSR, wet reflections and previous-frame scene-color SSGI |
 | Atmosphere | Procedural sky, volumetric clouds, per-light volumetric fog and god rays |
 | Post effects | Tiered bloom with extracted lens dirt, authored/physical DOF and color grading |

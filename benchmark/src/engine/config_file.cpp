@@ -151,6 +151,17 @@ const std::vector<FieldSpec>& config_schema() {
         // ── Top-level scalars / strings (no validation) ────────
         s.push_back(string_field("data_dir", [](auto& c) -> auto& { return c.data_dir; }));
         s.push_back(FieldSpec{
+            "variable_rate_shading", FieldType::String,
+            [](const JsonValue& v, BenchConfig& c, Diagnostics& d) {
+                const std::string value = v.node.get<std::string>();
+                if (const auto mode = parse_variable_rate_shading_mode(value)) c.variable_rate_shading = *mode;
+                else d.warn(std::format("WARN: variable_rate_shading '{}' is unknown; retaining {}",
+                                        value, variable_rate_shading_mode_id(c.variable_rate_shading)));
+            },
+            [](const BenchConfig& c, JsonObject& o) {
+                o.node["variable_rate_shading"] = variable_rate_shading_mode_id(c.variable_rate_shading);
+            }});
+        s.push_back(FieldSpec{
             "frame_generation", FieldType::String,
             [](const JsonValue& v, BenchConfig& c, Diagnostics& d) {
                 const std::string value = v.node.get<std::string>();

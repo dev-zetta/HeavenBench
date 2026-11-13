@@ -36,37 +36,37 @@ BITMASK_PATH = Path("lib/filament/libs/utils/include/utils/BitmaskEnum.h")
 DRIVER_ENUMS_PATH = Path("lib/filament/filament/backend/include/backend/DriverEnums.h")
 TEXTURE_USAGE_SOURCES = {
     BITMASK_PATH: "ced2077e04ba983bd8c775ed30d085a20b66a2818f99bdb9161db44a87f59acf",
-    DRIVER_ENUMS_PATH: "06cd2d117dff36dc9eb0d806f657168b9e626a9a3c38fceb95da7e8400ff4023",
+    DRIVER_ENUMS_PATH: "66e122adc70cc25956d9dacc6b9696b1c6831eb57ba635a8f0e59c22ad414fea",
 }
 # Full caller hashes, expression offsets and trace hashes intentionally require
 # renewed review after source or analyzer changes. Fixtures retain all notes.
-# The October 14 review retains the unchanged enum and bitmask expressions;
-# NativeCommand.h adds 35 bytes before TextureUsage, shifting its trace offsets.
+# The v1.80.1 index-count constants add 251 bytes before unchanged TextureUsage.
+# Exact current LLVM21 reports preserve all other reviewed diagnostic fields.
 TEXTURE_USAGE_CALLERS = {
     Path("benchmark/src/rhi/height_sample_batch.cpp"): {
         "source_sha256": "090a76c61532083225d20b8ad0187a197e55987372eda9162920d7dd314ce976",
-        "trace_sha256": "1c60df57202ec190bd7f0e5eadfa15bc61bb0b10e785616f9912413a72b6d1f5",
+        "trace_sha256": "9fb7b2082d5d47365408e1b47c7de4f07f1a056cfccf0ba59fb185371d47a3bb",
         "value": 65, "call_offset": 5094, "call_line": 122,
         "expression": "filament::Texture::Usage::COLOR_ATTACHMENT | filament::Texture::Usage::BLIT_SRC",
     },
     Path("benchmark/smoke/smoke_displacement_surface.cpp"): {
         "source_sha256": "022e5f28ff6d6d7ce9c2ac0991b87978ad8436d73395a14278f015e633aa8b7a",
-        "trace_sha256": "73e62decb5d06db7a0ea9d73a34aae8fd86655c420d26a0d17e834882d648e83",
+        "trace_sha256": "78cca9f2975f228fae0d446263312d95b1010152dcabde0597024a68a80461d7",
         "value": 65, "call_offset": 55152, "call_line": 889,
         "expression": "filament::Texture::Usage::COLOR_ATTACHMENT|filament::Texture::Usage::BLIT_SRC",
     },
     Path("benchmark/src/rhi/render_test_scene_assets.cpp"): {
         "source_sha256": "d72e9c502f8d7192a8c00b3acde6950ce3d29d802254040dbfa01640b8a0930a",
-        "trace_sha256": "5a097ab28216dcf5ac5ebe18ab0f74071e18f879a321aea93b7c487c3bc1de1c",
+        "trace_sha256": "7ce28d767711efeb0dc155472eb69c56974928500d00258e632217e9f650cffe",
         "value": 536, "call_offset": 1226, "call_line": 41,
         "expression": "Texture::Usage::DEFAULT | Texture::Usage::GEN_MIPMAPPABLE",
     },
     # The HDR screenshot copy uses unchanged COLOR_ATTACHMENT | BLIT_SRC flags.
     # Pin its complete source and actual trace; other backend findings still fail.
     Path("benchmark/src/rhi/filament_backend.cpp"): {
-        "source_sha256": "3244a131d7a5e1d59531741025339c4ed8c2a999e11cde12e5c6bd2df0895de5",
-        "trace_sha256": "8eb82ea90782ea99bae7ad12412f101774affb84d8e3ac810c51bc226f61a8eb",
-        "value": 65, "call_offset": 7677, "call_line": 210,
+        "source_sha256": "01d94f566878fd5a75647829bd9934db6a7e68769121b3b67c8cb052ca149b69",
+        "trace_sha256": "5ee1a231a9c3a9c0eb0e3df95cdae19632c2a8692d3ce93c1acd432254ea8811",
+        "value": 65, "call_offset": 7991, "call_line": 220,
         "expression": "Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::BLIT_SRC",
     },
 }

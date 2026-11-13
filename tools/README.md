@@ -1,5 +1,7 @@
 # Asset tools
 
+The optional [GPU hardware lab](../docs/INTEL_GPU_FEATURES.md) is a separate native Linux compute diagnostic built through `scripts/run_gpu_lab.sh --build`; it is not an asset tool and does not change renderer scores or require original scene assets. The default FP16/FP32 matrix workload remains compatible. `--workload int8 --kernel all` compares signed INT8/INT32 shared-memory, packed-dot/DP4a and capability-gated cooperative/XMX implementations using identical inputs and a complete independent CPU oracle. `--quick-check --validation` checks correctness; performance captures require validation disabled, at least two warmup seconds and sixty measured seconds per kernel. Reports count integer GOP/s separately from FLOP/s, and the analyzer refuses mismatched hardware, arithmetic or implementation identity. These compute ratios do not establish a Heaven scene FPS gain.
+
 ## Build assets from the original installer
 
 `asset_builder/build_assets.py` orchestrates installer acquisition, UNG extraction, derived ground-texture generation, and ZIP validation. On Linux, the helper builds the extractor and CPU-only packer automatically:

@@ -30,6 +30,130 @@ def fixture():
 
 
 class TestAnalyzer(unittest.TestCase):
+    def test_separate_catalog_loss_keeps_legacy_availability_explicit(self):
+        data = fixture()
+        summary = analyzer.analyze(data)
+        self.assertIsNone(summary["pipeline_loss"]["dropped_pipeline_headers"])
+        self.assertIsNone(summary["pipeline_loss"]["overwritten_pipeline_artifacts"])
+        data["pipeline_loss_breakdown_available"] = True
+        for field in analyzer.PIPELINE_LOSS_FIELDS[3:]:
+            data[field] = 0
+        data["overwritten_pipeline_artifacts"] = 7
+        summary = analyzer.analyze(data)
+        self.assertEqual(summary["pipeline_loss"]["dropped_pipeline_headers"], 0)
+        self.assertEqual(summary["pipeline_loss"]["overwritten_pipeline_artifacts"], 7)
+        for mutate in (lambda d: d.pop("dropped_pipeline_headers"),
+                       lambda d: d.update(dropped_pipeline_headers=-1),
+                       lambda d: d.update(pipeline_loss_breakdown_available="true")):
+            broken = copy.deepcopy(data)
+            mutate(broken)
+            with self.assertRaises((ValueError, KeyError)):
+                analyzer.validate(broken)
+
+    def test_same_pass_name_keeps_renderer_and_view_identity(self):
+        data = fixture()
+        template = data["gpu_samples"][0]
+        samples = []
+        for renderer, view, duration, workload, fragments in (("7", "11", 900, 10, 100),
+                                                              ("7", "12", 90, 20, 200),
+                                                              ("8", "11", 30, 30, 300)):
+            sample = copy.deepcopy(template)
+            sample.update(name="Color Pass", end_ns=duration, command_count=str(workload))
+            sample["context"] = {**sample["context"], "renderer_id": renderer, "view_id": view}
+            sample["pipeline_statistics"] = {"status": "Available", "reason": "Native query",
+                **{field: str(fragments) for field in analyzer.PIPELINE_COUNTER_FIELDS}}
+            samples.append(sample)
+        data["gpu_samples"] = samples
+        result = analyzer.analyze(data)
+        counters = {(row["renderer_id"], row["view_id"], row["name"]): row for row in result["gpu_pipeline_statistics"]}
+        self.assertEqual(len(counters), 3)
+        self.assertEqual([counters[(r, v, "Color Pass")]["fragment_shader_invocations"]["max"]
+                          for r, v in (("7", "11"), ("7", "12"), ("8", "11"))], [100, 200, 300])
+        self.assertTrue(all(row["query_kind"] == "NativePipelineStatistics" and row["timing_source_independent"]
+                            for row in counters.values()))
+        timings = {(row["renderer_id"], row["view_id"]): row for row in result["gpu_by_view"]}
+        self.assertEqual([timings[(r, v)]["inclusive_distribution_ns"]["p50"]
+                          for r, v in (("7", "11"), ("7", "12"), ("8", "11"))], [900, 90, 30])
+        workloads = {(row["renderer_id"], row["view_id"]): row for row in result["workload_by_view"]}
+        self.assertEqual([workloads[(r, v)]["command_count"]["p50"]
+                          for r, v in (("7", "11"), ("7", "12"), ("8", "11"))], [10, 20, 30])
+        self.assertEqual(len(result["gpu"]), 1)
+        self.assertEqual(result["gpu"][0]["count"], 3)
+        self.assertEqual(result["gpu"][0]["aggregation"], "AcrossViews")
+        self.assertEqual(result["gpu_workloads"][0]["aggregation"], "AcrossViews")
+        comparison = analyzer.compare(data, data)
+        self.assertEqual(comparison["gpu_by_view_a"], result["gpu_by_view"])
+        self.assertEqual(comparison["workload_by_view_a"], result["workload_by_view"])
+        self.assertEqual(comparison["gpu_pipeline_statistics_a"], result["gpu_pipeline_statistics"])
+
+    def test_pipeline_queries_are_independent_of_timestamp_results(self):
+        data = fixture()
+        values = {field: str(index) for index, field in enumerate(analyzer.PIPELINE_COUNTER_FIELDS)}
+        values["fragment_shader_invocations"] = "18446744073709551615"
+        data["gpu_samples"][0].update(status="Disjoint", pipeline_statistics={
+            "status": "Available", "reason": "Hardware query", **values})
+        data["gpu_samples"][1]["pipeline_statistics"] = {"status": "Pending", "reason": "Waiting without blocking"}
+        summary = analyzer.analyze(data)
+        row = summary["gpu_pipeline_statistics"][0]
+        self.assertEqual(summary["gpu"], [])
+        self.assertEqual(row["statuses"], {"Available": 1, "Pending": 1})
+        self.assertEqual(row["input_assembly_vertices"]["min"], 0)
+        self.assertEqual(row["fragment_shader_invocations"]["max"], (1 << 64) - 1)
+        self.assertEqual(row["fragment_shader_invocations"]["p50"], (1 << 64) - 1)
+        self.assertEqual(row["fragment_shader_invocations"]["count"], 1)
+        self.assertEqual(row["unavailable_reasons"], {"Waiting without blocking": 1})
+        for status in analyzer.SAMPLE_STATUSES[1:]:
+            data["gpu_samples"][1]["pipeline_statistics"]["status"] = status
+            self.assertEqual(analyzer.analyze(data)["gpu_pipeline_statistics"][0]["fragment_shader_invocations"]["count"], 1)
+        data["gpu_samples"][0].pop("pipeline_statistics")
+        row = analyzer.analyze(data)["gpu_pipeline_statistics"][0]
+        self.assertIsNone(row["fragment_shader_invocations"])
+        self.assertIn("Not recorded by this trace version", row["unavailable_reasons"])
+        data["gpu_samples"][0]["pipeline_statistics"] = {"status": "Available", "reason": "query", **values}
+        for fault in (lambda d: d["gpu_samples"][0]["pipeline_statistics"].pop("clipping_primitives"),
+                      lambda d: d["gpu_samples"][0]["pipeline_statistics"].update(status="Unknown"),
+                      lambda d: d["gpu_samples"][0]["pipeline_statistics"].update(fragment_shader_invocations="18446744073709551616"),
+                      lambda d: d["gpu_samples"][0]["pipeline_statistics"].update(input_assembly_vertices=0)):
+            broken = copy.deepcopy(data)
+            fault(broken)
+            with self.assertRaises((ValueError, KeyError)):
+                analyzer.validate(broken)
+
+    def test_compiled_pipeline_properties_are_typed_and_separate_from_timings(self):
+        data = fixture()
+        base = dict(context=data["spans"][0]["context"], kind="Statistic", pipeline_id="77", program_id="88", pass_id="1",
+                    executable_index=0, stages=16, subgroup_size=16, program_name="heaven_lit [variant 23]",
+                    name="Driver arbitrary statistic", description="Driver-provided property", status="Available",
+                    reason="Driver extension", format="Uint64", original_size="0", truncated=False, text="")
+        data["pipeline_events"] = [{**base, "format": fmt, "value": value} for fmt, value in (
+            ("Uint64", "18446744073709551615"), ("Int64", "-9223372036854775808"), ("Bool32", True), ("Float64", 2.5))]
+        data["pipeline_events"] += [{**base, "kind": "Use"}, {**base, "kind": "InternalRepresentation",
+            "text": "driver IR", "original_size": "9000", "truncated": True}]
+        data["pipeline_events"] += [{**base, "kind": "Loss", "status": "Dropped", "loss_count": str(count)} for count in (3, 4)]
+        data.update(dropped_pipeline_events=3, overwritten_pipeline_events=5, truncated_pipeline_artifacts=1)
+        summary = analyzer.analyze(data)
+        self.assertEqual(len(summary["pipeline_executables"]), 7)
+        self.assertEqual(summary["driver_pipeline_loss_observed"], 7)
+        self.assertTrue(summary["driver_pipeline_loss_count_available"])
+        self.assertEqual(len(summary["pipeline_uses"]), 1)
+        self.assertEqual(summary["pipeline_executables"][0]["value"], "18446744073709551615")
+        self.assertEqual(summary["pipeline_loss"]["overwritten_pipeline_events"], 5)
+        self.assertEqual(summary["gpu"][0]["inclusive_ns"], 900)
+        self.assertEqual(analyzer.compare(data, data)["pipeline_executables_a"], summary["pipeline_executables"])
+        for index, value in ((0, "18446744073709551616"), (1, "-9223372036854775809"), (2, 1), (3, float("inf"))):
+            broken = copy.deepcopy(data)
+            broken["pipeline_events"][index]["value"] = value
+            with self.assertRaises(ValueError):
+                analyzer.validate(broken)
+        broken = copy.deepcopy(data)
+        broken["pipeline_events"][5]["text"] = "x" * 4097
+        with self.assertRaisesRegex(ValueError, "overlong pipeline"):
+            analyzer.validate(broken)
+        broken = copy.deepcopy(data)
+        broken["pipeline_events"][-1]["loss_count"] = "0"
+        with self.assertRaisesRegex(ValueError, "loss delta"):
+            analyzer.validate(broken)
+
     def test_interval_union_and_clock_separation(self):
         result = analyzer.analyze(fixture())
         rows = {r["name"]: r for r in result["cpu"]}
@@ -118,6 +242,21 @@ class TestAnalyzer(unittest.TestCase):
         self.assertEqual(analyzer.analyze(data)["worst_frames"], [])
         self.assertIsNone(analyzer.analyze(data)["accepted_complete_cpu_frame_duration_ns"])
 
+    def test_gpu_diagnostic_mode_and_logical_enablement_must_match_for_comparison(self):
+        ordinary = fixture()
+        for metadata in ({"gpu_diagnostics_requested": "true"}, {"gpu_shader_ir_requested": "true"},
+                         {"gpu_diagnostics": '{"pipeline_statistics_enabled":true,"executable_info_enabled":true}'}):
+            diagnostic = copy.deepcopy(ordinary)
+            diagnostic["metadata"].update(metadata)
+            with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+                analyzer.compare(ordinary, diagnostic)
+            other = copy.deepcopy(diagnostic)
+            key = next(iter(metadata))
+            other["metadata"][key] = "false" if key.endswith("requested") else '{"pipeline_statistics_enabled":false,"executable_info_enabled":false}'
+            with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+                analyzer.compare(diagnostic, other)
+            self.assertTrue(analyzer.compare(diagnostic, diagnostic)["cpu_mean_per_complete_scope"])
+
     def test_metadata_mismatch_refused(self):
         for key in fixture()["metadata"]:
             with self.subTest(key=key):
@@ -183,6 +322,68 @@ class TestAnalyzer(unittest.TestCase):
         self.assertEqual((changed["count_a"], changed["count_b"]), (1, 2))
         self.assertEqual(comparison["counters_a"], summary["counters"])
         self.assertEqual(comparison["gpu_workloads_a"], summary["gpu_workloads"])
+
+    def test_native_draw_availability_is_independent_of_timestamps(self):
+        data = fixture()
+        measured = data["gpu_samples"][0]
+        measured.update(native_draw_commands_available=True, native_draw_commands_full="18446744073709551615",
+                        native_draw_commands_2x1="7", native_draw_commands_2x2="11")
+        row = analyzer.analyze(data)["gpu_workloads"][0]
+        self.assertEqual(row["native_draw_commands_available_count"], 1)
+        self.assertEqual(row["native_draw_commands_unavailable_count"], 1)
+        self.assertEqual(row["native_draw_commands_full"]["max"], (1 << 64) - 1)
+        self.assertEqual(row["native_draw_commands_2x1"]["count"], 1)
+        self.assertEqual(row["native_draw_commands_2x2"]["mean"], 11)
+        # A disjoint timer still carries observed native draw commands, including
+        # real zeros; an older report's missing fields are not zero observations.
+        measured.pop("native_draw_commands_available")
+        unavailable_timer = data["gpu_samples"][1]
+        unavailable_timer.update(native_draw_commands_available=True, native_draw_commands_full="0",
+                                 native_draw_commands_2x1="0", native_draw_commands_2x2="0")
+        row = analyzer.analyze(data)["gpu_workloads"][0]
+        self.assertEqual(row["native_draw_commands_available_count"], 1)
+        self.assertEqual(row["native_draw_commands_full"]["count"], 1)
+        self.assertEqual(row["native_draw_commands_full"]["max"], 0)
+        unavailable_timer["native_draw_commands_available"] = False
+        row = analyzer.analyze(data)["gpu_workloads"][0]
+        self.assertEqual(row["native_draw_commands_available_count"], 0)
+        self.assertEqual(row["native_draw_commands_unavailable_count"], 2)
+        self.assertIsNone(row["native_draw_commands_full"])
+
+    def test_native_draws_remain_owned_by_each_pass(self):
+        data = fixture()
+        parent, child = data["gpu_samples"]
+        parent.update(name="Parent", native_draw_commands_available=True, native_draw_commands_full="3",
+                      native_draw_commands_2x1="0", native_draw_commands_2x2="0")
+        child.update(name="Child", parent_pass_id=parent["pass_id"], native_draw_commands_available=True,
+                     native_draw_commands_full="0", native_draw_commands_2x1="5", native_draw_commands_2x2="7")
+        result = analyzer.analyze(data)
+        rows = {row["name"]: row for row in result["gpu_workloads"]}
+        self.assertEqual(rows["Parent"]["native_draw_commands_full"]["max"], 3)
+        self.assertEqual(rows["Parent"]["native_draw_commands_2x2"]["max"], 0)
+        self.assertEqual(rows["Child"]["native_draw_commands_2x2"]["max"], 7)
+        self.assertNotIn("native_draw_commands_total", result)
+        self.assertNotIn("sum", rows["Parent"]["native_draw_commands_full"])
+
+    def test_invalid_native_draw_observations_are_rejected(self):
+        for fault in ("missing", "flag", "numeric", "negative", "overflow"):
+            with self.subTest(fault=fault):
+                data = fixture()
+                sample = data["gpu_samples"][0]
+                sample.update(native_draw_commands_available=True, native_draw_commands_full="3",
+                              native_draw_commands_2x1="5", native_draw_commands_2x2="7")
+                if fault == "missing":
+                    sample.pop("native_draw_commands_2x1")
+                elif fault == "flag":
+                    sample["native_draw_commands_available"] = "true"
+                elif fault == "numeric":
+                    sample["native_draw_commands_full"] = 3
+                elif fault == "negative":
+                    sample["native_draw_commands_full"] = "-1"
+                else:
+                    sample["native_draw_commands_full"] = str(1 << 64)
+                with self.assertRaises((KeyError, ValueError)):
+                    analyzer.analyze(data)
 
     def test_stale_epochs_are_not_current_event_loss(self):
         data = fixture()

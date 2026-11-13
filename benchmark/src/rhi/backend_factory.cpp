@@ -14,10 +14,11 @@
 namespace heaven {
 
 Result<std::unique_ptr<IRhiBackend>> create_backend(
-        GraphicsApi api, WindowHandle& window, const AppConfig& config) {
+        GraphicsApi api, WindowHandle& window, const AppConfig& config,
+        GpuDiagnosticsOptions diagnostics) {
     switch (api) {
     case GraphicsApi::Filament: {
-        auto backend = std::make_unique<FilamentBackend>(window.window, config);
+        auto backend = std::make_unique<FilamentBackend>(window.window, config, diagnostics);
         if (!backend->initialized()) {
             return std::unexpected(Error(backend->initialization_error()));
         }

@@ -390,6 +390,8 @@ bool run_toggle_coverage_guard() {
     modelled.insert("--capture-realtime");
     // Transient viewer toggle prerequisite/config isolation lives in unit_microprofiler_cli.cpp.
     modelled.insert("--microprofile-visible");
+    modelled.insert("--gpu-diagnostics");
+    modelled.insert("--gpu-shader-ir");
     // Startup-only listing is checked by unit_render_test_scene_config.cpp.
     modelled.insert("--list-test-scenes");
 

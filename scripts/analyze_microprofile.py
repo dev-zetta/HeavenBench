@@ -15,6 +15,16 @@ from pathlib import Path
 import re
 from typing import Any
 
+NATIVE_DRAW_FIELDS = ("native_draw_commands_full", "native_draw_commands_2x1", "native_draw_commands_2x2")
+PIPELINE_COUNTER_FIELDS = ("input_assembly_vertices", "input_assembly_primitives", "vertex_shader_invocations",
+                           "clipping_invocations", "clipping_primitives", "fragment_shader_invocations")
+SAMPLE_STATUSES = ("Available", "Pending", "Unsupported", "Disjoint", "Error", "Dropped")
+PIPELINE_EVENT_KINDS = ("Pipeline", "Statistic", "InternalRepresentation", "Use", "Loss")
+STATISTIC_FORMATS = ("Bool32", "Int64", "Uint64", "Float64")
+PIPELINE_LOSS_FIELDS = ("dropped_pipeline_events", "overwritten_pipeline_events", "truncated_pipeline_artifacts",
+                        "dropped_pipeline_headers", "dropped_pipeline_statistics", "overwritten_pipeline_statistics",
+                        "dropped_pipeline_artifacts", "overwritten_pipeline_artifacts")
+
 
 def integer(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -57,6 +67,14 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("dropped_events", "overwritten_events", "truncated_labels", "memory_bytes"):
         integer(data[key], key)
     integer(data.get("stale_epoch_events", 0), "stale_epoch_events")
+    for field in PIPELINE_LOSS_FIELDS:
+        if field in data:
+            integer(data[field], field)
+    if not isinstance(data.get("pipeline_loss_breakdown_available", False), bool):
+        raise ValueError("pipeline loss breakdown availability must be boolean")
+    if data.get("pipeline_loss_breakdown_available", False):
+        for field in PIPELINE_LOSS_FIELDS[3:]:
+            integer(data[field], field)
     for key in ("threads", "spans", "frames", "counters", "flows", "gpu_samples"):
         if not isinstance(data[key], list):
             raise ValueError(f"{key} must be an array")
@@ -116,12 +134,58 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         for key in ("command_count", "primitive_count", "visible_renderables"):
             identifier(sample[key], key)
         identifier(sample.get("draw_instance_invocations", "0"), "draw_instance_invocations")
-        if sample["status"] not in ("Available", "Pending", "Unsupported", "Disjoint", "Error", "Dropped"):
+        native_available = sample.get("native_draw_commands_available", False)
+        if not isinstance(native_available, bool):
+            raise ValueError("native_draw_commands_available must be boolean")
+        if native_available:
+            for key in NATIVE_DRAW_FIELDS:
+                identifier(sample[key], key)
+        statistics = sample.get("pipeline_statistics")
+        if statistics is not None:
+            if not isinstance(statistics, dict) or statistics.get("status") not in SAMPLE_STATUSES or not isinstance(statistics.get("reason"), str):
+                raise ValueError("invalid pipeline query status/reason")
+            if statistics["status"] == "Available":
+                for field in PIPELINE_COUNTER_FIELDS:
+                    identifier(statistics[field], field)
+        if sample["status"] not in SAMPLE_STATUSES:
             raise ValueError("invalid GPU status")
         if sample["source"] not in ("HardwareTimestamp", "FenceEstimate", "Unavailable"):
             raise ValueError("invalid GPU source")
         if sample["status"] == "Available":
             interval(sample)
+    pipeline_events = data.get("pipeline_events", [])
+    if not isinstance(pipeline_events, list):
+        raise ValueError("pipeline_events must be an array")
+    for event in pipeline_events:
+        context(event["context"])
+        if event.get("kind") not in PIPELINE_EVENT_KINDS or event.get("status") not in SAMPLE_STATUSES:
+            raise ValueError("invalid pipeline event kind/status")
+        if event.get("format") not in STATISTIC_FORMATS:
+            raise ValueError("invalid pipeline statistic format")
+        for field in ("pipeline_id", "program_id", "pass_id", "original_size"):
+            identifier(event[field], field)
+        for field in ("executable_index", "stages", "subgroup_size"):
+            if integer(event[field], field) > (1 << 32) - 1:
+                raise ValueError("pipeline executable field exceeds uint32")
+        for field in ("program_name", "name", "description", "text", "reason"):
+            if not isinstance(event.get(field), str) or len(event[field].encode("utf-8")) > 4096:
+                raise ValueError("invalid or overlong pipeline event label/text")
+        if not isinstance(event.get("truncated"), bool):
+            raise ValueError("pipeline artifact truncated must be boolean")
+        if "loss_count" in event:
+            if event["kind"] != "Loss" or int(identifier(event["loss_count"], "pipeline loss delta")) == 0:
+                raise ValueError("invalid pipeline metadata loss delta")
+        if event["kind"] == "Statistic" and event["status"] == "Available":
+            value, fmt = event.get("value"), event["format"]
+            if fmt == "Bool32" and not isinstance(value, bool):
+                raise ValueError("Bool32 pipeline statistic requires boolean")
+            if fmt == "Uint64":
+                identifier(value, "Uint64 pipeline statistic")
+            if fmt == "Int64" and (not isinstance(value, str) or not re.fullmatch(r"-?[0-9]+", value, re.ASCII)
+                                    or not -(1 << 63) <= int(value) < (1 << 63)):
+                raise ValueError("Int64 pipeline statistic requires decimal int64 string")
+            if fmt == "Float64" and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ValueError("Float64 pipeline statistic requires finite number")
     return data
 
 
@@ -142,9 +206,24 @@ def distribution(samples: list[int | float]) -> dict[str, Any] | None:
         position = (len(ordered) - 1) * fraction
         lower = int(position)
         upper = min(lower + 1, len(ordered) - 1)
+        # Preserve exact uint64 observations when no interpolation is needed.
+        # Runtime counters are exported as decimal strings, not JS doubles.
+        if lower == upper or ordered[lower] == ordered[upper] or position == lower:
+            return ordered[lower]
         return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
     return {"count": len(ordered), "min": ordered[0], "mean": sum(ordered) / len(ordered),
             "p50": quantile(.50), "p95": quantile(.95), "p99": quantile(.99), "max": ordered[-1]}
+
+
+def gpu_workload_distribution(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"count": len(samples),
+            "statuses": dict(collections.Counter(s["status"] for s in samples)),
+            "native_draw_commands_available_count": sum(s.get("native_draw_commands_available", False) for s in samples),
+            "native_draw_commands_unavailable_count": sum(not s.get("native_draw_commands_available", False) for s in samples),
+            **{field: distribution([int(s[field]) for s in samples if s.get("native_draw_commands_available", False)])
+               for field in NATIVE_DRAW_FIELDS},
+            **{field: distribution([int(s[field]) for s in samples if field in s])
+               for field in ("command_count", "primitive_count", "visible_renderables", "draw_instance_invocations")}}
 
 
 def analyze(data: dict[str, Any]) -> dict[str, Any]:
@@ -183,24 +262,32 @@ def analyze(data: dict[str, Any]) -> dict[str, Any]:
             row["exclusive_ns"] = None
         row["max_ns"] = max(row["max_ns"], duration)
     gpu: dict[tuple[str, str], dict[str, Any]] = {}
+    gpu_by_view: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     statuses: collections.Counter[str] = collections.Counter()
     for sample in data["gpu_samples"]:
         statuses[sample["status"]] += 1
         if sample["status"] != "Available":
             continue
         key = (sample["source"], sample["name"])
-        row = gpu.setdefault(key, {"source": key[0], "name": key[1], "count": 0, "inclusive_ns": 0, "max_ns": 0, "_samples": []})
+        row = gpu.setdefault(key, {"source": key[0], "name": key[1], "aggregation": "AcrossViews",
+                                  "count": 0, "inclusive_ns": 0, "max_ns": 0, "_samples": []})
+        view_key = (sample["context"]["renderer_id"], sample["context"]["view_id"], *key)
+        view_row = gpu_by_view.setdefault(view_key, {
+            "renderer_id": view_key[0], "view_id": view_key[1], "source": view_key[2], "name": view_key[3],
+            "aggregation": "RendererView", "count": 0, "inclusive_ns": 0, "max_ns": 0, "_samples": []})
         duration = sample["end_ns"] - sample["begin_ns"]
-        row["count"] += 1
-        row["inclusive_ns"] += duration
-        row["max_ns"] = max(row["max_ns"], duration)
-        row["_samples"].append(duration)
+        for target in (row, view_row):
+            target["count"] += 1
+            target["inclusive_ns"] += duration
+            target["max_ns"] = max(target["max_ns"], duration)
+            target["_samples"].append(duration)
     for row in cpu.values():
         row["inclusive_distribution_ns"] = distribution(row.pop("_inclusive"))
         valid = row.pop("_exclusive")
         row["exclusive_distribution_ns"] = distribution(valid) if row["exclusive_ns"] is not None else None
-    for row in gpu.values():
-        row["inclusive_distribution_ns"] = distribution(row.pop("_samples"))
+    for groups in (gpu, gpu_by_view):
+        for row in groups.values():
+            row["inclusive_distribution_ns"] = distribution(row.pop("_samples"))
     counters: dict[tuple[str, str, str], list[dict[str, Any]]] = collections.defaultdict(list)
     for sample in data["counters"]:
         counters[(sample["thread_id"], sample["category"], sample["name"])].append(sample)
@@ -212,13 +299,28 @@ def analyze(data: dict[str, Any]) -> dict[str, Any]:
                              "first": {k: samples[0][k] for k in ("timestamp_ns", "value", "context")},
                              "last": {k: samples[-1][k] for k in ("timestamp_ns", "value", "context")}})
     workloads: dict[tuple[str, str], list[dict[str, Any]]] = collections.defaultdict(list)
+    workloads_by_view: dict[tuple[str, str, str, str], list[dict[str, Any]]] = collections.defaultdict(list)
+    pipeline_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = collections.defaultdict(list)
     for sample in data["gpu_samples"]:
         workloads[(sample["source"], sample["name"])].append(sample)
-    workload_rows = [{"source": key[0], "name": key[1], "count": len(samples),
+        renderer, view = sample["context"]["renderer_id"], sample["context"]["view_id"]
+        workloads_by_view[(renderer, view, sample["source"], sample["name"])].append(sample)
+        pipeline_groups[(renderer, view, sample["name"])].append(sample.get("pipeline_statistics", {
+            "status": "Unsupported", "reason": "Not recorded by this trace version"}))
+    workload_rows = [{"source": key[0], "name": key[1], "aggregation": "AcrossViews",
+                      **gpu_workload_distribution(samples)} for key, samples in sorted(workloads.items())]
+    workload_view_rows = [{"renderer_id": key[0], "view_id": key[1], "source": key[2], "name": key[3],
+                           "aggregation": "RendererView", **gpu_workload_distribution(samples)}
+                          for key, samples in sorted(workloads_by_view.items())]
+    pipeline_rows = [{"renderer_id": key[0], "view_id": key[1], "name": key[2], "count": len(samples),
+                      "query_kind": "NativePipelineStatistics", "timing_source_independent": True,
                       "statuses": dict(collections.Counter(s["status"] for s in samples)),
-                      **{field: distribution([int(s[field]) for s in samples if field in s])
-                         for field in ("command_count", "primitive_count", "visible_renderables", "draw_instance_invocations")}}
-                     for key, samples in sorted(workloads.items())]
+                      "unavailable_reasons": dict(collections.Counter(s["reason"] for s in samples if s["status"] != "Available")),
+                      **{field: distribution([int(s[field]) for s in samples if s["status"] == "Available"])
+                         for field in PIPELINE_COUNTER_FIELDS}}
+                     for key, samples in sorted(pipeline_groups.items())]
+    pipeline_events = data.get("pipeline_events", [])
+    pipeline_loss = {field: data.get(field) for field in PIPELINE_LOSS_FIELDS}
     # Per-pass GPU inclusive times can overlap (nested passes/multiple queues).
     # No aggregate total is inferred from their sum.
     frames = collections.Counter(f["kind"] + ":" + f["outcome"] + (":Incomplete" if f["incomplete"] else "") for f in data["frames"])
@@ -254,7 +356,14 @@ def analyze(data: dict[str, Any]) -> dict[str, Any]:
             "stale_epoch_events": data.get("stale_epoch_events", 0),
             "cpu": sorted(cpu.values(), key=lambda r: -(r["exclusive_ns"] or 0)),
             "gpu": sorted(gpu.values(), key=lambda r: -r["inclusive_ns"]), "gpu_statuses": dict(statuses),
-            "counters": counter_rows, "gpu_workloads": workload_rows,
+            "gpu_by_view": sorted(gpu_by_view.values(), key=lambda r: -r["inclusive_ns"]),
+            "counters": counter_rows, "gpu_workloads": workload_rows, "workload_by_view": workload_view_rows,
+            "gpu_pipeline_statistics": pipeline_rows,
+            "pipeline_executables": [event for event in pipeline_events if event["kind"] != "Use"],
+            "pipeline_uses": [event for event in pipeline_events if event["kind"] == "Use"],
+            "pipeline_loss": pipeline_loss,
+            "driver_pipeline_loss_observed": sum(int(event["loss_count"]) for event in pipeline_events if "loss_count" in event),
+            "driver_pipeline_loss_count_available": any("loss_count" in event for event in pipeline_events),
             "limits": ["CPU inclusive times overlap; exclusive is same-thread direct-child interval union subtraction.",
                        "Incomplete CPU spans are counted separately and excluded from complete-span totals.",
                        "Exclusive cost is unavailable on event loss or incomplete/out-of-parent children; it is never guessed.",
@@ -263,8 +372,22 @@ def analyze(data: dict[str, Any]) -> dict[str, Any]:
                        "Per-pass GPU inclusive times overlap and are not a frame total; CPU and GPU are not added.",
                        "Counters are observations with unknown gauge/delta semantics; values are not summed.",
                        "GPU workload distributions include all retained pass statuses, can overlap, and are not frame totals.",
+                       "Legacy gpu and gpu_workloads rows aggregate identically named passes across views and are labeled AcrossViews.",
+                       "gpu_by_view, workload_by_view and pipeline-statistics rows preserve renderer/view identities; names alone cannot identify a main, auxiliary or composite view.",
+                       "Renderer/view IDs are capture-local identities; no cross-process GPU row matching or performance delta is inferred from equal numeric IDs.",
                        "Draw-instance invocations sum instances over executed draws, not unique visible placements.",
+                       "Native draw counts classify actual commands by bound pipeline rate, not fragment invocations or hardware rate-clamp measurements.",
+                       "Native draw distributions retain individual named pass ownership; parent/child passes are not summed into frame totals.",
+                       "Native draw availability is independent of GPU timing status; unavailable or absent counts are excluded, while measured zeros remain observations.",
                        "Absent legacy workload fields have no observed distribution; absence is not a measured zero.",
+                       "Pipeline query counter availability is independent of timestamp status; missing/pending/lost counters are not measured zeros.",
+                       "Pipeline counters are per-pass hardware query observations, may overlap, and are never summed into a certified frame total.",
+                       "Executable statistic names/types are driver supplied compile-time properties, not per-frame timings or assumed hardware metrics.",
+                       "Pipeline/program IDs are device-local correlation identities, not stable cross-process IDs or material handles.",
+                       "Optional IR text is bounded; original_size, truncated and pipeline loss disclose incomplete artifacts/metadata.",
+                       "Compiler headers are protected from statistics/IR pressure; separate header/statistic/artifact loss counters expose bounded coverage.",
+                       "Overwritten IR slots never lend replacement text to an older record; its artifact becomes explicitly Dropped while compile statistics remain independent.",
+                       "Observed driver metadata loss sums only explicit retained loss deltas; missing counts and overwritten loss records remain unknown.",
                        "Worst frames are at most 20 retained complete accepted Render CPU intervals; missing history cannot be ranked.",
                        "Thread activity is an observed same-thread scope union/window fraction, not CPU utilization; waits and nested tasks count once, and uninstrumented work is unknown.",
                        "Thread coverage is marked incomplete on event loss or partial/clipped spans; threads are never summed as wall time.",
@@ -285,6 +408,10 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
                 invalid.append(f"{side}.{key}")
     if invalid:
         raise ValueError("comparison requires known nonempty identity metadata; missing/unknown fields: " + ", ".join(invalid))
+    # Transient diagnostic requests and logical-device query/executable
+    # enablement live outside persisted effective_settings. Requiring the
+    # complete metadata identity also refuses missing-vs-enabled modes and
+    # capture-IR compile flags; never compare them as ordinary rendering.
     if not a["metadata"] or a["metadata"] != b["metadata"]:
         raise ValueError("comparison requires identical nonempty recorded metadata")
     def rows(summary: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -311,6 +438,11 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     return {"metadata": a["metadata"], "cpu_mean_per_complete_scope": changes,
             "counters_a": a["counters"], "counters_b": b["counters"],
             "gpu_workloads_a": a["gpu_workloads"], "gpu_workloads_b": b["gpu_workloads"],
+            "gpu_by_view_a": a["gpu_by_view"], "gpu_by_view_b": b["gpu_by_view"],
+            "workload_by_view_a": a["workload_by_view"], "workload_by_view_b": b["workload_by_view"],
+            "gpu_pipeline_statistics_a": a["gpu_pipeline_statistics"], "gpu_pipeline_statistics_b": b["gpu_pipeline_statistics"],
+            "pipeline_executables_a": a["pipeline_executables"], "pipeline_executables_b": b["pipeline_executables"],
+            "pipeline_loss_a": a["pipeline_loss"], "pipeline_loss_b": b["pipeline_loss"],
             "worst_frames_a": a["worst_frames"], "worst_frames_b": b["worst_frames"],
             "thread_activity_a": a["thread_activity"], "thread_activity_b": b["thread_activity"],
             "stale_epoch_events_a": a["stale_epoch_events"], "stale_epoch_events_b": b["stale_epoch_events"],

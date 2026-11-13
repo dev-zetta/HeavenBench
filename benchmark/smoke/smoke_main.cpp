@@ -110,7 +110,10 @@ const CaseEntry kCases[] = {
     {"gpu_instancing",      &heaven::smoke::run_gpu_instancing_case},
     {"culling",             &heaven::smoke::run_culling_case},
     {"microprofiler",       &heaven::smoke::run_microprofiler_case},
+    {"gpu_diagnostics",     &heaven::smoke::run_gpu_diagnostics_case},
     {"frame_generation",    &heaven::smoke::run_frame_generation_case},
+    {"variable_rate_shading", &heaven::smoke::run_variable_rate_shading_case},
+    {"linear_staging",      &heaven::smoke::run_linear_staging_case},
     {"rain_toggle_roundtrip",
                             &heaven::smoke::run_rain_toggle_roundtrip_case},
     {"fps_bar",             &heaven::smoke::run_fps_bar_case},
@@ -191,7 +194,14 @@ int main() try {
         return 1;
     }
 
-    auto backend = create_backend(GraphicsApi::Filament, *win, config);
+    GpuDiagnosticsOptions diagnostics;
+    if (const char* requested = std::getenv("HEAVEN_SMOKE_GPU_DIAGNOSTICS")) {
+        diagnostics.enabled = std::strcmp(requested, "1") == 0;
+    }
+    if (const char* requested = std::getenv("HEAVEN_SMOKE_GPU_DIAGNOSTICS_IR")) {
+        diagnostics.shader_internal_representations = diagnostics.enabled && std::strcmp(requested, "1") == 0;
+    }
+    auto backend = create_backend(GraphicsApi::Filament, *win, config, diagnostics);
     if (!backend) {
         std::printf("%s FAILED: backend creation failed (%s)\n",
                     kTag, backend.error().message.c_str());

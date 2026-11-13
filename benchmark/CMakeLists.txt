@@ -3,7 +3,10 @@ cmake_minimum_required(VERSION 3.25)
 # third_party/stb_vorbis.c compiles with the C toolchain, mirroring the
 # top-level project's bundled lz4.c precedent. Our own renderer code is all
 # C++ (the standard is set per-target below); enabling C does not change it.
-project(HeavenBench VERSION 1.1.1 LANGUAGES C CXX)
+project(HeavenBench VERSION 1.2.0 LANGUAGES C CXX)
+
+option(HEAVEN_BUILD_GPU_LAB "Build optional headless GPU hardware diagnostics" OFF)
+option(HEAVEN_BUILD_FILAMENT_TESTS "Build upstream Filament tests on a native desktop" OFF)
 
 # Note: C++ standard is set per-target below, not globally,
 # to avoid leaking C++23 into Filament's subdirectory build.
@@ -249,7 +252,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/HeavenCpuDependencies.cmake)
 # Vulkan with their existing OpenGL fallback.
 set(FILAMENT_SKIP_SAMPLES ON CACHE BOOL "" FORCE)
 set(FILAMENT_SKIP_SDL2 ON CACHE BOOL "" FORCE)
-set(FILAMENT_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+if(HEAVEN_BUILD_FILAMENT_TESTS AND (HEAVEN_PLATFORM_ANDROID OR CMAKE_CROSSCOMPILING))
+    message(FATAL_ERROR "HEAVEN_BUILD_FILAMENT_TESTS requires a native desktop build")
+endif()
+set(FILAMENT_BUILD_TESTING "${HEAVEN_BUILD_FILAMENT_TESTS}" CACHE BOOL "" FORCE)
 set(FILAMENT_SUPPORTS_VULKAN ON CACHE BOOL "" FORCE)
 set(FILAMENT_SUPPORTS_METAL OFF CACHE BOOL "" FORCE)
 if(HEAVEN_PLATFORM_MACOS)
@@ -341,6 +347,7 @@ set(RHI_SOURCES
     src/rhi/render_test_scene_assets.cpp
     src/rhi/backend_factory.cpp
     src/rhi/filament_backend.cpp
+    src/rhi/variable_rate_shading.cpp
     src/rhi/frame_generation/frame_generation_runtime.cpp
     src/rhi/frame_generation/frame_generation_output.cpp
     src/rhi/frame_generation/temporal_scene.cpp
@@ -434,6 +441,7 @@ file(GLOB BENCHMARK_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM BENCHMARK_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/scene_markers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/microprofiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/gpu_clock_telemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/microprofile_report.cpp)
 
 if(HEAVEN_PLATFORM_ANDROID)
@@ -623,6 +631,36 @@ add_executable(heaven_benchmark_smoke
 # Native swapchain fault injection is compiled only into this GPU test binary.
 # The ordinary benchmark and SDK-off paths contain no injection branch.
 target_compile_definitions(heaven_benchmark_smoke PRIVATE HEAVEN_FG_FAULT_INJECTION=1)
+
+# Raster-rate oracles are test-only packages; never regenerate production materials.
+set(HEAVEN_VRS_TEST_PACKAGES)
+foreach(vrs_material IN ITEMS lit masked unlit)
+    set(vrs_package "${CMAKE_CURRENT_BINARY_DIR}/test-materials/vrs_${vrs_material}.filamat")
+    add_custom_command(OUTPUT "${vrs_package}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/test-materials"
+        COMMAND $<TARGET_FILE:matc> -a all -p desktop -o "${vrs_package}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/materials/vrs_${vrs_material}.mat"
+        DEPENDS matc "${CMAKE_CURRENT_SOURCE_DIR}/tests/materials/vrs_${vrs_material}.mat"
+        VERBATIM)
+    list(APPEND HEAVEN_VRS_TEST_PACKAGES "${vrs_package}")
+    string(TOUPPER "${vrs_material}" vrs_macro)
+    target_compile_definitions(heaven_benchmark_smoke PRIVATE
+        "HEAVEN_SMOKE_VRS_${vrs_macro}_PACKAGE=\"${vrs_package}\"")
+endforeach()
+add_custom_target(heaven_vrs_test_materials DEPENDS ${HEAVEN_VRS_TEST_PACKAGES})
+add_dependencies(heaven_benchmark_smoke heaven_vrs_test_materials)
+
+set(HEAVEN_LINEAR_STAGE_PACKAGE "${CMAKE_CURRENT_BINARY_DIR}/test-materials/linear_staging.filamat")
+add_custom_command(OUTPUT "${HEAVEN_LINEAR_STAGE_PACKAGE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/test-materials"
+    COMMAND $<TARGET_FILE:matc> -a all -p desktop -o "${HEAVEN_LINEAR_STAGE_PACKAGE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/materials/linear_staging.mat"
+    DEPENDS matc "${CMAKE_CURRENT_SOURCE_DIR}/tests/materials/linear_staging.mat"
+    VERBATIM)
+add_custom_target(heaven_linear_stage_test_material DEPENDS "${HEAVEN_LINEAR_STAGE_PACKAGE}")
+add_dependencies(heaven_benchmark_smoke heaven_linear_stage_test_material)
+target_compile_definitions(heaven_benchmark_smoke PRIVATE
+    "HEAVEN_SMOKE_LINEAR_STAGE_PACKAGE=\"${HEAVEN_LINEAR_STAGE_PACKAGE}\"")
 
 target_include_directories(heaven_benchmark_smoke PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -942,6 +980,18 @@ target_compile_features(heaven_vulkan_pipeline_lifetime_tests PRIVATE cxx_std_17
 target_include_directories(heaven_vulkan_pipeline_lifetime_tests PRIVATE
     ../lib/filament/filament/backend/src)
 add_test(NAME heaven_vulkan_pipeline_lifetime_tests COMMAND heaven_vulkan_pipeline_lifetime_tests)
+add_executable(heaven_vulkan_read_pixels_contract_tests
+    src/rhi/vulkan_read_pixels_contract_test.cpp)
+heaven_configure_owned_cpp_target(heaven_vulkan_read_pixels_contract_tests)
+target_include_directories(heaven_vulkan_read_pixels_contract_tests SYSTEM PRIVATE
+    ../lib/filament/filament/backend/src
+    ../lib/filament/filament/backend/include)
+target_link_libraries(heaven_vulkan_read_pixels_contract_tests PRIVATE bluevk utils)
+add_test(NAME heaven_vulkan_read_pixels_contract
+    COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/vulkan_read_pixels_contract_test.py"
+            $<TARGET_FILE:heaven_vulkan_read_pixels_contract_tests>
+            --receipt "${CMAKE_CURRENT_BINARY_DIR}/read-pixels-contract/receipt.json")
+set_tests_properties(heaven_vulkan_read_pixels_contract PROPERTIES TIMEOUT 120)
 if(TARGET heaven_fsr31_pipeline_lifetime_test)
     add_test(NAME heaven_fsr31_pipeline_lifetime_test COMMAND heaven_fsr31_pipeline_lifetime_test)
 endif()
@@ -987,9 +1037,25 @@ target_include_directories(heaven_profiler_trace_tests PRIVATE
 target_link_libraries(heaven_profiler_trace_tests PRIVATE backend utils)
 target_compile_features(heaven_profiler_trace_tests PRIVATE cxx_std_23)
 add_test(NAME heaven_profiler_trace_tests COMMAND heaven_profiler_trace_tests)
+add_executable(heaven_vulkan_pipeline_diagnostics_tests
+    ../lib/filament/filament/backend/test/test_VulkanPipelineDiagnostics.cpp)
+target_include_directories(heaven_vulkan_pipeline_diagnostics_tests PRIVATE
+    ../lib/filament/filament/backend/src)
+target_link_libraries(heaven_vulkan_pipeline_diagnostics_tests PRIVATE backend utils)
+target_compile_features(heaven_vulkan_pipeline_diagnostics_tests PRIVATE cxx_std_23)
+add_test(NAME heaven_vulkan_pipeline_diagnostics_tests COMMAND heaven_vulkan_pipeline_diagnostics_tests)
+add_executable(heaven_vrs_fragment_policy_tests
+    ../lib/filament/filament/backend/test/test_FragmentShadingRate.cpp)
+target_include_directories(heaven_vrs_fragment_policy_tests PRIVATE
+    ../lib/filament/filament/backend/src
+    ../lib/filament/third_party/spirv-headers/include)
+target_compile_features(heaven_vrs_fragment_policy_tests PRIVATE cxx_std_17)
+add_test(NAME heaven_vrs_fragment_policy_tests COMMAND heaven_vrs_fragment_policy_tests)
 add_test(NAME heaven_benchmark_tests COMMAND heaven_benchmark_tests)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME heaven_gpu_lab_analysis
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/gpu_lab_analysis_test.py)
     add_test(NAME heaven_frame_generation_present_analysis
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/frame_generation_present_analysis_test.py)
     add_test(NAME heaven_fsr31_fetch_contract
@@ -1046,6 +1112,34 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_filament_intel_color_alias_contract
+            COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_intel_color_alias_test.py"
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/intel-color-alias-contract")
+        set_tests_properties(heaven_filament_intel_color_alias_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_filament_ibl_fallback_lod_contract
+            COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_ibl_fallback_lod_test.py"
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/ibl-fallback-lod-contract")
+        set_tests_properties(heaven_filament_ibl_fallback_lod_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_vulkan_commands_failure_contract
+            COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/vulkan_commands_failure_contract_test.py"
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --vulkan-include "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament/libs/bluevk/include"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/command-failure-contract")
+        set_tests_properties(heaven_vulkan_commands_failure_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_filament_pipeline_gc_contract
+            COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_pipeline_gc_test.py"
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --filament "${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/pipeline-gc-contract")
+        set_tests_properties(heaven_filament_pipeline_gc_contract PROPERTIES TIMEOUT 180)
+        add_test(NAME heaven_filament_scene_transform_cache
+            COMMAND Python3::Interpreter
+                    "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/frame_generation/filament_scene_transform_cache_test.py"
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"
+                    --work-dir "${CMAKE_CURRENT_BINARY_DIR}/scene-transform-cache-contract")
+        set_tests_properties(heaven_filament_scene_transform_cache PROPERTIES TIMEOUT 120)
         add_test(NAME heaven_glx_swapchain_lifetime
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/glx_swapchain_lifetime_test.py
@@ -1146,11 +1240,14 @@ if(TARGET heaven_benchmark_tests)
     set(heaven_host_contract_targets
         heaven_input_response_tests
         heaven_profiler_trace_tests
+        heaven_vulkan_pipeline_diagnostics_tests
+        heaven_vrs_fragment_policy_tests
         heaven_capture_camera_motion_tests
         heaven_frame_generation_history_tests
         heaven_frame_generation_present_trace_tests
         heaven_filament_ssr_variant_tests
         heaven_vulkan_pipeline_lifetime_tests
+        heaven_vulkan_read_pixels_contract_tests
         heaven_dlss_contract_tests
         heaven_dlss_runtime_bridge_tests
         heaven_dlss_frame_token_tests)
@@ -1161,4 +1258,18 @@ if(TARGET heaven_benchmark_tests)
             heaven_fsr31_view_retirement_test)
     endif()
     add_dependencies(heaven_benchmark_tests ${heaven_host_contract_targets})
+endif()
+
+if(HEAVEN_BUILD_GPU_LAB)
+    if(NOT HEAVEN_PLATFORM_LINUX)
+        message(FATAL_ERROR "GPU lab is currently supported on native Linux only")
+    endif()
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/gpu_lab"
+                     "${CMAKE_CURRENT_BINARY_DIR}/gpu_lab")
+    add_test(NAME heaven_gpu_lab_cli
+        COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../tests/gpu_lab_cli_test.py"
+                --executable "$<TARGET_FILE:heaven_gpu_lab>")
+    if(TARGET heaven_benchmark_tests)
+        add_dependencies(heaven_benchmark_tests heaven_gpu_lab)
+    endif()
 endif()

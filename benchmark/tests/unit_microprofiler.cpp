@@ -211,6 +211,331 @@ bool roundtrip_and_writer() {
     return require(writer.status().state == ReportState::Error && !writer.status().error.empty(),
                    "writer filesystem failure was hidden");
 }
+bool native_draw_command_observations() {
+    Recorder recorder({10'000'000'000ull, std::size_t{256} * 1024u, 2});
+    recorder.begin_capture();
+    const Context context{1, 2, 3, 4, 5, recorder.session_id()};
+    GpuSample native;
+    native.context = context;
+    native.pass_id = 1;
+    native.name = "Native color";
+    native.status = SampleStatus::Pending;
+    native.native_draw_commands_full = std::numeric_limits<std::uint64_t>::max();
+    native.native_draw_commands_2x1 = 7;
+    native.native_draw_commands_2x2 = 11;
+    native.native_draw_commands_available = true;
+    recorder.gpu_sample(native);
+    recorder.set_active(false);
+    // Completed draw bookkeeping remains usable even if delayed timing fails.
+    native.status = SampleStatus::Disjoint;
+    recorder.gpu_sample(native);
+    recorder.gpu_sample(context, 2, 0, "Observed zero", 0, 0, SampleStatus::Unsupported,
+        TimerSource::Unavailable, {}, 0, 0, 0, 0, 0, 0, 0, true);
+    recorder.gpu_sample(context, 3, 0, "Legacy caller", 0, 0, SampleStatus::Unsupported,
+        TimerSource::Unavailable);
+    const auto snapshot = recorder.snapshot();
+    if (!require(snapshot.gpu_samples.size() == 3 && snapshot.gpu_samples[0].status == SampleStatus::Disjoint &&
+        snapshot.gpu_samples[0].native_draw_commands_available &&
+        snapshot.gpu_samples[0].native_draw_commands_full == std::numeric_limits<std::uint64_t>::max() &&
+        snapshot.gpu_samples[0].native_draw_commands_2x1 == 7 && snapshot.gpu_samples[0].native_draw_commands_2x2 == 11 &&
+        snapshot.gpu_samples[1].native_draw_commands_available && snapshot.gpu_samples[1].native_draw_commands_full == 0 &&
+        !snapshot.gpu_samples[2].native_draw_commands_available && snapshot.memory_bytes <= std::size_t{256} * 1024u,
+        "native command observations lost rate counts, measured-zero availability, or delayed timing independence")) return false;
+    const auto json = nlohmann::json::parse(snapshot_json(snapshot));
+    const auto parsed = parse_snapshot(json.dump());
+    if (!require(parsed.has_value() && parsed->gpu_samples[0].native_draw_commands_available &&
+        parsed->gpu_samples[0].native_draw_commands_full == std::numeric_limits<std::uint64_t>::max() &&
+        parsed->gpu_samples[0].native_draw_commands_2x1 == 7 && parsed->gpu_samples[0].native_draw_commands_2x2 == 11 &&
+        json["gpu_samples"][0]["native_draw_commands_full"] == "18446744073709551615" &&
+        json["gpu_samples"][1]["native_draw_commands_full"] == "0" &&
+        json["gpu_samples"][2]["native_draw_commands_available"] == false &&
+        !json["gpu_samples"][2].contains("native_draw_commands_full"),
+        "native command JSON lost decimal uint64 precision or invented an unavailable zero")) return false;
+    auto legacy = json;
+    auto& legacy_sample = legacy["gpu_samples"][0];
+    for (const char* key : {"native_draw_commands_available", "native_draw_commands_full",
+                           "native_draw_commands_2x1", "native_draw_commands_2x2"}) legacy_sample.erase(key);
+    const auto old = parse_snapshot(legacy.dump());
+    if (!require(old.has_value() && !old->gpu_samples[0].native_draw_commands_available &&
+        !nlohmann::json::parse(snapshot_json(*old))["gpu_samples"][0].contains("native_draw_commands_full"),
+        "legacy JSON missing native counters became measured zeros")) return false;
+    for (int fault = 0; fault < 4; ++fault) {
+        auto broken = json;
+        auto& sample = broken["gpu_samples"][0];
+        if (fault == 0) sample.erase("native_draw_commands_2x1");
+        if (fault == 1) sample["native_draw_commands_available"] = "true";
+        if (fault == 2) sample["native_draw_commands_full"] = "18446744073709551616";
+        if (fault == 3) sample["native_draw_commands_full"] = 1;
+        if (!require(!parse_snapshot(broken.dump()), "malformed available native command counts accepted")) return false;
+    }
+    return require(snapshot_html(snapshot).find("not fragment invocations or hardware rate-clamp measurements") != std::string::npos &&
+        snapshot_html(*old).find("Native draw commands by rate: unavailable") != std::string::npos,
+        "portable viewer omitted native counter semantics or unavailable feedback");
+}
+bool pipeline_diagnostics_observations() {
+    Recorder recorder({10'000'000'000ull, std::size_t{1024} * 1024u, 2});
+    recorder.begin_capture();
+    const Context context{1, 2, 3, 4, 5, recorder.session_id()};
+    GpuSample sample;
+    sample.context = context;
+    sample.pass_id = 17;
+    sample.name = "Color";
+    sample.status = SampleStatus::Disjoint;
+    sample.pipeline_statistics_status = SampleStatus::Pending;
+    sample.pipeline_statistics_reason = "Query pending";
+    recorder.gpu_sample(sample);
+    const auto pending = recorder.snapshot();
+    recorder.set_active(false);
+    sample.pipeline_statistics_status = SampleStatus::Available;
+    sample.pipeline_statistics_reason = "Hardware pipeline query";
+    sample.input_assembly_vertices = 0;
+    sample.input_assembly_primitives = 12;
+    sample.vertex_shader_invocations = 31;
+    sample.clipping_invocations = 12;
+    sample.clipping_primitives = 11;
+    sample.fragment_shader_invocations = std::numeric_limits<std::uint64_t>::max();
+    recorder.gpu_sample(sample);
+    PipelineEventView event;
+    event.context = context;
+    event.pipeline_id = 77;
+    event.program_id = 88;
+    event.pass_id = 17;
+    event.program_name = "heaven_lit [variant 23]";
+    event.name = "fragment executable";
+    event.status = SampleStatus::Available;
+    event.stages = 16;
+    event.subgroup_size = 16;
+    recorder.pipeline_event(event);
+    event.kind = PipelineEventKind::Statistic;
+    event.name = "Driver arbitrary uint64";
+    event.format = PipelineStatisticFormat::Uint64;
+    event.unsigned_value = std::numeric_limits<std::uint64_t>::max();
+    recorder.pipeline_event(event);
+    event.name = "Driver arbitrary int64";
+    event.format = PipelineStatisticFormat::Int64;
+    event.signed_value = std::numeric_limits<std::int64_t>::min();
+    recorder.pipeline_event(event);
+    event.name = "Driver arbitrary bool32";
+    event.format = PipelineStatisticFormat::Bool32;
+    event.bool_value = true;
+    recorder.pipeline_event(event);
+    event.name = "Driver arbitrary float64";
+    event.format = PipelineStatisticFormat::Float64;
+    event.float_value = 2.5;
+    recorder.pipeline_event(event);
+    event.kind = PipelineEventKind::InternalRepresentation;
+    event.name = "Driver IR";
+    std::string borrowed_text(6000, 'x');
+    event.text = borrowed_text;
+    event.original_size = borrowed_text.size();
+    recorder.pipeline_event(event);
+    borrowed_text.assign(6000, 'z');
+    event.kind = PipelineEventKind::Use;
+    event.text = {};
+    recorder.pipeline_event(event);
+    const auto snapshot = recorder.snapshot();
+    if (!require(pending.gpu_samples[0].pipeline_statistics_status == SampleStatus::Pending &&
+        snapshot.gpu_samples[0].status == SampleStatus::Disjoint &&
+        snapshot.gpu_samples[0].pipeline_statistics_status == SampleStatus::Available &&
+        snapshot.gpu_samples[0].input_assembly_vertices == 0 &&
+        snapshot.gpu_samples[0].fragment_shader_invocations == std::numeric_limits<std::uint64_t>::max() &&
+        snapshot.pipeline_events.size() == 7 && snapshot.pipeline_events[5].text == std::string(4096, 'x') &&
+        snapshot.pipeline_events[5].truncated && snapshot.pipeline_events[5].original_size == 6000 &&
+        snapshot.truncated_pipeline_artifacts == 1 && snapshot.memory_bytes <= std::size_t{1024} * 1024u,
+        "pipeline counters/compile records lost independence, ownership, immutable snapshot or bounded IR")) return false;
+    const auto json = nlohmann::json::parse(snapshot_json(snapshot));
+    const auto parsed = parse_snapshot(json.dump());
+    if (!require(parsed.has_value() && parsed->pipeline_events.size() == 7 &&
+        parsed->pipeline_events[1].unsigned_value == std::numeric_limits<std::uint64_t>::max() &&
+        parsed->pipeline_events[2].signed_value == std::numeric_limits<std::int64_t>::min() &&
+        parsed->pipeline_events[3].bool_value && parsed->pipeline_events[4].float_value == 2.5 &&
+        json["gpu_samples"][0]["pipeline_statistics"]["fragment_shader_invocations"] == "18446744073709551615" &&
+        json["pipeline_events"][2]["value"] == "-9223372036854775808",
+        "pipeline JSON roundtrip lost typed statistics or uint64 precision")) return false;
+    for (int fault = 0; fault < 6; ++fault) {
+        auto broken = json;
+        if (fault == 0) broken["gpu_samples"][0]["pipeline_statistics"].erase("clipping_primitives");
+        if (fault == 1) broken["gpu_samples"][0]["pipeline_statistics"]["status"] = "Maybe";
+        if (fault == 2) broken["pipeline_events"][1]["value"] = "18446744073709551616";
+        if (fault == 3) broken["pipeline_events"][2]["value"] = "-9223372036854775809";
+        if (fault == 4) broken["pipeline_events"][4]["value"] = "2.5";
+        if (fault == 5) broken["pipeline_events"][5]["text"] = std::string(4097, 'x');
+        if (!require(!parse_snapshot(broken.dump()), "malformed GPU diagnostics were accepted")) return false;
+    }
+    auto legacy = json;
+    legacy["gpu_samples"][0].erase("pipeline_statistics");
+    legacy.erase("pipeline_events");
+    const auto old = parse_snapshot(legacy.dump());
+    if (!require(old && old->gpu_samples[0].pipeline_statistics_status == SampleStatus::Unsupported &&
+        !nlohmann::json::parse(snapshot_json(*old))["gpu_samples"][0]["pipeline_statistics"].contains("fragment_shader_invocations"),
+        "legacy missing hardware counter became a measured zero")) return false;
+    const auto html = snapshot_html(snapshot);
+    const auto begin = html.find(R"(<script id="data" type="application/json">)");
+    const auto start = html.find('>', begin) + 1;
+    const auto end = html.find("</script>", start);
+    if (!require(nlohmann::json::parse(html.substr(start, end - start)) == json &&
+        html.find("Compiled pipeline executables") != std::string::npos &&
+        html.find("GPU pass distributions by renderer and view") != std::string::npos &&
+        html.find("['Renderer','View','Pass'") != std::string::npos,
+        "portable HTML diagnostics differ from JSON or have no executable viewer")) return false;
+    recorder.begin_capture();
+    recorder.pipeline_event(event);
+    if (!require(recorder.snapshot().stale_epoch_events == 1 && recorder.snapshot().pipeline_events.empty(),
+        "previous capture pipeline import contaminated the new epoch")) return false;
+    Recorder losses({10'000'000'000ull, std::size_t{256} * 1024u, 2});
+    losses.begin_capture();
+    PipelineEventView loss;
+    loss.context.capture_id = losses.session_id();
+    loss.kind = PipelineEventKind::Loss;
+    loss.status = SampleStatus::Dropped;
+    loss.reason = "driver metadata cache exhausted";
+    loss.unsigned_value = 3;
+    losses.pipeline_event(loss);
+    loss.unsigned_value = 4;
+    losses.pipeline_event(loss);
+    const auto loss_snapshot = losses.snapshot();
+    const auto loss_json = nlohmann::json::parse(snapshot_json(loss_snapshot));
+    const auto loss_parsed = parse_snapshot(loss_json.dump());
+    if (!require(loss_snapshot.pipeline_events.size() == 2 && loss_parsed &&
+        loss_parsed->pipeline_events[0].unsigned_value == 3 && loss_parsed->pipeline_events[1].unsigned_value == 4 &&
+        loss_json["pipeline_events"][0]["loss_count"] == "3",
+        "driver metadata loss deltas were deduplicated or omitted by export")) return false;
+    auto bad_loss = loss_json;
+    bad_loss["pipeline_events"][0]["loss_count"] = "0";
+    if (!require(!parse_snapshot(bad_loss.dump()), "empty driver loss delta was accepted as measured loss")) return false;
+    Recorder utf8({10'000'000'000ull, std::size_t{256} * 1024u, 2});
+    utf8.begin_capture();
+    event.context.capture_id = utf8.session_id();
+    event.kind = PipelineEventKind::InternalRepresentation;
+    const std::string boundary = std::string(4095, 'x') + "\xc3\xa9";
+    event.text = boundary;
+    event.original_size = boundary.size();
+    utf8.pipeline_event(event);
+    const auto utf8_snapshot = utf8.snapshot();
+    if (!require(utf8_snapshot.pipeline_events.size() == 1 &&
+        utf8_snapshot.pipeline_events[0].text.size() == 4095 && utf8_snapshot.pipeline_events[0].truncated &&
+        parse_snapshot(snapshot_json(utf8_snapshot)).has_value(),
+        "IR truncation split a UTF-8 sequence or produced an unreadable report")) return false;
+    Recorder small({10'000'000'000ull, std::size_t{64} * 1024u, 2});
+    small.begin_capture();
+    event.context.capture_id = small.session_id();
+    event.kind = PipelineEventKind::Pipeline;
+    event.text = {};
+    for (std::uint64_t i = 1; i <= 200; ++i) { event.pipeline_id = i; small.pipeline_event(event); }
+    const auto overflow = small.snapshot();
+    return require(overflow.dropped_pipeline_headers > 0 && overflow.dropped_pipeline_events > 0 && overflow.dropped_events == 0 &&
+        overflow.memory_bytes <= std::size_t{64} * 1024u,
+        "protected header overflow was unbounded or mislabeled CPU event loss");
+}
+bool compact_pipeline_catalog_and_ir_lifetime() {
+    constexpr std::size_t budget = std::size_t{64} * 1024u * 1024u;
+    Recorder recorder({10'000'000'000ull, budget, 2});
+    recorder.begin_capture();
+    PipelineEventView event;
+    event.context = {1, 1, 1, 1, 1, recorder.session_id()};
+    event.status = SampleStatus::Available;
+    event.description = "A complete arbitrary driver description shared by many compiled variants";
+    event.reason = "Driver compiler property, independent of runtime timings";
+    const std::string long_program(1000, 'p');
+    const std::string long_name(255, 'n');
+    event.program_name = long_program;
+    for (std::uint64_t pipeline = 1; pipeline <= 612; ++pipeline) {
+        event.pipeline_id = pipeline;
+        event.program_id = pipeline % 93 + 1;
+        for (std::uint32_t executable = 0; executable < 2; ++executable) {
+            event.executable_index = executable;
+            event.kind = PipelineEventKind::Pipeline;
+            event.name = long_name;
+            recorder.pipeline_event(event);
+            for (std::uint64_t statistic = 0; statistic < 13; ++statistic) {
+                const std::string name = "Driver statistic " + std::to_string(statistic);
+                event.name = name;
+                event.kind = PipelineEventKind::Statistic;
+                event.unsigned_value = pipeline * 100 + statistic;
+                recorder.pipeline_event(event);
+            }
+        }
+        event.kind = PipelineEventKind::Use;
+        event.pass_id = pipeline;
+        recorder.pipeline_event(event);
+    }
+    event.kind = PipelineEventKind::InternalRepresentation;
+    event.name = "First retained driver IR";
+    event.text = "original IR text";
+    event.original_size = event.text.size();
+    recorder.pipeline_event(event);
+    const auto frozen = recorder.snapshot();
+    const auto first_artifact = std::ranges::find(frozen.pipeline_events, PipelineEventKind::InternalRepresentation, &PipelineEvent::kind);
+    if (!require(first_artifact != frozen.pipeline_events.end() && first_artifact->text == "original IR text",
+        "initial compact IR reference did not resolve to its own immutable text")) return false;
+    const std::string replacement(4096, 'z');
+    event.text = replacement;
+    event.original_size = replacement.size();
+    for (std::uint64_t i = 0; i < 2048; ++i) {
+        const std::string name = "Later IR " + std::to_string(i);
+        event.name = name;
+        recorder.pipeline_event(event);
+    }
+    recorder.set_active(false);
+    const auto snapshot = recorder.snapshot();
+    const auto headers = std::ranges::count(snapshot.pipeline_events, PipelineEventKind::Pipeline, &PipelineEvent::kind);
+    const auto statistics = std::ranges::count(snapshot.pipeline_events, PipelineEventKind::Statistic, &PipelineEvent::kind);
+    const auto old_artifact = std::ranges::find(snapshot.pipeline_events, "First retained driver IR", &PipelineEvent::name);
+    if (!require(headers == 1224 && statistics == 15912 && snapshot.memory_bytes <= budget &&
+        snapshot.dropped_pipeline_headers == 0 && snapshot.dropped_pipeline_statistics == 0 &&
+        snapshot.overwritten_pipeline_statistics == 0 && snapshot.overwritten_pipeline_events == 0 &&
+        snapshot.overwritten_pipeline_artifacts > 0 && old_artifact != snapshot.pipeline_events.end() &&
+        old_artifact->status == SampleStatus::Dropped && old_artifact->text.empty() &&
+        old_artifact->reason.find("overwritten") != std::string::npos && first_artifact->text == "original IR text",
+        "real-scene-sized compact catalog lost headers/statistics, exceeded budget or aliased overwritten IR")) return false;
+    const auto header = std::ranges::find(snapshot.pipeline_events, PipelineEventKind::Pipeline, &PipelineEvent::kind);
+    if (!require(header != snapshot.pipeline_events.end() && header->program_name == long_program && header->name == long_name,
+        "interned driver/material-variant labels were truncated or aliased")) return false;
+    const auto parsed = parse_snapshot(snapshot_json(snapshot));
+    auto legacy_json = nlohmann::json::parse(snapshot_json(snapshot));
+    for (const char* field : {"pipeline_loss_breakdown_available", "dropped_pipeline_headers", "dropped_pipeline_statistics",
+                             "overwritten_pipeline_statistics", "dropped_pipeline_artifacts", "overwritten_pipeline_artifacts"})
+        legacy_json.erase(field);
+    const auto legacy = parse_snapshot(legacy_json.dump());
+    if (!require(legacy && !legacy->pipeline_loss_breakdown_available &&
+        !nlohmann::json::parse(snapshot_json(*legacy)).contains("dropped_pipeline_headers"),
+        "legacy absent header/statistics/IR loss became a measured zero")) return false;
+    if (!require(parsed && parsed->pipeline_loss_breakdown_available && parsed->overwritten_pipeline_artifacts == snapshot.overwritten_pipeline_artifacts &&
+        parsed->dropped_pipeline_headers == 0 && parsed->pipeline_events.size() == snapshot.pipeline_events.size(),
+        "compact catalog or independent loss fields did not roundtrip")) return false;
+    recorder.begin_capture();
+    event.context.capture_id = recorder.session_id();
+    event.kind = PipelineEventKind::Pipeline;
+    event.text = {};
+    event.name = "New epoch";
+    recorder.pipeline_event(event);
+    const auto next = recorder.snapshot();
+    if (!require(next.pipeline_events.size() == 1 && next.pipeline_events[0].name == "New epoch" &&
+        next.overwritten_pipeline_artifacts == 0 && first_artifact->text == "original IR text",
+        "compact string/IR reset leaked a previous capture or mutated its snapshot")) return false;
+    Recorder pressure({10'000'000'000ull, std::size_t{64} * 1024u, 2});
+    pressure.begin_capture();
+    event.context.capture_id = pressure.session_id();
+    event.kind = PipelineEventKind::Pipeline;
+    event.program_name = "Protected material variant";
+    event.description = "Protected executable header";
+    event.name = "Header";
+    for (std::uint64_t id = 1; id <= 2; ++id) { event.pipeline_id = id; pressure.pipeline_event(event); }
+    event.kind = PipelineEventKind::Statistic;
+    event.name = "Pressure statistic";
+    for (std::uint64_t i = 0; i < 1000; ++i) { event.unsigned_value = i; pressure.pipeline_event(event); }
+    const auto pressured = pressure.snapshot();
+    if (!require(std::ranges::count(pressured.pipeline_events, PipelineEventKind::Pipeline, &PipelineEvent::kind) == 2 &&
+        pressured.dropped_pipeline_headers == 0 && pressured.overwritten_pipeline_statistics > 0 &&
+        pressured.overwritten_pipeline_events > 0 && pressured.dropped_events == 0,
+        "statistics pressure overwrote protected headers or misclassified compiler loss as CPU loss")) return false;
+    for (const auto memory : {std::size_t{16} * 1024u * 1024u, std::size_t{64} * 1024u * 1024u}) {
+        Recorder bounded({10'000'000'000ull, memory, 64});
+        bounded.begin_capture();
+        if (!require(bounded.snapshot().memory_bytes <= memory, "desktop/mobile compact catalog allocation exceeded total cap")) return false;
+    }
+    return true;
+}
 bool metadata_budget() {
     Recorder recorder({10'000'000'000ull, std::size_t{1024} * 1024u, 2});
     for (int i = 0; i < 40; ++i) recorder.set_metadata("key" + std::to_string(i), "value");
@@ -311,7 +636,7 @@ bool writer_instrumentation() {
                    "writer mutated the submitted snapshot with its future export work");
 }
 bool unit_microprofiler() {
-    return disabled_and_nested() && delayed_gpu_and_epochs() && overflow_and_concurrency() && roundtrip_and_writer() && metadata_budget() && accepted_submission_contexts() && writer_instrumentation();
+    return disabled_and_nested() && delayed_gpu_and_epochs() && overflow_and_concurrency() && roundtrip_and_writer() && native_draw_command_observations() && pipeline_diagnostics_observations() && compact_pipeline_catalog_and_ir_lifetime() && metadata_budget() && accepted_submission_contexts() && writer_instrumentation();
 }
 const heaven::testing::Register kRegister(unit_microprofiler);
 }

@@ -35,7 +35,7 @@ const char* sample_reason(utils::profiling::GpuStatus status) noexcept {
 }
 
 ProfileBridge::ProfileBridge(profile::Recorder& recorder)
-    : recorder_(recorder), observer_{this, cpu, gpu, capability} {
+    : recorder_(recorder), observer_{this, cpu, gpu, capability, pipeline} {
     utils::profiling::setObserver(&observer_);
     utils::profiling::setEnabled(recorder_.active());
 }
@@ -85,7 +85,53 @@ void ProfileBridge::gpu(void* user, const utils::profiling::GpuSample& sample) n
         valid ? profile::TimerSource::HardwareTimestamp : profile::TimerSource::Unavailable,
         sample_reason(sample.status == utils::profiling::GpuStatus::AVAILABLE && !valid
             ? utils::profiling::GpuStatus::ERROR : sample.status), sample.command_count,
-        sample.primitive_count, sample.visible_renderables, sample.draw_instance_invocations);
+        sample.primitive_count, sample.visible_renderables, sample.draw_instance_invocations,
+        sample.native_draw_commands_full, sample.native_draw_commands_2x1, sample.native_draw_commands_2x2,
+        sample.native_draw_commands_available,
+        {convert(sample.pipeline_statistics_status),
+            sample.pipeline_statistics_reason ? sample.pipeline_statistics_reason : "pipeline statistics unavailable",
+            sample.input_assembly_vertices, sample.input_assembly_primitives,
+            sample.vertex_shader_invocations, sample.clipping_invocations,
+            sample.clipping_primitives, sample.fragment_shader_invocations});
+}
+void ProfileBridge::pipeline(void* user, const utils::profiling::PipelineExecutableEvent& event) noexcept {
+    auto& recorder = static_cast<ProfileBridge*>(user)->recorder_;
+    profile::PipelineEventView target;
+    target.context = convert(event.context);
+    using K = utils::profiling::PipelineExecutableEventKind;
+    switch (event.kind) {
+        case K::PIPELINE: target.kind = profile::PipelineEventKind::Pipeline; break;
+        case K::STATISTIC: target.kind = profile::PipelineEventKind::Statistic; break;
+        case K::INTERNAL_REPRESENTATION: target.kind = profile::PipelineEventKind::InternalRepresentation; break;
+        case K::USE: target.kind = profile::PipelineEventKind::Use; break;
+        case K::LOSS: target.kind = profile::PipelineEventKind::Loss; break;
+    }
+    using F = utils::profiling::PipelineStatisticFormat;
+    switch (event.format) {
+        case F::BOOL32: target.format = profile::PipelineStatisticFormat::Bool32; break;
+        case F::INT64: target.format = profile::PipelineStatisticFormat::Int64; break;
+        case F::UINT64: target.format = profile::PipelineStatisticFormat::Uint64; break;
+        case F::FLOAT64: target.format = profile::PipelineStatisticFormat::Float64; break;
+    }
+    target.pipeline_id = event.pipeline_id;
+    target.program_id = event.program_id;
+    target.pass_id = event.pass_id;
+    target.executable_index = event.executable_index;
+    target.stages = event.stages;
+    target.subgroup_size = event.subgroup_size;
+    target.program_name = event.program_name ? event.program_name : "";
+    target.name = event.name ? event.name : "";
+    target.description = event.description ? event.description : "";
+    target.text = event.text ? event.text : "";
+    target.reason = event.reason ? event.reason : "";
+    target.status = convert(event.status);
+    target.bool_value = event.bool_value;
+    target.signed_value = event.signed_value;
+    target.unsigned_value = event.unsigned_value;
+    target.float_value = event.float_value;
+    target.original_size = event.original_size;
+    target.truncated = event.truncated;
+    recorder.pipeline_event(target);
 }
 void ProfileBridge::capability(void* user, const utils::profiling::GpuCapabilities& capability) noexcept {
     auto& self = *static_cast<ProfileBridge*>(user);
@@ -97,6 +143,15 @@ void ProfileBridge::capability(void* user, const utils::profiling::GpuCapabiliti
     std::memcpy(self.reason_.data(), reason, size);
     self.reason_[size] = '\0';
     self.capability_.reason = self.reason_.data();
+    const auto copy_reason = [](auto& destination, const char* text) {
+        const auto length = text ? std::min(std::strlen(text), destination.size() - 1) : 0;
+        if (length != 0) std::memcpy(destination.data(), text, length);
+        destination[length] = '\0';
+    };
+    copy_reason(self.pipeline_statistics_reason_, capability.pipeline_statistics_reason);
+    copy_reason(self.executable_info_reason_, capability.executable_info_reason);
+    self.capability_.pipeline_statistics_reason = self.pipeline_statistics_reason_.data();
+    self.capability_.executable_info_reason = self.executable_info_reason_.data();
 }
 TraceCapabilities ProfileBridge::capabilities() const {
     std::scoped_lock lock(capability_mutex_);
@@ -108,6 +163,16 @@ TraceCapabilities ProfileBridge::capabilities() const {
     if (capability_.reason) result.reason = reason_.data();
     result.timestamp_valid_bits = capability_.timestamp_valid_bits;
     result.timestamp_period_ns = capability_.timestamp_period_ns;
+    result.diagnostics_requested = capability_.diagnostics_requested;
+    result.pipeline_statistics_supported = capability_.pipeline_statistics_supported;
+    result.pipeline_statistics_enabled = capability_.pipeline_statistics_enabled;
+    result.executable_properties_supported = capability_.executable_properties_supported;
+    result.executable_info_supported = capability_.executable_info_supported;
+    result.executable_info_enabled = capability_.executable_info_enabled;
+    result.internal_representations_requested = capability_.internal_representations_requested;
+    result.internal_representations_enabled = capability_.internal_representations_enabled;
+    if (capability_.pipeline_statistics_reason) result.pipeline_statistics_reason = pipeline_statistics_reason_.data();
+    if (capability_.executable_info_reason) result.executable_info_reason = executable_info_reason_.data();
     return result;
 }
 } // namespace heaven

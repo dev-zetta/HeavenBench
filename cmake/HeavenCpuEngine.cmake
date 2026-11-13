@@ -8,6 +8,7 @@ set(HEAVEN_CPU_ENGINE_SOURCES
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/asset_file_system.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/dds_block_codec.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/gpu_driver_info.cpp
+    ${HEAVEN_REPO_ROOT}/benchmark/src/engine/variable_rate_shading.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/ground_relief_generator.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/surface_displacement_policy.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/zip_archive.cpp
@@ -39,6 +40,7 @@ set(HEAVEN_CPU_ENGINE_SOURCES
     ${HEAVEN_REPO_ROOT}/benchmark/src/engine/camera_collision.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/scene_markers.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/microprofiler.cpp
+    ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/gpu_clock_telemetry.cpp
     ${HEAVEN_REPO_ROOT}/benchmark/src/benchmark/microprofile_report.cpp
 )
 list(APPEND HEAVEN_CPU_ENGINE_SOURCES ${HEAVEN_REPO_ROOT}/benchmark/src/engine/frame_generation.cpp)

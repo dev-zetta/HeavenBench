@@ -210,6 +210,10 @@ bool run_p9_bad_keys_property() {
                     return "metallic-roughness";
                 if (key == "frame_generation")
                     return "fsr3";
+                if (key == "variable_rate_shading") {
+                    const int idx = *rc::gen::inRange(0, 3);
+                    return std::vector<std::string>{"off", "2x1", "2x2"}[idx];
+                }
                 if (key == "texture_quality") {
                     const int idx = *rc::gen::inRange(0, 3);
                     return std::vector<std::string>{"original", "2k", "4k"}[idx];

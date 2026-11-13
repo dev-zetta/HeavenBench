@@ -293,6 +293,9 @@ bool run_value_flag_coverage_guard() {
         // Provider identities, invalid-value retention, precedence and the
         // diagnostic scoring contract are covered by unit_frame_generation.
         if (n == "--frame-generation") continue;
+        // Rate identities, invalid-value retention and ordered overrides are
+        // covered by unit_variable_rate_shading.
+        if (n == "--vrs") continue;
         if (!modelled.contains(n)) {
             std::printf("[prop_cli_value_flags] table value flag '%.*s' is not "
                         "modelled by any property\n",

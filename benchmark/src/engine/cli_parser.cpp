@@ -180,6 +180,7 @@ const std::unordered_map<std::string_view, std::string_view>& flag_schema_keys()
         // Boolean toggles.
         {"--fullscreen",          "fullscreen"},
         {"--frame-generation",    "frame_generation"},
+        {"--vrs",                 "variable_rate_shading"},
         {"--no-tessellation",     "tessellation.enabled"},
         {"--no-heat-haze",        "heat_haze_enabled"},
         {"--no-grass",            "features.grass"},
@@ -344,6 +345,13 @@ const std::vector<FlagSpec>& flag_table() {
         // ── Boolean toggles (Arity::None) ──────────────────────
         t.push_back({"--fullscreen", Arity::None, "", "Fullscreen mode",
             [](BenchConfig& c, std::string_view, Diagnostics&) { c.fullscreen = true; }});
+        t.push_back({"--vrs", Arity::Value, "off|2x1|2x2",
+            "Request variable-rate shading (default: off); coarser shading trades detail for reduced fragment work",
+            [](BenchConfig& c, std::string_view v, Diagnostics& d) {
+                if (const auto mode = parse_variable_rate_shading_mode(v)) c.variable_rate_shading = *mode;
+                else d.warn(std::format("WARN: --vrs '{}' is unknown; retaining {}",
+                                        v, variable_rate_shading_mode_id(c.variable_rate_shading)));
+            }});
         t.push_back({"--frame-generation", Arity::Value, "off|fsr3|dlss",
             "Request frame generation (default: off); requested tours are diagnostic/unscored",
             [](BenchConfig& c, std::string_view v, Diagnostics& d) {
@@ -1130,6 +1138,12 @@ const std::vector<FlagSpec>& flag_table() {
         t.push_back({"--microprofile-visible", Arity::None, "",
             "Open the profiler panel during the CLI trace; requires --microprofile",
             [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
+        t.push_back({"--gpu-diagnostics", Arity::None, "",
+            "Opt into Vulkan invocation counters and compiled-shader statistics; all tours are diagnostic/unscored, save with the microprofiler",
+            [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
+        t.push_back({"--gpu-shader-ir", Arity::None, "",
+            "Also capture bounded driver shader representations; implies --gpu-diagnostics and may change compilation/performance",
+            [](BenchConfig&, std::string_view, Diagnostics&) { /* handled in parse driver */ }});
 
         // ── Used-asset packer flags ────────────────────────────
 
@@ -1194,6 +1208,11 @@ ParseResult parse_cli(std::span<const std::string_view> args) {
         const FlagSpec& spec = *it->second;
 
         if (spec.arity == Arity::None) {
+            if (spec.name == "--gpu-diagnostics" || spec.name == "--gpu-shader-ir") {
+                result.microprofile.gpu_diagnostics = true;
+                result.microprofile.shader_ir |= spec.name == "--gpu-shader-ir";
+                continue;
+            }
             if (spec.name == "--microprofile-visible") {
                 result.microprofile.visible = true;
                 continue;

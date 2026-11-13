@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the actual Filament release template with a host-only fake driver."""
+"""Execute actual Filament depth-release and ownership methods with a fake driver."""
 import argparse
 import hashlib
 import json
@@ -41,20 +41,12 @@ struct ProgramSpecialization {
     DynamicSpecConstKey specKey;
     Slice<const Program::SpecializationConstant> specializationConstants;
 };
+struct FEngine;
 struct MaterialCache {
     struct ProgramCacheEntry { Handle<HwProgram> program; };
-    struct ProgramCache {
-        std::map<unsigned, ProgramCacheEntry> entries;
-        unsigned released = 0;
-        template<typename F> void release(ProgramSpecialization const& key, F fn) {
-            auto it = entries.find(key.variant.key);
-            if (it == entries.end()) { std::puts("missing cache reference"); std::abort(); }
-            ++released;
-            fn(it->second);
-            entries.erase(it);
-        }
-    } cache;
-    ProgramCache& getProgramCache() { return cache; }
+    std::map<unsigned, ProgramCacheEntry> entries;
+    unsigned released = 0;
+    void releaseProgram(FEngine& engine, ProgramSpecialization const& key);
 };
 struct Driver {
     std::vector<unsigned> retired;
@@ -68,25 +60,44 @@ struct Driver {
     }
 };
 struct FEngine {
+    struct Features {
+        struct Engine { bool enable_program_cache = false; } engine;
+    } features;
     Driver driver;
     MaterialCache cache;
     MaterialCache& getMaterialCache() { return cache; }
     Driver& getDriverApi() { return driver; }
     ShaderModel getShaderModel() const { return ShaderModel::DESKTOP; }
 };
-struct Parser { unsigned getCrc32() const { return 1; } };
+void MaterialCache::releaseProgram(FEngine& engine, ProgramSpecialization const& key) {
+    auto it = entries.find(key.variant.key);
+    if (it == entries.end()) { std::puts("missing cache reference"); std::abort(); }
+    ++released;
+    engine.getDriverApi().destroyProgram(it->second.program);
+    entries.erase(it);
+}
+struct MaterialParser {
+    unsigned identity = 1;
+    unsigned getCrc32() const { return identity; }
+    bool operator==(MaterialParser const&) const = default;
+};
 struct MaterialDefinition {
     bool hasCustomDepthShader = false;
     bool isVariantLit = true;
     MaterialDomain materialDomain = MaterialDomain::SURFACE;
     bool omit_geometry = false;
-    Parser parser;
-    Parser const& getMaterialParser() const { return parser; }
+    MaterialParser parser;
+    MaterialParser const* mMaterialParser = &parser;
+    MaterialParser const& getMaterialParser() const { return parser; }
     Slice<const Variant> getVariants() const { return {}; }
     Slice<const Variant> getDepthVariants() const { return VariantUtils::getDepthVariants(); }
     bool isValidProgram(Variant v, DynamicSpecConstKey, ShaderModel, bool) const {
         return !omit_geometry || !(v.key & (Variant::SKN | Variant::STE));
     }
+    void releasePrograms(FEngine&, Slice<Handle<HwProgram>>, MaterialParser const&,
+            Slice<const Program::SpecializationConstant>, bool) const;
+    // These ownership accessors are extracted unchanged from MaterialDefinition.h.
+    __ACTUAL_OWNERSHIP_METHODS__
 };
 struct LocalProgramCache {
     using CacheKey = unsigned;
@@ -105,62 +116,67 @@ int main(int argc, char**) {
     using namespace filament;
     unsigned cases = 0;
     for (bool cache_enabled : {false, true}) {
-        for (bool default_material : {false, true}) {
-            for (bool custom : {false, true}) {
-                for (bool omit_geometry : {false, true}) {
-                    for (unsigned presence : {0u, 1u, 2u}) {
-                        ++cases;
-                        FEngine engine;
-                        MaterialDefinition def;
-                        def.hasCustomDepthShader = custom;
-                        def.omit_geometry = omit_geometry;
-                        std::array<Handle<HwProgram>, 128> programs{};
-                        std::vector<unsigned> expected;
-                        unsigned references = 0;
-                        for (auto v : def.getDepthVariants()) {
-                            if (!def.isValidProgram(v, {}, ShaderModel::DESKTOP, true)) continue;
-                            ++references;
-                            // The independent ownership oracle models FMaterial::isSharedVariant:
-                            // DEP/PCK borrow unless default/custom; MNT programs always belong here.
-                            const bool owned = default_material || custom || (v.key & 0x40u);
-                            const bool present = presence == 2 || (presence == 1 && (v.key & 0x08));
-                            if (present) {
-                                programs[v.key] = {1000u + v.key};
-                                if (cache_enabled || owned) expected.push_back(1000u + v.key);
+        for (bool parser_mismatch : {false, true}) {
+            for (bool default_material : {false, true}) {
+                for (bool custom : {false, true}) {
+                    for (bool omit_geometry : {false, true}) {
+                        for (unsigned presence : {0u, 1u, 2u}) {
+                            ++cases;
+                            FEngine engine;
+                            engine.features.engine.enable_program_cache = cache_enabled;
+                            MaterialDefinition def;
+                            def.hasCustomDepthShader = custom;
+                            def.omit_geometry = omit_geometry;
+                            MaterialParser runtime_parser{parser_mismatch ? 2u : 1u};
+                            const bool use_cache = cache_enabled && !parser_mismatch;
+                            std::array<Handle<HwProgram>, 64> programs{};
+                            std::vector<unsigned> expected;
+                            unsigned references = 0;
+                            for (auto v : def.getDepthVariants()) {
+                                if (!def.isValidProgram(v, {}, ShaderModel::DESKTOP, true)) continue;
+                                ++references;
+                                // Independent ownership oracle: ordinary/picking/motion depth
+                                // borrows unless default/custom; MNT without PCK is owned here.
+                                const bool moment = (v.key & 0x30u) == 0x20u;
+                                const bool owned = default_material || custom || moment;
+                                const bool present = presence == 2 ||
+                                        (presence == 1 && (v.key & 0x04u));
+                                if (present) {
+                                    programs[v.key] = {1000u + v.key};
+                                    if (use_cache || owned) expected.push_back(1000u + v.key);
+                                }
+                                if (use_cache) engine.cache.entries.emplace(v.key,
+                                        MaterialCache::ProgramCacheEntry{programs[v.key]});
                             }
-                            if (cache_enabled) engine.cache.cache.entries.emplace(v.key,
-                                    MaterialCache::ProgramCacheEntry{programs[v.key]});
-                        }
-                        Slice<Handle<HwProgram>> slice(programs.data(), programs.size());
-                        if (cache_enabled) releaseProgramsImpl<true>(engine, slice, def, {}, default_material);
-                        else releaseProgramsImpl<false>(engine, slice, def, {}, default_material);
-                        std::sort(expected.begin(), expected.end());
-                        std::sort(engine.driver.retired.begin(), engine.driver.retired.end());
-                        if (expected != engine.driver.retired) {
-                            std::fprintf(stderr, "FAIL: depth ownership cache=%d default=%d custom=%d omit=%d presence=%u expected=%zu retired=%zu\n",
-                                    cache_enabled, default_material, custom, omit_geometry, presence,
-                                    expected.size(), engine.driver.retired.size());
-                            return 1;
-                        }
-                        for (const auto p : programs) if (p) {
-                            std::puts("FAIL: retired or borrowed local program slot remains"); return 1;
-                        }
-                        if (cache_enabled && (!engine.cache.cache.entries.empty() ||
-                                engine.cache.cache.released != references)) {
-                            std::puts("FAIL: cache references are unbalanced"); return 1;
+                            Slice<Handle<HwProgram>> slice(programs.data(), programs.size());
+                            def.releasePrograms(engine, slice, runtime_parser, {}, default_material);
+                            std::sort(expected.begin(), expected.end());
+                            std::sort(engine.driver.retired.begin(), engine.driver.retired.end());
+                            if (expected != engine.driver.retired) {
+                                std::fprintf(stderr, "FAIL: depth ownership cache=%d mismatch=%d default=%d custom=%d omit=%d presence=%u expected=%zu retired=%zu\n",
+                                        cache_enabled, parser_mismatch, default_material, custom,
+                                        omit_geometry, presence, expected.size(), engine.driver.retired.size());
+                                return 1;
+                            }
+                            for (const auto p : programs) if (p) {
+                                std::puts("FAIL: retired or borrowed local program slot remains"); return 1;
+                            }
+                            if (use_cache && (!engine.cache.entries.empty() ||
+                                    engine.cache.released != references)) {
+                                std::puts("FAIL: cache references are unbalanced"); return 1;
+                            }
                         }
                     }
                 }
             }
         }
     }
-    std::printf("PASS: actual releaseProgramsImpl, %u owned/borrowed/cache/empty/filtered cases; no GPU\n", cases);
+    std::printf("PASS: actual releasePrograms/ownership, %u owned/borrowed/cache/parser/empty/filtered cases; no GPU\n", cases);
 }
 '''
 
 
-def extract_release(source):
-    marker = "template<bool useCache>\nvoid releaseProgramsImpl("
+def extract_function(source, marker):
     start = source.index(marker)
     brace = source.index("{", start)
     depth = 1
@@ -182,14 +198,26 @@ def main():
     parser.add_argument("--stdlib", choices=("libc++", "default"), default="default")
     args = parser.parse_args()
     root = args.source_root.resolve()
+    vendor = root / "lib/filament"
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    source = root / "lib/filament/filament/src/MaterialDefinition.cpp"
-    function = extract_release(source.read_text())
-    fixed = "(destroySharedVariants || Variant::isDepthMomentsVariant(variant)) && program"
-    if function.count(fixed) != 1:
-        raise RuntimeError("Expected exactly one owned-moment depth release condition")
-    negative = function.replace(fixed, "destroySharedVariants && program")
+    source = vendor / "filament/src/MaterialDefinition.cpp"
+    header = vendor / "filament/src/MaterialDefinition.h"
+    function = extract_function(source.read_text(), "void MaterialDefinition::releasePrograms(")
+    ownership = "\n".join(extract_function(header.read_text(), marker) for marker in (
+            "bool hasSurfaceVariants()", "bool isValidDepthVariant(",
+            "bool isDepthMomentsVariant(", "bool isSharedVariant("))
+    moment_condition = "!isDepthMomentsVariant(variant)"
+    release_condition = "!isSharedVariant(variant, isDefaultMaterial) && program"
+    if ownership.count(moment_condition) != 1 or function.count(release_condition) != 1:
+        raise RuntimeError("Expected exact upstream depth ownership and release conditions")
+    negatives = (
+            ("old-moment-leak-negative", function, ownership.replace(moment_condition, "true")),
+            ("destroy-borrowed-negative", function.replace(release_condition, "program"), ownership),
+            ("omit-motion-negative", function.replace(release_condition,
+                    "!isSharedVariant(variant, isDefaultMaterial) && "
+                    "!Variant::isMotionVectorsVariant(variant) && program"), ownership))
+    variants = (("production", function, ownership),) + negatives
     includes = ["filament/src", "filament/include", "filament/backend/include",
                 "libs/filabridge/include", "libs/utils/include", "libs/math/include"]
     msvc = Path(args.cxx).name.lower() in ("cl", "cl.exe", "clang-cl", "clang-cl.exe")
@@ -198,13 +226,13 @@ def main():
             args.cxx, "-std=c++20", "-O1"]
     if args.stdlib == "libc++" and not msvc:
         command.append("-stdlib=libc++")
-    command += [("/I" if msvc else "-I") + str(root / "lib/filament" / p) for p in includes]
+    command += [("/I" if msvc else "-I") + str(vendor / p) for p in includes]
     results = []
-    for label, body in (("production", function), ("old-condition-negative", negative)):
+    for label, body, methods in variants:
         cpp = work / (label + ".cpp")
         exe = work / (label + (".exe" if msvc else ""))
-        cpp.write_text(PREFIX + body + SUFFIX)
-        cmd = command + [str(cpp), str(root / "lib/filament/libs/filabridge/src/Variant.cpp")]
+        cpp.write_text(PREFIX.replace("__ACTUAL_OWNERSHIP_METHODS__", methods) + body + SUFFIX)
+        cmd = command + [str(cpp), str(vendor / "libs/filabridge/src/Variant.cpp")]
         cmd += ["/Fe:" + str(exe), "/Fo" + str(work) + "/"] if msvc else ["-o", str(exe)]
         compiled = subprocess.run(cmd, capture_output=True, text=True, cwd=work)
         (work / (label + "-compile.log")).write_text(compiled.stdout + compiled.stderr)
@@ -223,11 +251,14 @@ def main():
         else:
             print(compiled.stdout + compiled.stderr, end="")
         results.append(result)
-    passed = results[0].get("run_exit") == 0 and results[1].get("run_exit") == 1 and \
+    passed = results[0].get("run_exit") == 0 and \
+        all(result.get("run_exit") == 1 for result in results[1:]) and \
         all(result.get("assertion_probe_valid", False) for result in results)
     (work / "receipt.json").write_text(json.dumps({"passed": passed, "gpu_executed": False,
             "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "header_sha256": hashlib.sha256(header.read_bytes()).hexdigest(),
             "function_sha256": hashlib.sha256(function.encode()).hexdigest(),
+            "ownership_methods_sha256": hashlib.sha256(ownership.encode()).hexdigest(),
             "runs": results}, indent=2) + "\n")
     return 0 if passed else 1
 

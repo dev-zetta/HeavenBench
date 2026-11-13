@@ -203,6 +203,7 @@ namespace heaven::testing {
     cfg.texture_quality = static_cast<TextureQuality>(
         *rc::gen::inRange(0, 3));
     cfg.frame_generation = static_cast<FrameGenerationMode>(*rc::gen::inRange(0, 3));
+    cfg.variable_rate_shading = static_cast<VariableRateShadingMode>(*rc::gen::inRange(0, 3));
 
     // ── Sound ──
     cfg.music.enabled = *rc::gen::arbitrary<bool>();

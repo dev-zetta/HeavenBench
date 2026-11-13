@@ -1,0 +1,24 @@
+#version 460
+layout(local_size_x=16, local_size_y=16) in;
+layout(set=0, binding=0, std430) readonly buffer InputA { uint a[]; };
+layout(set=0, binding=1, std430) readonly buffer InputB { uint b[]; };
+layout(set=0, binding=2, std430) writeonly buffer OutputC { int c[]; };
+const uint size = 256;
+shared int tile_a[16][16];
+shared int tile_b[16][16];
+int signed_byte(uint word, uint lane) { return bitfieldExtract(int(word), int(lane*8), 8); }
+void main() {
+    uint x=gl_LocalInvocationID.x, y=gl_LocalInvocationID.y;
+    uint row=gl_WorkGroupID.y*16+y, col=gl_WorkGroupID.x*16+x;
+    uint base=gl_WorkGroupID.z*size*size;
+    int sum=0;
+    for (uint k=0; k<size; k+=16) {
+        uint ia=base+row*size+k+x, ib=base+col*size+k+y;
+        tile_a[y][x]=signed_byte(a[ia/4], ia%4);
+        tile_b[y][x]=signed_byte(b[ib/4], ib%4);
+        barrier();
+        for (uint t=0; t<16; ++t) sum+=tile_a[y][t]*tile_b[t][x];
+        barrier();
+    }
+    c[base+row*size+col]=sum;
+}
