@@ -18,6 +18,7 @@
 #include "engine/path_resolver.h"
 #include "engine/gpu_driver_info.h"
 #include "engine/loading_progress.h"
+#include "benchmark/gpu_sensor_telemetry.h"
 
 #include <memory>
 #include <functional>
@@ -671,18 +672,9 @@ public:
     // so the UI can distinguish unsupported driver data from a real zero.
     // Vulkan's memory-budget extension supplies the current process estimate;
     // Linux DRM/HWMON may additionally supply device-wide load and sensors.
-    struct GpuTelemetry {
-        double utilization_percent       = -1.0;
-        double memory_utilization_percent = -1.0;
+    struct GpuTelemetry : profile::GpuSensorReading {
         double process_vram_used_mb       = -1.0;
         double process_vram_budget_mb     = -1.0;
-        double device_vram_used_mb        = -1.0;
-        double device_vram_total_mb       = -1.0;
-        double temperature_c              = -1.0;
-        double power_w                    = -1.0;
-        double core_clock_mhz             = -1.0;
-        double memory_clock_mhz           = -1.0;
-        double fan_rpm                    = -1.0;
     };
     [[nodiscard]] virtual GpuTelemetry gpu_telemetry() const { return {}; }
 

@@ -312,6 +312,7 @@ public:
     [[nodiscard]] filament::Texture* placeholder_depth_texture() override;
 
 private:
+    mutable std::unique_ptr<profile::GpuSensorTelemetry> gpu_sensor_telemetry_;
     std::unique_ptr<ProfileBridge> profile_bridge_;
     uint64_t diagnostics_capture_id_ = 0;
     std::unique_ptr<VariableRateShadingController> variable_rate_shading_;
@@ -329,6 +330,7 @@ private:
     filament::Renderer*     renderer_   = nullptr;
     filament::Scene*        scene_      = nullptr;
     filament::View*         view_       = nullptr;
+    bool opaque_depth_prepass_device_qualified_ = false;
     filament::Camera*       fil_camera_ = nullptr;
     utils::Entity           camera_entity_;
 #ifdef __APPLE__
@@ -540,6 +542,7 @@ private:
     // render_frame is a thin sequencer over these named steps; each
     // owns one logical phase of the frame. The MaterialResolver / spans
     // come straight from the render_frame arguments.
+    void  update_opaque_depth_prepass_policy(const LightingParams& lighting);
     void  update_camera(const Camera& camera, const LightingParams& lighting,
                         int viewport_w, int viewport_h);
     // Builds the per-frame FrameContext, ensures the shared depth

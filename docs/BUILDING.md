@@ -14,7 +14,7 @@ Linux and Android use the same Docker entry point locally and in GitHub Actions.
 pwsh -File scripts/ci_windows.ps1 -Jobs 6
 ```
 
-Package names and application metadata derive from the benchmark version in `benchmark/CMakeLists.txt`, currently **1.2.0**. Android also uses versionCode **6** for upgrade ordering; the extraction tools retain their independent version.
+Package names and application metadata derive from the benchmark version in `benchmark/CMakeLists.txt`, currently **1.2.1**. Android uses versionCode **7** for upgrade ordering. The extraction tools retain their independent version.
 
 Docker packages appear under `build/release/linux-<arch>/` or `build/release/android-<abi>/`, together with checksums, logs, exact build sources and package-version provenance. Linux portable builds run extraction/asset tests, renderer host tests, static analysis and AppImage relocation checks in a separate minimal runtime image. Android builds validate native libraries, run lint and verify APK signing/alignment. See [Docker builds](DOCKER_BUILDS.md) for caches, clean builds, outputs and validation scope.
 

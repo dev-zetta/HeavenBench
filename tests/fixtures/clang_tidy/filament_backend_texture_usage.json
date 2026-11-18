@@ -31,12 +31,12 @@
         {
           "Message": "Assuming 'need_depth_pass' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 122488,
+          "FileOffset": 119844,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 122488,
+              "FileOffset": 119844,
               "Length": 15
             }
           ]
@@ -44,18 +44,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 122484,
+          "FileOffset": 119840,
           "Replacements": []
         },
         {
           "Message": "Assuming field 'hdr_' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 123627,
+          "FileOffset": 120983,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 123627,
+              "FileOffset": 120983,
               "Length": 4
             }
           ]
@@ -63,36 +63,36 @@
         {
           "Message": "Left side of '&&' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 123632,
+          "FileOffset": 120988,
           "Replacements": []
         },
         {
           "Message": "Field 'hdr_active_' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 124093,
+          "FileOffset": 121449,
           "Replacements": []
         },
         {
           "Message": "'?' condition is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 124093,
+          "FileOffset": 121449,
           "Replacements": []
         },
         {
           "Message": "'?' condition is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 124142,
+          "FileOffset": 121498,
           "Replacements": []
         },
         {
           "Message": "Assuming field 'want_scene_color_' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125587,
+          "FileOffset": 122943,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 125587,
+              "FileOffset": 122943,
               "Length": 17
             }
           ]
@@ -100,18 +100,18 @@
         {
           "Message": "Left side of '&&' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125605,
+          "FileOffset": 122961,
           "Replacements": []
         },
         {
           "Message": "'scene_color_active' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125727,
+          "FileOffset": 123083,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 125727,
+              "FileOffset": 123083,
               "Length": 18
             }
           ]
@@ -119,18 +119,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125723,
+          "FileOffset": 123079,
           "Replacements": []
         },
         {
           "Message": "'capture_feature' is null",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125991,
+          "FileOffset": 123347,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 125991,
+              "FileOffset": 123347,
               "Length": 15
             }
           ]
@@ -138,18 +138,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 125987,
+          "FileOffset": 123343,
           "Replacements": []
         },
         {
           "Message": "'scene_color_active' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126096,
+          "FileOffset": 123452,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 126096,
+              "FileOffset": 123452,
               "Length": 18
             }
           ]
@@ -157,18 +157,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126092,
+          "FileOffset": 123448,
           "Replacements": []
         },
         {
           "Message": "'overlay_ready' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126785,
+          "FileOffset": 124141,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 126785,
+              "FileOffset": 124141,
               "Length": 13
             }
           ]
@@ -176,24 +176,24 @@
         {
           "Message": "'?' condition is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126785,
+          "FileOffset": 124141,
           "Replacements": []
         },
         {
           "Message": "Left side of '&&' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126927,
+          "FileOffset": 124283,
           "Replacements": []
         },
         {
           "Message": "'generating' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126972,
+          "FileOffset": 124328,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 126972,
+              "FileOffset": 124328,
               "Length": 10
             }
           ]
@@ -201,18 +201,18 @@
         {
           "Message": "Left side of '&&' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 126983,
+          "FileOffset": 124339,
           "Replacements": []
         },
         {
           "Message": "Assuming field 'hdr_active_' is true",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 127053,
+          "FileOffset": 124409,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 127053,
+              "FileOffset": 124409,
               "Length": 11
             }
           ]
@@ -220,18 +220,18 @@
         {
           "Message": "Taking true branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 127049,
+          "FileOffset": 124405,
           "Replacements": []
         },
         {
           "Message": "'overlay_ready' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 127080,
+          "FileOffset": 124436,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 127080,
+              "FileOffset": 124436,
               "Length": 13
             }
           ]
@@ -239,18 +239,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 127076,
+          "FileOffset": 124432,
           "Replacements": []
         },
         {
           "Message": "Calling 'FilamentBackend::prepare_screenshot_target'",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 127642,
+          "FileOffset": 124998,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 127642,
+              "FileOffset": 124998,
               "Length": 49
             }
           ]
@@ -258,12 +258,12 @@
         {
           "Message": "Assuming the condition is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7227,
+          "FileOffset": 7272,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7227,
+              "FileOffset": 7272,
               "Length": 17
             }
           ]
@@ -271,18 +271,18 @@
         {
           "Message": "Left side of '||' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7227,
+          "FileOffset": 7272,
           "Replacements": []
         },
         {
           "Message": "Assuming field 'hdr_' is true",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7248,
+          "FileOffset": 7293,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7248,
+              "FileOffset": 7293,
               "Length": 5
             }
           ]
@@ -290,18 +290,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7223,
+          "FileOffset": 7268,
           "Replacements": []
         },
         {
           "Message": "Assuming field 'screenshot_hdr_target_' is null",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7271,
+          "FileOffset": 7316,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7271,
+              "FileOffset": 7316,
               "Length": 22
             }
           ]
@@ -309,36 +309,36 @@
         {
           "Message": "Left side of '&&' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7294,
+          "FileOffset": 7339,
           "Replacements": []
         },
         {
           "Message": "Field 'hdr_active_' is true",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7446,
+          "FileOffset": 7491,
           "Replacements": []
         },
         {
           "Message": "Left side of '||' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7445,
+          "FileOffset": 7490,
           "Replacements": []
         },
         {
           "Message": "Left side of '||' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7445,
+          "FileOffset": 7490,
           "Replacements": []
         },
         {
           "Message": "Assuming the condition is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7477,
+          "FileOffset": 7522,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7477,
+              "FileOffset": 7522,
               "Length": 21
             }
           ]
@@ -346,18 +346,18 @@
         {
           "Message": "Left side of '||' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7445,
+          "FileOffset": 7490,
           "Replacements": []
         },
         {
           "Message": "Assuming 'viewport_w' is > 0",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7514,
+          "FileOffset": 7559,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7514,
+              "FileOffset": 7559,
               "Length": 15
             }
           ]
@@ -365,18 +365,18 @@
         {
           "Message": "Left side of '||' is false",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7445,
+          "FileOffset": 7490,
           "Replacements": []
         },
         {
           "Message": "Assuming 'viewport_h' is > 0",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7533,
+          "FileOffset": 7578,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7533,
+              "FileOffset": 7578,
               "Length": 15
             }
           ]
@@ -384,18 +384,18 @@
         {
           "Message": "Taking false branch",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7441,
+          "FileOffset": 7486,
           "Replacements": []
         },
         {
           "Message": "Calling 'operator|<filament::backend::TextureUsage, 0>'",
           "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-          "FileOffset": 7991,
+          "FileOffset": 8036,
           "Replacements": [],
           "Ranges": [
             {
               "FilePath": "benchmark/src/rhi/filament_backend.cpp",
-              "FileOffset": 7991,
+              "FileOffset": 8036,
               "Length": 59
             }
           ]

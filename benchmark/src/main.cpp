@@ -54,6 +54,7 @@
 #include "benchmark/result_report.h"
 #include "benchmark/microprofiler.h"
 #include "benchmark/gpu_clock_telemetry.h"
+#include "benchmark/gpu_sensor_profile.h"
 #include "benchmark/microprofile_report.h"
 #include "benchmark/input_response.h"
 #include "json.hpp"
@@ -593,7 +594,19 @@ private:
         }
     }
 
+    void record_hardware_telemetry() {
+        if (!micro_recorder_.active()) return;
+        if (micro_recorder_.session_id() == last_hardware_capture_id_ &&
+                active_gpu_telemetry_.sample_monotonic_ns == last_hardware_recorded_sample_ns_) return;
+        profile::record_gpu_sensor_sample(micro_recorder_, active_gpu_telemetry_);
+        last_hardware_capture_id_ = micro_recorder_.session_id();
+        last_hardware_recorded_sample_ns_ = active_gpu_telemetry_.sample_monotonic_ns;
+    }
+
     void update_microprofile_metadata(std::string_view phase) {
+        // Include unavailable observations in every capture, including startup
+        // and sub-second sessions before the ordinary statistics tick fires.
+        record_hardware_telemetry();
         if (microprofile_metadata_capture_id_ != micro_recorder_.session_id()) {
             microprofile_metadata_capture_id_ = micro_recorder_.session_id();
             microprofile_resolution_width_ = window_.width;
@@ -1117,7 +1130,38 @@ private:
                     image_path.c_str(), capture_presented_frames_);
     }
 
+    [[nodiscard]] nlohmann::json hardware_telemetry_metadata() const {
+        const auto metric = [](double value) -> nlohmann::json {
+            return std::isfinite(value) && value >= 0.0
+                ? nlohmann::json(value) : nlohmann::json(nullptr);
+        };
+        const auto& sensor = active_gpu_telemetry_;
+        return {
+            {"mode", "read-only sysfs worker, up to 1 Hz; observation can affect performance"},
+            {"clock", "host monotonic observations, not GPU clock calibration"},
+            {"sample_monotonic_ns", sensor.sample_monotonic_ns},
+            {"available", sensor.available}, {"reason", sensor.reason},
+            {"gpu_temperature_c", metric(sensor.temperature_c)},
+            {"vram_temperature_c", metric(sensor.vram_temperature_c)},
+            {"gpu_high_c", metric(sensor.temperature_high_c)},
+            {"gpu_critical_c", metric(sensor.temperature_critical_c)},
+            {"vram_high_c", metric(sensor.vram_temperature_high_c)},
+            {"vram_critical_c", metric(sensor.vram_temperature_critical_c)},
+            {"power_w", metric(sensor.power_w)}, {"power_limit_w", metric(sensor.power_limit_w)},
+            {"graphics_clock_mhz", metric(sensor.core_clock_mhz)},
+            {"memory_clock_mhz", metric(sensor.memory_clock_mhz)},
+            {"fan_rpm", metric(sensor.fan_rpm)},
+            {"utilization_percent", metric(sensor.utilization_percent)},
+            {"memory_utilization_percent", metric(sensor.memory_utilization_percent)},
+            {"device_vram_used_mb", metric(sensor.device_vram_used_mb)},
+            {"device_vram_total_mb", metric(sensor.device_vram_total_mb)},
+            {"throttle_reason", sensor.throttle_reason.empty()
+                ? nlohmann::json(nullptr) : nlohmann::json(sensor.throttle_reason)}
+        };
+    }
+
     void append_render_metadata(nlohmann::json& metadata) {
+        metadata["hardware_telemetry"] = hardware_telemetry_metadata();
         const bool authored_test = render_test_scene_uses_assets(config_.render_test_scene);
         if (!config_.render_test_scene.empty()) {
             metadata["render_test_source_kind"] = authored_test ? "authored-assets" : "procedural";
@@ -1364,6 +1408,9 @@ private:
             active_gpu_name_ =
                 clean_text_field(active_gpu_info_.model_name, kUnknownGpu);
             check_active_graphics_driver();
+            // Start independent host sensor sampling before scene loading.
+            // The backend returns a cached snapshot; it performs no sensor I/O here.
+            active_gpu_telemetry_ = backend_->gpu_telemetry();
             active_system_info_ = gather_system_info(host_info_source_, active_gpu_raw());
             if (microprofile_.gpu_diagnostics) {
                 auto clocks = profile::discover_xe_clocks({
@@ -1581,6 +1628,7 @@ private:
         bench_->set_frame_generation_requested(config_.frame_generation != FrameGenerationMode::Off);
         overlay_ui_.set_application_build_info(kApplicationBuildInfo);
         active_gpu_telemetry_ = backend_->gpu_telemetry();
+        record_hardware_telemetry();
 
         // Wire the overlay's per-frame widget builder once. The callback runs
         // inside the backend's render pass (between ImGui NewFrame and Render),
@@ -1593,8 +1641,10 @@ private:
         backend_->overlay_set_draw([this] {
             profile::Scope scope("Build profiler and application widgets", "UI");
             if (capture_.output || capture_.profile_output) {
-                if (microprofile_.visible || overlay_ui_.microprofiler_open())
+                if (microprofile_.visible || overlay_ui_.microprofiler_open()) {
                     last_intents_ = overlay_ui_.build_microprofiler();
+                    overlay_ui_.draw_thermal_warning(debug_sidebar_info());
+                }
                 if (input_response_) input_response_->set_response_state(
                     overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
                 return;
@@ -1602,6 +1652,7 @@ private:
             overlay_ui_.draw_debug_sidebar(debug_sidebar_info(), config_ui_.frame_generation);
             last_intents_ = overlay_ui_.build(bench_->status(), working_config_,
                                               config_ui_);
+            overlay_ui_.draw_thermal_warning(debug_sidebar_info());
             if (input_response_) input_response_->set_response_state(
                 overlay_ui_.microprofiler_open(), camera_.yaw, camera_.pitch);
         });
@@ -2414,9 +2465,19 @@ private:
             // cadence for DRM sensors and Vulkan heap-budget estimates.
             if (stats_.fps_updated()) {
                 active_gpu_telemetry_ = backend_->gpu_telemetry();
-                if (micro_recorder_.active()) {
-                    micro_recorder_.counter("GPU utilization percent", active_gpu_telemetry_.utilization_percent, "Telemetry");
-                    micro_recorder_.counter("GPU temperature C", active_gpu_telemetry_.temperature_c, "Telemetry");
+                record_hardware_telemetry();
+                const bool new_hardware_sample = !hardware_sample_seen_ ||
+                    active_gpu_telemetry_.sample_monotonic_ns != last_hardware_sample_ns_;
+                if (new_hardware_sample) {
+                    hardware_sample_seen_ = true;
+                    last_hardware_sample_ns_ = active_gpu_telemetry_.sample_monotonic_ns;
+                    if (capture_.profile_output) {
+                        if (profile_hardware_samples_.size() < 16384) {
+                            profile_hardware_samples_.push_back(hardware_telemetry_metadata());
+                        } else {
+                            ++profile_hardware_samples_dropped_;
+                        }
+                    }
                 }
             }
 
@@ -3088,6 +3149,21 @@ private:
         info.gpu_core_clock_mhz = active_gpu_telemetry_.core_clock_mhz;
         info.gpu_memory_clock_mhz = active_gpu_telemetry_.memory_clock_mhz;
         info.gpu_fan_rpm = active_gpu_telemetry_.fan_rpm;
+        info.gpu_vram_temperature_c = active_gpu_telemetry_.vram_temperature_c;
+        info.gpu_power_limit_w = active_gpu_telemetry_.power_limit_w;
+        info.gpu_temperature_high_c = active_gpu_telemetry_.temperature_high_c;
+        info.gpu_temperature_critical_c = active_gpu_telemetry_.temperature_critical_c;
+        info.gpu_vram_temperature_high_c = active_gpu_telemetry_.vram_temperature_high_c;
+        info.gpu_vram_temperature_critical_c = active_gpu_telemetry_.vram_temperature_critical_c;
+        info.gpu_telemetry_sample_monotonic_ns = active_gpu_telemetry_.sample_monotonic_ns;
+        const auto sensor_now = profile::Recorder::steady_now_ns();
+        if (active_gpu_telemetry_.sample_monotonic_ns > 0 &&
+                sensor_now >= active_gpu_telemetry_.sample_monotonic_ns) {
+            info.gpu_telemetry_sample_age_seconds = static_cast<double>(
+                sensor_now - active_gpu_telemetry_.sample_monotonic_ns) / 1e9;
+        }
+        info.gpu_telemetry_reason = active_gpu_telemetry_.reason;
+        info.gpu_throttle_reason = active_gpu_telemetry_.throttle_reason;
 
         info.vertices = scene_.total_vertices;
         info.triangles = scene_.total_triangles;
@@ -3177,6 +3253,8 @@ private:
             {"gpu_timing_note", "Asynchronous last-completed whole-frame samples; may lag or repeat, not per-pass timings"},
             {"samples_including_warmup", profile_samples_}};
         append_render_metadata(report);
+        report["hardware_telemetry_samples"] = profile_hardware_samples_;
+        report["hardware_telemetry_samples_dropped"] = profile_hardware_samples_dropped_;
         std::ofstream output(path);
         output << report.dump(2) << '\n';
         output.close();
@@ -3286,6 +3364,12 @@ private:
     IRhiBackend::GpuInfoRaw        active_gpu_info_;
     DriverCheck                   active_driver_check_;
     IRhiBackend::GpuTelemetry      active_gpu_telemetry_;
+    uint64_t                      last_hardware_sample_ns_ = 0;
+    uint64_t                      last_hardware_capture_id_ = 0;
+    uint64_t                      last_hardware_recorded_sample_ns_ = 0;
+    bool                          hardware_sample_seen_ = false;
+    std::vector<nlohmann::json>   profile_hardware_samples_;
+    uint64_t                      profile_hardware_samples_dropped_ = 0;
     std::string                    active_gpu_name_;
     SystemInfo                     active_system_info_;
     Camera                         camera_;

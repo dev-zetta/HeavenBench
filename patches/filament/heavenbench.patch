@@ -115,16 +115,17 @@ index 0000000000000000000000000000000000000000..0ee355ad89c0328ed247ce50f814e152
 +} // namespace filament::backend
 +#endif
 diff --git a/filament/backend/include/backend/PipelineState.h b/filament/backend/include/backend/PipelineState.h
-index 106e579ea3100133950ac532facc7f36006982c8..76d16b003a747215658486a8d6a93283309184c4 100644
+index 106e579ea3100133950ac532facc7f36006982c8..67f73ecfb72ece94f820ae71d4329da9f8806dd4 100644
 --- a/filament/backend/include/backend/PipelineState.h
 +++ b/filament/backend/include/backend/PipelineState.h
-@@ -45,7 +45,8 @@ struct PipelineState {
+@@ -45,7 +45,9 @@ struct PipelineState {
      StencilState stencilState;                                              // 12
      PolygonOffset polygonOffset;                                            //  8
      PrimitiveType primitiveType = PrimitiveType::TRIANGLES;                 //  1
 -    uint8_t padding[3] = {};                                                //  3
 +    FragmentShadingRate fragmentShadingRate = FragmentShadingRate::FULL;      //  1
-+    uint8_t padding[2] = {};                                                //  2
++    bool suppressFragmentShader = false;                                  //  1
++    uint8_t padding[1] = {};                                                //  1
  };
  
  } // namespace filament::backend
@@ -1438,7 +1439,7 @@ index 7155b0e105ed6832ec76c1a44b21328c07d5f436..6f43dad402a755cd483b878887901254
      // VK_GOOGLE_display_timing device extension
      bool mGoogleDisplayTimingEnabled = false;
 diff --git a/filament/backend/src/vulkan/VulkanDriver.cpp b/filament/backend/src/vulkan/VulkanDriver.cpp
-index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..e9bae19c1799fb38b0ab372579ee8b828d748d29 100644
+index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..209602b6211bde8fdf4bc090adeec7c33d6d1ded 100644
 --- a/filament/backend/src/vulkan/VulkanDriver.cpp
 +++ b/filament/backend/src/vulkan/VulkanDriver.cpp
 @@ -24,6 +24,7 @@
@@ -1547,7 +1548,22 @@ index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..e9bae19c1799fb38b0ab372579ee8b82
          .colorTargetCount = rt->getColorTargetCount(mCurrentRenderPass),
          .colorBlendOp = rasterState.blendEquationRGB,
          .alphaBlendOp = rasterState.blendEquationAlpha,
-@@ -3012,6 +3041,9 @@ void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t ins
+@@ -2866,7 +2895,13 @@ void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
+     VkVertexInputBindingDescription const* bufferDesc =  vbi->getBufferDescriptions();
+ 
+     // Push state changes to the VulkanPipelineCache instance. This is fast and does not make VK calls.
+-    mPipelineCache.bindProgram(program);
++    // Internal opaque prepass uses the exact ordinary COLOR VS module. The
++    // fragment stage is omitted in the pipeline key, never by mutating Program.
++    assert_invariant(!pipelineState.suppressFragmentShader ||
++            (!rasterState.colorWrite && rasterState.depthWrite &&
++             rasterState.depthFunc == RasterState::DepthFunc::GE &&
++             !rasterState.alphaToCoverage && vulkanRasterState.colorTargetCount == 0));
++    mPipelineCache.bindProgram(program, pipelineState.suppressFragmentShader);
+     mPipelineCache.bindRasterState(vulkanRasterState);
+     mPipelineCache.bindStencilState(pipelineState.stencilState);
+     mPipelineCache.bindPrimitiveTopology(topology);
+@@ -3012,6 +3047,9 @@ void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t ins
      VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
  
      vkCmdDrawIndexed(cmdbuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstId);
@@ -1557,7 +1573,7 @@ index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..e9bae19c1799fb38b0ab372579ee8b82
  }
  
  void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
-@@ -3023,6 +3055,9 @@ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
+@@ -3023,6 +3061,9 @@ void VulkanDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
      VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
  
      vkCmdDraw(cmdbuffer, vertexCount, instanceCount, vertexOffset, firstInstId);
@@ -1567,7 +1583,7 @@ index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..e9bae19c1799fb38b0ab372579ee8b82
  }
  
  void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
-@@ -3035,6 +3070,73 @@ void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+@@ -3035,6 +3076,73 @@ void VulkanDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
      draw2(indexOffset, indexCount, instanceCount);
  }
  
@@ -1641,7 +1657,7 @@ index 6aa0d90130e867e055203d1c3c7954f2706a8a5b..e9bae19c1799fb38b0ab372579ee8b82
  void VulkanDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {
      // FIXME: implement me
  }
-@@ -3134,6 +3236,8 @@ void VulkanDriver::resetState(int) {
+@@ -3134,6 +3242,8 @@ void VulkanDriver::resetState(int) {
  }
  
  void VulkanDriver::endCommandRecording() {
@@ -1877,7 +1893,7 @@ index 0000000000000000000000000000000000000000..1dcd3f7829a97f9f6bc7adcda01a9965
 +} // namespace filament::backend
 +#endif
 diff --git a/filament/backend/src/vulkan/VulkanPipelineCache.cpp b/filament/backend/src/vulkan/VulkanPipelineCache.cpp
-index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b97544b1dda9 100644
+index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..a7c1350bdf91c7b8669775870c9dd4f6df7db1f7 100644
 --- a/filament/backend/src/vulkan/VulkanPipelineCache.cpp
 +++ b/filament/backend/src/vulkan/VulkanPipelineCache.cpp
 @@ -197,6 +197,11 @@ VulkanPipelineCache::VulkanPipelineCache(DriverBase& driver, VulkanPlatform& pla
@@ -1979,15 +1995,29 @@ index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b975
  
      // Restrict the pipeline to protected or unprotected command buffers if possible. This allows
      // drivers to avoid the overhead of protected memory support in unprotected pipelines.
-@@ -666,6 +721,7 @@ void VulkanPipelineCache::bindProgram(fvkmemory::resource_ptr<VulkanProgram> pro
+@@ -662,15 +717,18 @@ VkPipeline VulkanPipelineCache::createPipeline(
+     return pipeline;
+ }
+ 
+-void VulkanPipelineCache::bindProgram(fvkmemory::resource_ptr<VulkanProgram> program) noexcept {
++void VulkanPipelineCache::bindProgram(fvkmemory::resource_ptr<VulkanProgram> program,
++        bool const suppressFragmentShader) noexcept {
      mStaticPipelineKey.shaders[0] = program->getVertexShader();
-     mStaticPipelineKey.shaders[1] = program->getFragmentShader();
+-    mStaticPipelineKey.shaders[1] = program->getFragmentShader();
++    mStaticPipelineKey.shaders[1] = suppressFragmentShader ? VK_NULL_HANDLE :
++            program->getFragmentShader();
      mBoundProgram = program->programString;
 +    mBoundProgramId = program->diagnosticId;
  
      // If this is a debug build, validate the current shader.
  #if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
-@@ -708,6 +764,8 @@ void VulkanPipelineCache::bindRasterState(RasterState const& rasterState) noexce
+     if (mStaticPipelineKey.shaders[0] == VK_NULL_HANDLE ||
+-            mStaticPipelineKey.shaders[1] == VK_NULL_HANDLE) {
++            (!suppressFragmentShader && mStaticPipelineKey.shaders[1] == VK_NULL_HANDLE)) {
+         FVK_LOGE << "Binding missing shader: " << program->name.c_str();
+     }
+ #endif
+@@ -708,6 +766,8 @@ void VulkanPipelineCache::bindRasterState(RasterState const& rasterState) noexce
      mStaticPipelineKey.rasterState.dstAlphaBlendFactor = rasterState.dstAlphaBlendFactor;
      mStaticPipelineKey.rasterState.rasterizationSamples = rasterState.rasterizationSamples;
      mStaticPipelineKey.rasterState.depthClamp = rasterState.depthClamp;
@@ -1996,7 +2026,7 @@ index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b975
      mStaticPipelineKey.rasterState.colorTargetCount = rasterState.colorTargetCount;
      mStaticPipelineKey.rasterState.colorBlendOp = rasterState.colorBlendOp;
      mStaticPipelineKey.rasterState.alphaBlendOp = rasterState.alphaBlendOp;
-@@ -775,6 +833,7 @@ void VulkanPipelineCache::resetBoundDynamicState() noexcept {
+@@ -775,6 +835,7 @@ void VulkanPipelineCache::resetBoundDynamicState() noexcept {
  
  void VulkanPipelineCache::resetBoundPipeline() {
      mBoundPipeline = {};
@@ -2004,7 +2034,7 @@ index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b975
      mBoundDynamicState = {};
      mForceDirtyDynamicState = true;
      mBoundVertexHash = 0;
-@@ -822,10 +881,8 @@ bool VulkanPipelineCache::savePipelineCache() noexcept {
+@@ -822,10 +883,8 @@ bool VulkanPipelineCache::savePipelineCache() noexcept {
  }
  
  void VulkanPipelineCache::gc() noexcept {
@@ -2017,7 +2047,7 @@ index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b975
      ++mCurrentTime;
  
      if (mContext.isPipelineCachePersistenceEnabled()) {
-@@ -853,50 +910,50 @@ void VulkanPipelineCache::gc() noexcept {
+@@ -853,50 +912,50 @@ void VulkanPipelineCache::gc() noexcept {
      // buffer is undefined." Therefore, we need to clear all bindings at this time.
      resetBoundPipeline();
  
@@ -2100,7 +2130,7 @@ index 1d045fd8c4abbe463032c54b269d5b47c1bd3a4f..9028d4eefcabd6e8deb24d7a2798b975
                  iter = mPipelines.erase(iter);
              } else {
 diff --git a/filament/backend/src/vulkan/VulkanPipelineCache.h b/filament/backend/src/vulkan/VulkanPipelineCache.h
-index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..213ad940a1963cbf40e5d1c5d2f1df3ed435fd0a 100644
+index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..43f6200f133a107dc6a5025e1ca507eea698f5fd 100644
 --- a/filament/backend/src/vulkan/VulkanPipelineCache.h
 +++ b/filament/backend/src/vulkan/VulkanPipelineCache.h
 @@ -20,6 +20,8 @@
@@ -2123,7 +2153,17 @@ index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..213ad940a1963cbf40e5d1c5d2f1df3e
          uint8_t               colorTargetCount;        // offset = 5 bytes
          BlendEquation         colorBlendOp : 4;        // offset = 6 bytes
          BlendEquation         alphaBlendOp : 4;
-@@ -149,6 +153,9 @@ public:
+@@ -130,7 +134,8 @@ public:
+ 
+     // Each of the following methods are fast and do not make Vulkan calls.
+     void bindLayout(VkPipelineLayout layout) noexcept;
+-    void bindProgram(fvkmemory::resource_ptr<VulkanProgram> program) noexcept;
++    void bindProgram(fvkmemory::resource_ptr<VulkanProgram> program,
++            bool suppressFragmentShader = false) noexcept;
+     void bindRasterState(RasterState const& rasterState) noexcept;
+     void bindStencilState(StencilState const& stencilState) noexcept;
+     void bindRenderPass(fvkmemory::resource_ptr<VulkanRenderPass> renderPass,
+@@ -149,6 +154,9 @@ public:
      // Destroys all managed Vulkan objects. This should be called before changing the VkDevice.
      void terminate() noexcept;
      void gc() noexcept;
@@ -2133,7 +2173,7 @@ index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..213ad940a1963cbf40e5d1c5d2f1df3e
  
  private:
      // PIPELINE CACHE KEY
-@@ -234,16 +241,16 @@ private:
+@@ -234,16 +242,16 @@ private:
      #pragma clang diagnostic pop
  #endif
  
@@ -2155,7 +2195,7 @@ index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..213ad940a1963cbf40e5d1c5d2f1df3e
      };
  
      using PipelineMap = tsl::robin_map<PipelineKey, PipelineCacheEntry,
-@@ -303,6 +310,9 @@ private:
+@@ -303,6 +311,9 @@ private:
  
      // Current bindings for the pipeline.
      PipelineKey mBoundPipeline = {};
@@ -2165,7 +2205,7 @@ index 8f1a49c17dcbf01e05eb3172b598b95c64f664a8..213ad940a1963cbf40e5d1c5d2f1df3e
  
      // Dynamic state currently recorded in the active command buffer.
      PipelineKey mBoundDynamicState = {};
-@@ -336,6 +346,10 @@ private:
+@@ -336,6 +347,10 @@ private:
  
      // Name of the bound program, used for perfetto tracing.
      utils::CString mBoundProgram;
@@ -5289,7 +5329,7 @@ index 653e00303687b4c9500294d0491bd56627da2602..3b6fb30e2e83055ef131f6bdcbdab752
       * Return whether createSwapChain supports the CONFIG_PROTECTED_CONTENT flag.
       * The default implementation returns false.
 diff --git a/filament/include/filament/View.h b/filament/include/filament/View.h
-index 91ee26ef840e3c83378ec874022c8e6efd959c80..bbaae27e0611dffa53a9b60bf002c03710cfbc45 100644
+index 91ee26ef840e3c83378ec874022c8e6efd959c80..098116b5ab6f15215e04511f9226d78ecf612812 100644
 --- a/filament/include/filament/View.h
 +++ b/filament/include/filament/View.h
 @@ -38,6 +38,7 @@ namespace filament {
@@ -5315,6 +5355,22 @@ index 91ee26ef840e3c83378ec874022c8e6efd959c80..bbaae27e0611dffa53a9b60bf002c037
      /**
       * Enables or disables antialiasing in the post-processing stage. Enabled by default.
       * MSAA can be enabled in addition, see setSampleCount().
+@@ -770,6 +779,15 @@ public:
+      */
+     bool isTransparentPickingEnabled() const noexcept;
+ 
++    /**
++     * Enables an experimental same-sample opaque depth prepass. Disabled by default.
++     * Unsupported view and material states retain the ordinary color path.
++     */
++    void setOpaqueDepthPrepassEnabled(bool enabled) noexcept;
++
++    /** Returns true when the optional opaque depth prepass is enabled. */
++    bool isOpaqueDepthPrepassEnabled() const noexcept;
++
+     /**
+      * Enables use of the stencil buffer.
+      *
 diff --git a/filament/src/Froxelizer.cpp b/filament/src/Froxelizer.cpp
 index 280cc8b02e016f5392a7290248e31fb1490f95f6..f23c151c9419b6f302396f23b2b662c8942e9578 100644
 --- a/filament/src/Froxelizer.cpp
@@ -5367,6 +5423,766 @@ index 280cc8b02e016f5392a7290248e31fb1490f95f6..f23c151c9419b6f302396f23b2b662c8
  
      arena.free(mLightRecords.data(), mLightRecords.sizeInBytes());
  
+diff --git a/filament/src/MaterialParser.cpp b/filament/src/MaterialParser.cpp
+index 75c11f2a9210e54341fa834192d7dc7433882126..9e64e3c7a64c44e5da1f7578de6eec6a80fb4f1d 100644
+--- a/filament/src/MaterialParser.cpp
++++ b/filament/src/MaterialParser.cpp
+@@ -526,7 +526,7 @@ bool MaterialParser::getReflectionMode(ReflectionMode* value) const noexcept {
+ }
+ 
+ bool MaterialParser::getShader(ShaderContent& shader,
+-        ShaderModel const shaderModel, Variant const variant, ShaderStage const stage) const noexcept {
++        ShaderModel const shaderModel, Variant const variant, ShaderStage const stage) const {
+     return mImpl.mMaterialChunk.getShader(shader,
+             mImpl.mBlobDictionary, shaderModel, variant, stage);
+ }
+diff --git a/filament/src/MaterialParser.h b/filament/src/MaterialParser.h
+index d4af3dd9ec5f6e3eb8a66b3f8666c1c445a09935..5c8c1136058f5a2866f835aafd3682a3a3531a38 100644
+--- a/filament/src/MaterialParser.h
++++ b/filament/src/MaterialParser.h
+@@ -140,7 +140,7 @@ public:
+     bool getMaterialCrc32(uint32_t* value) const noexcept;
+ 
+     bool getShader(filaflat::ShaderContent& shader, backend::ShaderModel shaderModel,
+-            Variant variant, backend::ShaderStage stage) const noexcept;
++            Variant variant, backend::ShaderStage stage) const;
+ 
+     bool hasShader(backend::ShaderModel const model,
+             Variant const variant, backend::ShaderStage const stage) const noexcept {
+diff --git a/filament/src/OpaqueDepthPrepassSafety.h b/filament/src/OpaqueDepthPrepassSafety.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6c8c3d1d480ecaf48b5a4dd492de98f37b93369
+--- /dev/null
++++ b/filament/src/OpaqueDepthPrepassSafety.h
+@@ -0,0 +1,728 @@
++#ifndef TNT_FILAMENT_OPAQUE_DEPTH_PREPASS_SAFETY_H
++#define TNT_FILAMENT_OPAQUE_DEPTH_PREPASS_SAFETY_H
++
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <new>
++
++namespace filament::opaque_depth {
++namespace detail {
++
++// Conservative admission for already validated compiler modules, not a SPIR-V
++// validator. Unsupported instructions/capabilities and ambiguous pointer stores
++// return false. The caller separately owns language, ordinary-color variant and
++// material/raster-state eligibility; this classifier has no material-name table.
++// Numeric opcode rules are pinned to SPIRV-Headers grammar SHA db8581272b63d232268094a47b68d18a0464fc911e06004d57419924fe660ba4.
++inline constexpr std::size_t kMaxModuleWords = 262144; // 1 MiB
++inline constexpr std::uint32_t kMaxIdBound = 65536;
++inline constexpr std::uint32_t kUnset = 0xffffffffu;
++
++enum class Op : std::uint16_t {
++    Nop = 0,
++    Undef = 1,
++    SourceContinued = 2,
++    Source = 3,
++    SourceExtension = 4,
++    Name = 5,
++    MemberName = 6,
++    String = 7,
++    Line = 8,
++    ExtInstImport = 11,
++    ExtInst = 12,
++    MemoryModel = 14,
++    EntryPoint = 15,
++    ExecutionMode = 16,
++    Capability = 17,
++    TypeVoid = 19,
++    TypeBool = 20,
++    TypeInt = 21,
++    TypeFloat = 22,
++    TypeVector = 23,
++    TypeMatrix = 24,
++    TypeImage = 25,
++    TypeSampler = 26,
++    TypeSampledImage = 27,
++    TypeArray = 28,
++    TypeRuntimeArray = 29,
++    TypeStruct = 30,
++    TypePointer = 32,
++    TypeFunction = 33,
++    ConstantTrue = 41,
++    ConstantFalse = 42,
++    Constant = 43,
++    ConstantComposite = 44,
++    ConstantNull = 46,
++    SpecConstantTrue = 48,
++    SpecConstantFalse = 49,
++    SpecConstant = 50,
++    SpecConstantComposite = 51,
++    SpecConstantOp = 52,
++    Function = 54,
++    FunctionParameter = 55,
++    FunctionEnd = 56,
++    FunctionCall = 57,
++    Variable = 59,
++    Load = 61,
++    Store = 62,
++    AccessChain = 65,
++    InBoundsAccessChain = 66,
++    Decorate = 71,
++    MemberDecorate = 72,
++    VectorShuffle = 79,
++    CompositeConstruct = 80,
++    CompositeExtract = 81,
++    CompositeInsert = 82,
++    CopyObject = 83,
++    Transpose = 84,
++    ImageSampleImplicitLod = 87,
++    ImageSampleExplicitLod = 88,
++    ImageSampleDrefImplicitLod = 89,
++    ImageSampleDrefExplicitLod = 90,
++    ImageSampleProjImplicitLod = 91,
++    ImageSampleProjExplicitLod = 92,
++    ImageSampleProjDrefImplicitLod = 93,
++    ImageSampleProjDrefExplicitLod = 94,
++    ImageFetch = 95,
++    ImageGather = 96,
++    ImageDrefGather = 97,
++    Image = 100,
++    ImageQuerySizeLod = 103,
++    ImageQuerySize = 104,
++    ImageQueryLod = 105,
++    ImageQueryLevels = 106,
++    ImageQuerySamples = 107,
++    ConvertFToU = 109,
++    ConvertFToS = 110,
++    ConvertSToF = 111,
++    ConvertUToF = 112,
++    UConvert = 113,
++    SConvert = 114,
++    FConvert = 115,
++    Bitcast = 124,
++    SNegate = 126,
++    FNegate = 127,
++    IAdd = 128,
++    FAdd = 129,
++    ISub = 130,
++    FSub = 131,
++    IMul = 132,
++    FMul = 133,
++    UDiv = 134,
++    SDiv = 135,
++    FDiv = 136,
++    UMod = 137,
++    SRem = 138,
++    SMod = 139,
++    FRem = 140,
++    FMod = 141,
++    VectorTimesScalar = 142,
++    MatrixTimesScalar = 143,
++    VectorTimesMatrix = 144,
++    MatrixTimesVector = 145,
++    MatrixTimesMatrix = 146,
++    OuterProduct = 147,
++    Dot = 148,
++    Any = 154,
++    All = 155,
++    IsNan = 156,
++    IsInf = 157,
++    LogicalEqual = 164,
++    LogicalNotEqual = 165,
++    LogicalOr = 166,
++    LogicalAnd = 167,
++    LogicalNot = 168,
++    Select = 169,
++    IEqual = 170,
++    INotEqual = 171,
++    UGreaterThan = 172,
++    SGreaterThan = 173,
++    UGreaterThanEqual = 174,
++    SGreaterThanEqual = 175,
++    ULessThan = 176,
++    SLessThan = 177,
++    ULessThanEqual = 178,
++    SLessThanEqual = 179,
++    FOrdEqual = 180,
++    FUnordEqual = 181,
++    FOrdNotEqual = 182,
++    FUnordNotEqual = 183,
++    FOrdLessThan = 184,
++    FUnordLessThan = 185,
++    FOrdGreaterThan = 186,
++    FUnordGreaterThan = 187,
++    FOrdLessThanEqual = 188,
++    FUnordLessThanEqual = 189,
++    FOrdGreaterThanEqual = 190,
++    FUnordGreaterThanEqual = 191,
++    ShiftRightLogical = 194,
++    ShiftRightArithmetic = 195,
++    ShiftLeftLogical = 196,
++    BitwiseOr = 197,
++    BitwiseXor = 198,
++    BitwiseAnd = 199,
++    Not = 200,
++    BitFieldInsert = 201,
++    BitFieldSExtract = 202,
++    BitFieldUExtract = 203,
++    BitReverse = 204,
++    BitCount = 205,
++    DPdx = 207,
++    DPdy = 208,
++    Fwidth = 209,
++    DPdxFine = 210,
++    DPdyFine = 211,
++    FwidthFine = 212,
++    DPdxCoarse = 213,
++    DPdyCoarse = 214,
++    FwidthCoarse = 215,
++    Phi = 245,
++    LoopMerge = 246,
++    SelectionMerge = 247,
++    Label = 248,
++    Branch = 249,
++    BranchConditional = 250,
++    Switch = 251,
++    Kill = 252,
++    Return = 253,
++    ReturnValue = 254,
++    Unreachable = 255,
++    NoLine = 317,
++    ModuleProcessed = 330,
++    TerminateInvocation = 4416,
++    DemoteToHelperInvocation = 5380,
++};
++
++struct Rule {
++    std::uint16_t minimumWords;
++    std::uint8_t resultTypeAt;
++    std::uint8_t resultIdAt;
++};
++
++inline constexpr Rule rule(Op op) noexcept {
++    switch (op) {
++        case Op::Nop: return {1, 0, 0};
++        case Op::Undef: return {3, 1, 2};
++        case Op::SourceContinued: return {2, 0, 0};
++        case Op::Source: return {3, 0, 0};
++        case Op::SourceExtension: return {2, 0, 0};
++        case Op::Name: return {3, 0, 0};
++        case Op::MemberName: return {4, 0, 0};
++        case Op::String: return {3, 0, 1};
++        case Op::Line: return {4, 0, 0};
++        case Op::ExtInstImport: return {3, 0, 1};
++        case Op::ExtInst: return {5, 1, 2};
++        case Op::MemoryModel: return {3, 0, 0};
++        case Op::EntryPoint: return {4, 0, 0};
++        case Op::ExecutionMode: return {3, 0, 0};
++        case Op::Capability: return {2, 0, 0};
++        case Op::TypeVoid: return {2, 0, 1};
++        case Op::TypeBool: return {2, 0, 1};
++        case Op::TypeInt: return {4, 0, 1};
++        case Op::TypeFloat: return {3, 0, 1};
++        case Op::TypeVector: return {4, 0, 1};
++        case Op::TypeMatrix: return {4, 0, 1};
++        case Op::TypeImage: return {9, 0, 1};
++        case Op::TypeSampler: return {2, 0, 1};
++        case Op::TypeSampledImage: return {3, 0, 1};
++        case Op::TypeArray: return {4, 0, 1};
++        case Op::TypeRuntimeArray: return {3, 0, 1};
++        case Op::TypeStruct: return {2, 0, 1};
++        case Op::TypePointer: return {4, 0, 1};
++        case Op::TypeFunction: return {3, 0, 1};
++        case Op::ConstantTrue: return {3, 1, 2};
++        case Op::ConstantFalse: return {3, 1, 2};
++        case Op::Constant: return {4, 1, 2};
++        case Op::ConstantComposite: return {3, 1, 2};
++        case Op::ConstantNull: return {3, 1, 2};
++        case Op::SpecConstantTrue: return {3, 1, 2};
++        case Op::SpecConstantFalse: return {3, 1, 2};
++        case Op::SpecConstant: return {4, 1, 2};
++        case Op::SpecConstantComposite: return {3, 1, 2};
++        case Op::SpecConstantOp: return {4, 1, 2};
++        case Op::Function: return {5, 1, 2};
++        case Op::FunctionParameter: return {3, 1, 2};
++        case Op::FunctionEnd: return {1, 0, 0};
++        case Op::FunctionCall: return {4, 1, 2};
++        case Op::Variable: return {4, 1, 2};
++        case Op::Load: return {4, 1, 2};
++        case Op::Store: return {3, 0, 0};
++        case Op::AccessChain: return {4, 1, 2};
++        case Op::InBoundsAccessChain: return {4, 1, 2};
++        case Op::Decorate: return {3, 0, 0};
++        case Op::MemberDecorate: return {4, 0, 0};
++        case Op::VectorShuffle: return {5, 1, 2};
++        case Op::CompositeConstruct: return {3, 1, 2};
++        case Op::CompositeExtract: return {4, 1, 2};
++        case Op::CompositeInsert: return {5, 1, 2};
++        case Op::CopyObject: return {4, 1, 2};
++        case Op::Transpose: return {4, 1, 2};
++        case Op::ImageSampleImplicitLod: return {5, 1, 2};
++        case Op::ImageSampleExplicitLod: return {6, 1, 2};
++        case Op::ImageSampleDrefImplicitLod: return {6, 1, 2};
++        case Op::ImageSampleDrefExplicitLod: return {7, 1, 2};
++        case Op::ImageSampleProjImplicitLod: return {5, 1, 2};
++        case Op::ImageSampleProjExplicitLod: return {6, 1, 2};
++        case Op::ImageSampleProjDrefImplicitLod: return {6, 1, 2};
++        case Op::ImageSampleProjDrefExplicitLod: return {7, 1, 2};
++        case Op::ImageFetch: return {5, 1, 2};
++        case Op::ImageGather: return {6, 1, 2};
++        case Op::ImageDrefGather: return {6, 1, 2};
++        case Op::Image: return {4, 1, 2};
++        case Op::ImageQuerySizeLod: return {5, 1, 2};
++        case Op::ImageQuerySize: return {4, 1, 2};
++        case Op::ImageQueryLod: return {5, 1, 2};
++        case Op::ImageQueryLevels: return {4, 1, 2};
++        case Op::ImageQuerySamples: return {4, 1, 2};
++        case Op::ConvertFToU: return {4, 1, 2};
++        case Op::ConvertFToS: return {4, 1, 2};
++        case Op::ConvertSToF: return {4, 1, 2};
++        case Op::ConvertUToF: return {4, 1, 2};
++        case Op::UConvert: return {4, 1, 2};
++        case Op::SConvert: return {4, 1, 2};
++        case Op::FConvert: return {4, 1, 2};
++        case Op::Bitcast: return {4, 1, 2};
++        case Op::SNegate: return {4, 1, 2};
++        case Op::FNegate: return {4, 1, 2};
++        case Op::IAdd: return {5, 1, 2};
++        case Op::FAdd: return {5, 1, 2};
++        case Op::ISub: return {5, 1, 2};
++        case Op::FSub: return {5, 1, 2};
++        case Op::IMul: return {5, 1, 2};
++        case Op::FMul: return {5, 1, 2};
++        case Op::UDiv: return {5, 1, 2};
++        case Op::SDiv: return {5, 1, 2};
++        case Op::FDiv: return {5, 1, 2};
++        case Op::UMod: return {5, 1, 2};
++        case Op::SRem: return {5, 1, 2};
++        case Op::SMod: return {5, 1, 2};
++        case Op::FRem: return {5, 1, 2};
++        case Op::FMod: return {5, 1, 2};
++        case Op::VectorTimesScalar: return {5, 1, 2};
++        case Op::MatrixTimesScalar: return {5, 1, 2};
++        case Op::VectorTimesMatrix: return {5, 1, 2};
++        case Op::MatrixTimesVector: return {5, 1, 2};
++        case Op::MatrixTimesMatrix: return {5, 1, 2};
++        case Op::OuterProduct: return {5, 1, 2};
++        case Op::Dot: return {5, 1, 2};
++        case Op::Any: return {4, 1, 2};
++        case Op::All: return {4, 1, 2};
++        case Op::IsNan: return {4, 1, 2};
++        case Op::IsInf: return {4, 1, 2};
++        case Op::LogicalEqual: return {5, 1, 2};
++        case Op::LogicalNotEqual: return {5, 1, 2};
++        case Op::LogicalOr: return {5, 1, 2};
++        case Op::LogicalAnd: return {5, 1, 2};
++        case Op::LogicalNot: return {4, 1, 2};
++        case Op::Select: return {6, 1, 2};
++        case Op::IEqual: return {5, 1, 2};
++        case Op::INotEqual: return {5, 1, 2};
++        case Op::UGreaterThan: return {5, 1, 2};
++        case Op::SGreaterThan: return {5, 1, 2};
++        case Op::UGreaterThanEqual: return {5, 1, 2};
++        case Op::SGreaterThanEqual: return {5, 1, 2};
++        case Op::ULessThan: return {5, 1, 2};
++        case Op::SLessThan: return {5, 1, 2};
++        case Op::ULessThanEqual: return {5, 1, 2};
++        case Op::SLessThanEqual: return {5, 1, 2};
++        case Op::FOrdEqual: return {5, 1, 2};
++        case Op::FUnordEqual: return {5, 1, 2};
++        case Op::FOrdNotEqual: return {5, 1, 2};
++        case Op::FUnordNotEqual: return {5, 1, 2};
++        case Op::FOrdLessThan: return {5, 1, 2};
++        case Op::FUnordLessThan: return {5, 1, 2};
++        case Op::FOrdGreaterThan: return {5, 1, 2};
++        case Op::FUnordGreaterThan: return {5, 1, 2};
++        case Op::FOrdLessThanEqual: return {5, 1, 2};
++        case Op::FUnordLessThanEqual: return {5, 1, 2};
++        case Op::FOrdGreaterThanEqual: return {5, 1, 2};
++        case Op::FUnordGreaterThanEqual: return {5, 1, 2};
++        case Op::ShiftRightLogical: return {5, 1, 2};
++        case Op::ShiftRightArithmetic: return {5, 1, 2};
++        case Op::ShiftLeftLogical: return {5, 1, 2};
++        case Op::BitwiseOr: return {5, 1, 2};
++        case Op::BitwiseXor: return {5, 1, 2};
++        case Op::BitwiseAnd: return {5, 1, 2};
++        case Op::Not: return {4, 1, 2};
++        case Op::BitFieldInsert: return {7, 1, 2};
++        case Op::BitFieldSExtract: return {6, 1, 2};
++        case Op::BitFieldUExtract: return {6, 1, 2};
++        case Op::BitReverse: return {4, 1, 2};
++        case Op::BitCount: return {4, 1, 2};
++        case Op::DPdx: return {4, 1, 2};
++        case Op::DPdy: return {4, 1, 2};
++        case Op::Fwidth: return {4, 1, 2};
++        case Op::DPdxFine: return {4, 1, 2};
++        case Op::DPdyFine: return {4, 1, 2};
++        case Op::FwidthFine: return {4, 1, 2};
++        case Op::DPdxCoarse: return {4, 1, 2};
++        case Op::DPdyCoarse: return {4, 1, 2};
++        case Op::FwidthCoarse: return {4, 1, 2};
++        case Op::Phi: return {3, 1, 2};
++        case Op::LoopMerge: return {4, 0, 0};
++        case Op::SelectionMerge: return {3, 0, 0};
++        case Op::Label: return {2, 0, 1};
++        case Op::Branch: return {2, 0, 0};
++        case Op::BranchConditional: return {4, 0, 0};
++        case Op::Switch: return {3, 0, 0};
++        case Op::Kill: return {1, 0, 0};
++        case Op::Return: return {1, 0, 0};
++        case Op::ReturnValue: return {2, 0, 0};
++        case Op::Unreachable: return {1, 0, 0};
++        case Op::NoLine: return {1, 0, 0};
++        case Op::ModuleProcessed: return {2, 0, 0};
++        case Op::TerminateInvocation: return {1, 0, 0};
++        case Op::DemoteToHelperInvocation: return {1, 0, 0};
++        default: return {0, 0, 0};
++    }
++}
++
++enum class Kind : std::uint8_t {
++    Other, Void, Float, Vector, Struct, Pointer, FunctionType, Function,
++    Variable, Parameter, Access, Copy, GlslImport
++};
++
++enum class Storage : std::uint32_t {
++    UniformConstant = 0, Input = 1, Uniform = 2, Output = 3,
++    Private = 6, Function = 7, PushConstant = 9
++};
++
++struct Id {
++    std::uint32_t type = 0;
++    std::uint32_t value = 0;
++    std::uint32_t base = 0;
++    std::uint32_t location = kUnset;
++    std::uint32_t component = 0;
++    std::uint32_t index = 0;
++    Kind kind = Kind::Other;
++    std::uint8_t decorations = 0;
++    bool defined = false;
++    bool entryInterface = false;
++};
++
++inline constexpr bool validId(std::uint32_t id, std::uint32_t bound) noexcept {
++    return id != 0 && id < bound;
++}
++
++inline constexpr bool permittedStorage(std::uint32_t storage) noexcept {
++    switch (static_cast<Storage>(storage)) {
++        case Storage::UniformConstant: case Storage::Input: case Storage::Uniform:
++        case Storage::Output: case Storage::Private: case Storage::Function:
++        case Storage::PushConstant: return true;
++        default: return false;
++    }
++}
++
++template<std::size_t N>
++inline bool literalEquals(std::uint32_t const* words, std::size_t count,
++        char const (&literal)[N]) noexcept {
++    constexpr std::size_t required = (N + 3) / 4;
++    if (count < required) return false;
++    for (std::size_t i = 0; i < required * 4; ++i) {
++        auto const byte = static_cast<unsigned char>((words[i / 4] >> ((i % 4) * 8)) & 255u);
++        auto const expected = i < N ? static_cast<unsigned char>(literal[i]) : 0u;
++        if (byte != expected) return false;
++    }
++    return true;
++}
++
++inline bool permittedSpecOp(std::uint32_t opcode) noexcept {
++    switch (static_cast<Op>(opcode)) {
++        case Op::IAdd: case Op::ISub: case Op::IMul:
++        case Op::IEqual: case Op::INotEqual: case Op::SGreaterThan:
++        case Op::SGreaterThanEqual: case Op::SLessThan: case Op::SLessThanEqual:
++        case Op::UGreaterThan: case Op::UGreaterThanEqual: case Op::ULessThan:
++        case Op::ULessThanEqual: case Op::LogicalAnd: case Op::LogicalOr:
++        case Op::LogicalNot: case Op::LogicalEqual: case Op::LogicalNotEqual:
++        case Op::Select: case Op::BitwiseAnd: case Op::BitwiseOr:
++        case Op::BitwiseXor: case Op::ShiftLeftLogical: case Op::ShiftRightLogical:
++        case Op::ShiftRightArithmetic: return true;
++        default: return false;
++    }
++}
++
++inline bool singleFloat4Output(Id const* ids, std::uint32_t bound,
++        std::uint32_t output) noexcept {
++    if (!validId(output, bound)) return false;
++    Id const& variable = ids[output];
++    if (!variable.entryInterface || variable.location != 0 || variable.component != 0 ||
++            variable.index != 0 || (variable.decorations & 8u)) return false;
++    if (!validId(variable.type, bound)) return false;
++    Id const& pointer = ids[variable.type];
++    if (pointer.kind != Kind::Pointer || pointer.value != 3 ||
++            !validId(pointer.type, bound)) return false;
++    Id const& vector = ids[pointer.type];
++    if (vector.kind != Kind::Vector || vector.value != 4 ||
++            !validId(vector.type, bound)) return false;
++    Id const& component = ids[vector.type];
++    return component.kind == Kind::Float && component.value == 32; // output type gate
++}
++
++// Compiler-produced Vertex shaders declare Position either directly or as
++// member zero of gl_PerVertex. Other layouts conservatively fall back.
++inline bool invariantVertexPosition(Id const* ids, std::uint32_t bound) noexcept {
++    std::uint32_t positions = 0;
++    for (std::uint32_t id = 1; id < bound; ++id) {
++        Id const& variable = ids[id];
++        if (variable.kind != Kind::Variable || variable.value != 3 || !variable.entryInterface) continue;
++        Id const& pointer = ids[variable.type];
++        if (pointer.kind != Kind::Pointer || !validId(pointer.type, bound)) return false;
++        Id const& aggregate = ids[pointer.type];
++        bool const direct = (variable.decorations & 16u) != 0;
++        bool const member = aggregate.kind == Kind::Struct && (aggregate.decorations & 16u) != 0;
++        if (!direct && !member) continue;
++        if (direct && member) return false;
++        Id const& declaration = direct ? variable : aggregate;
++        if (!(declaration.decorations & 32u)) return false;
++        auto const type = direct ? pointer.type : aggregate.type;
++        if (!validId(type, bound)) return false;
++        Id const& vector = ids[type];
++        if (vector.kind != Kind::Vector || vector.value != 4 || !validId(vector.type, bound)) return false;
++        Id const& component = ids[vector.type];
++        if (component.kind != Kind::Float || component.value != 32) return false;
++        ++positions;
++    }
++    return positions == 1;
++}
++
++inline bool storePointer(Id const* ids, std::uint32_t bound,
++        std::uint32_t pointer, std::uint32_t output, bool& outputStore, bool vertex) noexcept {
++    std::uint32_t storage = kUnset;
++    for (std::uint32_t hop = 0; hop < 32; ++hop) {
++        if (!validId(pointer, bound) || !ids[pointer].defined) return false;
++        Id const& value = ids[pointer];
++        if (!validId(value.type, bound)) return false;
++        Id const& type = ids[value.type];
++        if (type.kind != Kind::Pointer) return false;
++        if (storage == kUnset) storage = type.value;
++        if (storage != type.value || (storage != 6 && storage != 7 && storage != 3)) return false;
++        if (value.kind == Kind::Variable) {
++            if (value.value != storage) return false;
++            if (storage == 3) {
++                if ((!vertex && pointer != output) || (vertex && !value.entryInterface)) return false;
++                outputStore = true;
++            }
++            return true;
++        }
++        if (value.kind == Kind::Parameter) return storage == 6 || storage == 7;
++        if (value.kind == Kind::Access || value.kind == Kind::Copy) {
++            pointer = value.base;
++            continue;
++        }
++        return false; // unknown pointer provenance
++    }
++    return false;
++}
++
++inline bool inspect(std::uint32_t const* words, std::size_t size, bool allowDiscard,
++        bool vertex = false) noexcept {
++    if (!words || size < 5 || size > kMaxModuleWords || words[0] != 0x07230203u ||
++            words[1] < 0x00010000u || words[1] > 0x00010600u || words[4] != 0 ||
++            words[3] == 0 || words[3] > kMaxIdBound) return false;
++    std::uint32_t const bound = words[3];
++    // A single bounded, nonthrowing scratch allocation is made at material
++    // construction, never per draw. OOM retains the original rendering path.
++    std::unique_ptr<Id[]> ids{new (std::nothrow) Id[bound]{}};
++    if (!ids) return false;
++    bool shaderCapability = false, memoryModel = false, entryComplete = false;
++    std::uint32_t entry = 0, currentFunction = 0, output = 0, outputs = 0;
++    for (std::size_t offset = 5; offset < size;) {
++        std::size_t const count = words[offset] >> 16;
++        Op const op = static_cast<Op>(words[offset] & 65535u);
++        Rule const shape = rule(op);
++        if (!shape.minimumWords || count < shape.minimumWords || count > size - offset) return false;
++        auto const* w = words + offset;
++        if (shape.resultTypeAt && !validId(w[shape.resultTypeAt], bound)) return false;
++        if (shape.resultIdAt) {
++            std::uint32_t const id = w[shape.resultIdAt];
++            if (!validId(id, bound) || ids[id].defined) return false;
++            ids[id].defined = true;
++            ids[id].type = shape.resultTypeAt ? w[shape.resultTypeAt] : 0;
++        }
++        switch (op) {
++            case Op::Kill: case Op::DemoteToHelperInvocation: case Op::TerminateInvocation:
++                if (count != 1 || !allowDiscard) return false;
++                break;
++            case Op::Capability:
++                // Position invariance does not cover ClipDistance. Active
++                // clipping requires capability32 in validated SPIR-V; reject it.
++                if (count != 2 || (w[1] != 0 && w[1] != 1 && w[1] != 50)) return false;
++                shaderCapability |= w[1] == 1;
++                break;
++            case Op::MemoryModel:
++                if (count != 3 || memoryModel || w[1] != 0 || w[2] != 1) return false;
++                memoryModel = true;
++                break;
++            case Op::EntryPoint:
++                if (count < 5 || entry || w[1] != (vertex ? 0u : 4u) || !validId(w[2], bound) ||
++                        !literalEquals(w + 3, count - 3, "main")) return false;
++                entry = w[2];
++                for (std::size_t i = 5; i < count; ++i) {
++                    if (!validId(w[i], bound) || ids[w[i]].entryInterface) return false;
++                    ids[w[i]].entryInterface = true;
++                }
++                break;
++            case Op::ExecutionMode:
++                if (vertex || count != 3 || !validId(w[1], bound) || w[1] != entry ||
++                        (w[2] != 7 && w[2] != 9)) return false;
++                break;
++            case Op::ExtInstImport:
++                if (count != 6 || !literalEquals(w + 2, count - 2, "GLSL.std.450")) return false;
++                ids[w[1]].kind = Kind::GlslImport;
++                break;
++            case Op::ExtInst:
++                if (!validId(w[3], bound) || ids[w[3]].kind != Kind::GlslImport ||
++                        w[4] == 0 || w[4] > 81 || w[4] == 35 || w[4] == 47 || w[4] == 51) return false;
++                break;
++            case Op::SpecConstantOp:
++                if (!permittedSpecOp(w[3])) return false;
++                break;
++            case Op::TypeVoid: ids[w[1]].kind = Kind::Void; break;
++            case Op::TypeFloat:
++                if (count != 3) return false;
++                ids[w[1]].kind = Kind::Float;
++                ids[w[1]].value = w[2];
++                break;
++            case Op::TypeVector:
++                if (count != 4 || !validId(w[2], bound) || w[3] < 2 || w[3] > 4) return false;
++                ids[w[1]].kind = Kind::Vector;
++                ids[w[1]].type = w[2];
++                ids[w[1]].value = w[3];
++                break;
++            case Op::TypeStruct:
++                ids[w[1]].kind = Kind::Struct;
++                ids[w[1]].type = count > 2 ? w[2] : 0;
++                break;
++            case Op::TypePointer:
++                if (count != 4 || !permittedStorage(w[2]) || !validId(w[3], bound)) return false;
++                ids[w[1]].kind = Kind::Pointer;
++                ids[w[1]].value = w[2];
++                ids[w[1]].type = w[3];
++                break;
++            case Op::TypeImage:
++                if ((count != 9 && count != 10) || w[3] == 6 || w[7] != 1 || w[8] != 0) return false;
++                break;
++            case Op::TypeFunction:
++                if (!validId(w[2], bound)) return false;
++                ids[w[1]].kind = Kind::FunctionType;
++                ids[w[1]].type = w[2];
++                ids[w[1]].value = static_cast<std::uint32_t>(count - 3);
++                break;
++            case Op::Function:
++                if (count != 5 || currentFunction || !validId(w[4], bound)) return false;
++                currentFunction = w[2];
++                ids[w[2]].kind = Kind::Function;
++                ids[w[2]].base = w[4];
++                break;
++            case Op::FunctionEnd:
++                if (count != 1 || !currentFunction || !ids[currentFunction].value) return false;
++                entryComplete |= currentFunction == entry;
++                currentFunction = 0;
++                break;
++            case Op::Label:
++                if (count != 2 || !currentFunction) return false;
++                ids[currentFunction].value = 1;
++                break;
++            case Op::FunctionParameter:
++                if (count != 3 || !currentFunction) return false;
++                ids[w[2]].kind = Kind::Parameter;
++                break;
++            case Op::Variable:
++                if ((count != 4 && count != 5) || !permittedStorage(w[3]) ||
++                        ((w[3] == 7) != (currentFunction != 0))) return false;
++                ids[w[2]].kind = Kind::Variable;
++                ids[w[2]].value = w[3];
++                if (w[3] == 3) { output = w[2]; ++outputs; }
++                break;
++            case Op::AccessChain: case Op::InBoundsAccessChain:
++                if (!validId(w[3], bound)) return false;
++                ids[w[2]].kind = Kind::Access;
++                ids[w[2]].base = w[3];
++                break;
++            case Op::CopyObject:
++                if (count != 4 || !validId(w[3], bound)) return false;
++                ids[w[2]].kind = Kind::Copy;
++                ids[w[2]].base = w[3];
++                break;
++            case Op::Decorate: case Op::MemberDecorate: {
++                std::size_t const at = op == Op::Decorate ? 2 : 3;
++                if (!validId(w[1], bound) || count <= at || w[at] == 3) return false; // BufferBlock
++                if (w[at] == 11) {
++                    if (count != at + 2 || w[at+1] == 22 || w[at+1] == 20 || w[at+1] == 5014) return false;
++                    if (op == Op::Decorate) ids[w[1]].decorations |= 8u;
++                    if (vertex && w[at+1] == 0) {
++                        if (op == Op::MemberDecorate && w[2] != 0) return false;
++                        ids[w[1]].decorations |= 16u;
++                    }
++                }
++                if (vertex && w[at] == 18) {
++                    if (count != at + 1) return false;
++                    if (op == Op::Decorate || w[2] == 0) ids[w[1]].decorations |= 32u;
++                }
++                if (op == Op::Decorate && (w[at] == 30 || w[at] == 31 || w[at] == 32)) {
++                    if (count != 4) return false;
++                    std::uint8_t const bit = static_cast<std::uint8_t>(1u << (w[at] - 30));
++                    if (ids[w[1]].decorations & bit) return false;
++                    ids[w[1]].decorations |= bit;
++                    if (w[at] == 30) ids[w[1]].location = w[3];
++                    if (w[at] == 31) ids[w[1]].component = w[3];
++                    if (w[at] == 32) ids[w[1]].index = w[3];
++                }
++                break;
++            }
++            default: break; // Explicit whitelist above contains only remaining read/pure/control operations.
++        }
++        offset += count;
++    }
++    if (!shaderCapability || !memoryModel || !entry || !entryComplete || currentFunction ||
++            (vertex ? outputs == 0 : outputs != 1)) return false;
++    if (ids[entry].kind != Kind::Function || !validId(ids[entry].type, bound) ||
++            ids[ids[entry].type].kind != Kind::Void || !validId(ids[entry].base, bound) ||
++            ids[ids[entry].base].kind != Kind::FunctionType || ids[ids[entry].base].value != 0) return false;
++    for (std::uint32_t id = 1; id < bound; ++id) {
++        if (!ids[id].defined) continue;
++        if (ids[id].type && (!validId(ids[id].type, bound) || !ids[ids[id].type].defined)) return false;
++        if (ids[id].kind == Kind::Variable &&
++                (ids[ids[id].type].kind != Kind::Pointer ||
++                 ids[ids[id].type].value != ids[id].value)) return false;
++    }
++    if (!vertex && !singleFloat4Output(ids.get(), bound, output)) return false;
++    if (vertex && !invariantVertexPosition(ids.get(), bound)) return false;
++    bool outputStore = false;
++    for (std::size_t offset = 5; offset < size;) {
++        std::size_t const count = words[offset] >> 16;
++        Op const op = static_cast<Op>(words[offset] & 65535u);
++        auto const* w = words + offset;
++        if (op == Op::Store && (count != 3 ||
++                !storePointer(ids.get(), bound, w[1], output, outputStore, vertex))) return false;
++        offset += count;
++    }
++    return outputStore;
++}
++
++} // namespace detail
++
++inline bool isSafeOpaqueDepthPrepassFragment(std::uint32_t const* words,
++        std::size_t wordCount) noexcept {
++    return detail::inspect(words, wordCount, false);
++}
++
++// Non-occluder shaders may discard, but publishing earlier opaque depth must
++// not suppress externally observable work from any visible draw. The caller
++// must apply this broader proof to the entire affected visible view or fall back.
++inline bool isDepthRejectionSafeFragment(std::uint32_t const* words,
++        std::size_t wordCount) noexcept {
++    return detail::inspect(words, wordCount, true);
++}
++
++// Replay requires the identical COLOR vertex program and immutable bindings.
++// Requires explicitly Invariant Position and proves no external vertex writes; it does
++// not prove depth invariance across pipeline compilation or unknown resource
++// writers. SSBOs, storage images, atomics, subgroup/clock and unknown ops reject.
++inline bool isDepthPrepassVertexReplaySafe(std::uint32_t const* words,
++        std::size_t wordCount) noexcept {
++    return detail::inspect(words, wordCount, false, true);
++}
++
++} // namespace filament::opaque_depth
++#endif // TNT_FILAMENT_OPAQUE_DEPTH_PREPASS_SAFETY_H
 diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManager.cpp
 index cfdbd92380c86d69fc0784873cc37874c90e5f58..2cc59a670ac4f44476e575ca03728ad47204601c 100644
 --- a/filament/src/PostProcessManager.cpp
@@ -5456,7 +6272,7 @@ index fe34cdf276b8061212944e5c9c8f4e70db2a7ef1..546c942629dbda820924a1e927d2d801
          float bilateralThreshold = 0.0625f;
          float scale = 1.0f;
 diff --git a/filament/src/RenderPass.cpp b/filament/src/RenderPass.cpp
-index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..3f8c767702febe5f25d27fcfe2ce89237981ac53 100644
+index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..cd2760a339795d80b327236c67ff378f875d8149 100644
 --- a/filament/src/RenderPass.cpp
 +++ b/filament/src/RenderPass.cpp
 @@ -108,7 +108,9 @@ void RenderPass::DescriptorSetHandleDeleter::operator()(DescriptorSetHandle hand
@@ -5470,10 +6286,48 @@ index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..3f8c767702febe5f25d27fcfe2ce8923
  
      // compute the number of commands we need
      updateSummedPrimitiveCounts(
-@@ -982,6 +984,12 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+@@ -917,6 +919,34 @@ void RenderPass::Executor::overrideScissor(backend::Viewport const& scissor) noe
+     mScissor = scissor;
+ }
+ 
++bool RenderPass::Executor::isOpaqueDepthPrepassCommand(Command const& command) noexcept {
++    if ((command.key & CUSTOM_MASK) != uint64_t(CustomCommand::PASS) ||
++            (command.key & PASS_MASK) != uint64_t(Pass::COLOR) ||
++            command.info.type != PrimitiveType::TRIANGLES || !command.info.mi || !command.info.rph ||
++            ((command.key & CHANNEL_MASK) >> CHANNEL_SHIFT) != RenderableManager::Builder::DEFAULT_CHANNEL ||
++            ((command.key & PRIORITY_MASK) >> PRIORITY_SHIFT) != 4) return false;
++    auto const* mi = command.info.mi;
++    auto const* ma = mi->getMaterial();
++    auto const offset = mi->getPolygonOffset();
++    auto const& raster = command.info.rasterState;
++    return ma->isOpaqueDepthPrepassSafe() && ma->isDepthPrepassVertexReplaySafe() &&
++            ma->getBlendingMode() == BlendingMode::OPAQUE &&
++            ma->isColorWriteEnabled() && mi->isColorWriteEnabled() && raster.colorWrite &&
++            mi->isDepthWriteEnabled() && raster.depthWrite && !mi->isStencilWriteEnabled() &&
++            raster.depthFunc == RasterState::DepthFunc::GE &&
++            !raster.alphaToCoverage && !raster.depthClamp &&
++            ma->getRefractionMode() == RefractionMode::NONE &&
++            offset.slope == 0.0f && offset.constant == 0.0f;
++}
++
++bool RenderPass::Executor::enableOpaqueDepthPrepass() noexcept {
++    // Advancing depth can change coarse-shading representative coverage.
++    // Keep the optional replay limited to the qualified full-rate path.
++    mOpaqueDepthPrepass = mFragmentShadingRate == backend::FragmentShadingRate::FULL &&
++            std::any_of(mCommands.begin(), mCommands.end(), isOpaqueDepthPrepassCommand);
++    return mOpaqueDepthPrepass;
++}
++
+ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver) const noexcept {
+     execute(engine, driver, mCommands.begin(), mCommands.end());
+ }
+@@ -981,7 +1011,14 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+     CircularBuffer const& circularBuffer = driver.getCircularBuffer();
  
      // b/479079631: Log the number of commands in this render pass.
-     size_t const commandCount = last - first;
+-    size_t const commandCount = last - first;
++    size_t const commandCount = mOpaqueDepthPrepass
++            ? std::count_if(first, last, isOpaqueDepthPrepassCommand) : last - first;
 +    if (utils::profiling::isEnabled()) {
 +        uint32_t const visible = mVisibleRenderableCount;
 +        driver.queueCommand([commandCount, visible] {
@@ -5483,13 +6337,39 @@ index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..3f8c767702febe5f25d27fcfe2ce8923
      if (Platform* platform = engine.getPlatform(); platform->hasDebugUpdateStatFunc()) {
          platform->debugUpdateStat("filament.renderer.render_pass.command_count", commandCount);
      }
-@@ -1173,6 +1181,19 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+@@ -1063,6 +1100,8 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+             first--;
+             while (++first != batchLast) {
+                 assert_invariant(first->key != uint64_t(Pass::SENTINEL));
++                if (mOpaqueDepthPrepass && !isOpaqueDepthPrepassCommand(*first)) continue;
++
+ 
+                 /*
+                  * Be careful when changing code below, this is the hot inner-loop
+@@ -1091,6 +1130,15 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+                 // per-renderable uniform
+                 PrimitiveInfo const info = first->info;
+                 pipeline.rasterState = info.rasterState;
++                // Replay exactly the original COLOR VS/program/spec/resources.
++                // Suppress only the FS pipeline stage; no depth variant is requested.
++                pipeline.suppressFragmentShader = mOpaqueDepthPrepass;
++                if (mOpaqueDepthPrepass) {
++                    pipeline.rasterState.colorWrite = false;
++                    pipeline.rasterState.depthWrite = true;
++                    pipeline.rasterState.depthFunc = RasterState::DepthFunc::GE;
++                }
++
+                 pipeline.vertexBufferInfo = info.vbih;
+                 pipeline.primitiveType = info.type;
+                 assert_invariant(pipeline.vertexBufferInfo);
+@@ -1173,6 +1221,20 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
  
                  pipeline.program = mi->getProgram(info.materialVariant, info.dynamicSpecConstKey);
  
 +                // Keep coverage-sensitive and auxiliary passes full-rate. Native shaders also pass
 +                // device-dependent depth/SampleMask declaration checks and a per-sample shading guard.
-+                bool const coarseEligible = mFragmentShadingRate != backend::FragmentShadingRate::FULL &&
++                bool const coarseEligible = !mOpaqueDepthPrepass &&
++                        mFragmentShadingRate != backend::FragmentShadingRate::FULL &&
 +                        (first->key & PASS_MASK) == uint64_t(Pass::COLOR) &&
 +                        !Variant::isSSRVariant(info.materialVariant) &&
 +                        !Variant::isValidDepthVariant(info.materialVariant) &&
@@ -5503,7 +6383,7 @@ index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..3f8c767702febe5f25d27fcfe2ce8923
                  if (UTILS_UNLIKELY(memcmp(&pipeline, &currentPipeline, sizeof(PipelineState)) != 0)) {
                      currentPipeline = pipeline;
                      driver.bindPipeline(pipeline);
-@@ -1221,10 +1242,12 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
+@@ -1221,10 +1283,12 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
  
  RenderPass::Executor::Executor(RenderPass const& pass, Command const* b, Command const* e) noexcept
          : mCommands(b, e),
@@ -5517,10 +6397,10 @@ index d308c8d0889c9db57e23e21fce62f68f82f7d3b2..3f8c767702febe5f25d27fcfe2ce8923
            mPolygonOffsetOverride(false),
            mScissorOverride(false) {
 diff --git a/filament/src/RenderPass.h b/filament/src/RenderPass.h
-index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..fcb1108f860ae06ec0bcb999fefa6236b6b086dc 100644
+index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..25e540491c85f263483045e056bb4accc832aa78 100644
 --- a/filament/src/RenderPass.h
 +++ b/filament/src/RenderPass.h
-@@ -384,10 +384,12 @@ public:
+@@ -384,10 +384,13 @@ public:
  
          // these fields are constant after creation
          utils::Slice<const Command> mCommands;
@@ -5530,10 +6410,32 @@ index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..fcb1108f860ae06ec0bcb999fefa6236
          DescriptorSetSharedHandle mInstancedDescriptorSetHandle;
          ColorPassDescriptorSet const* mColorPassDescriptorSet = nullptr;
 +        backend::FragmentShadingRate mFragmentShadingRate = backend::FragmentShadingRate::FULL;
++        bool mOpaqueDepthPrepass = false;
          // this stores either the scissor-viewport or the scissor override
          backend::Viewport mScissor{ 0, 0, INT32_MAX, INT32_MAX };
  
-@@ -441,6 +443,7 @@ public:
+@@ -405,6 +408,8 @@ public:
+         void execute(FEngine const& engine, backend::DriverApi& driver,
+                 Command const* first, Command const* last) const noexcept;
+ 
++        static bool isOpaqueDepthPrepassCommand(Command const& command) noexcept;
++
+         static backend::Viewport applyScissorViewport(
+                 backend::Viewport const& scissorViewport,
+                 backend::Viewport const& scissor) noexcept;
+@@ -428,6 +433,11 @@ public:
+ 
+         void overrideScissor(backend::Viewport const& scissor) noexcept;
+ 
++        // References existing COLOR commands: no regeneration, reordering or regrouping.
++        // Returns false and leaves ordinary mode if no strict occluder is present.
++        bool enableOpaqueDepthPrepass() noexcept;
++
++
+         void execute(FEngine const& engine, backend::DriverApi& driver) const noexcept;
+     };
+ 
+@@ -441,6 +451,7 @@ public:
      }
  
  private:
@@ -5541,7 +6443,7 @@ index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..fcb1108f860ae06ec0bcb999fefa6236
      friend class FRenderer;
      friend class RenderPassBuilder;
      friend class RenderPassBuilder;
-@@ -502,6 +505,7 @@ private:
+@@ -502,6 +513,7 @@ private:
  
      FScene::RenderableSoa const& mRenderableSoa;
      ColorPassDescriptorSet const* const mColorPassDescriptorSet;
@@ -5549,7 +6451,7 @@ index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..fcb1108f860ae06ec0bcb999fefa6236
      backend::Viewport mScissorViewport{ 0, 0, INT32_MAX, INT32_MAX };
      Command const* /* const */ mCommandBegin = nullptr;   // Pointer to the first command
      Command const* /* const */ mCommandEnd = nullptr;     // Pointer to one past the last command
-@@ -529,6 +533,7 @@ class RenderPassBuilder {
+@@ -529,6 +541,7 @@ class RenderPassBuilder {
      Variant mVariant{};
      DynamicSpecConstKey mDynamicSpecConstKey{};
      ColorPassDescriptorSet const* mColorPassDescriptorSet = nullptr;
@@ -5557,7 +6459,7 @@ index 13bf9e190af1e7ee1e8fd1f92f7aaf0c0a0f0e8c..fcb1108f860ae06ec0bcb999fefa6236
      FScene::VisibleMaskType mVisibilityMask = std::numeric_limits<FScene::VisibleMaskType>::max();
  
      using CustomCommandRecord = std::tuple<
-@@ -556,6 +561,11 @@ public:
+@@ -556,6 +569,11 @@ public:
          return mCommandTypeFlags;
      }
  
@@ -5632,6 +6534,123 @@ index e0fe2d6a3ee040b1ff21bbb765f7a9fa7ec27425..8969cbd82de2e509b1cd977ecdeca70e
  void Renderer::setPresentationTime(int64_t const monotonic_clock_ns) {
      downcast(this)->setPresentationTime(monotonic_clock_ns);
  }
+diff --git a/filament/src/RendererUtils.cpp b/filament/src/RendererUtils.cpp
+index 57fb25b52e63e948ebafd7dd2d6894db58f2028c..2b611a7da0a94ecbdd0ef91930f9bf21ee1c66d2 100644
+--- a/filament/src/RendererUtils.cpp
++++ b/filament/src/RendererUtils.cpp
+@@ -54,6 +54,59 @@ namespace filament {
+ using namespace backend;
+ using namespace math;
+ 
++FrameGraphId<FrameGraphTexture> RendererUtils::opaqueDepthPrepass(
++        FrameGraph& fg, FEngine& engine, FView const& view,
++        ColorPassInput const& colorPassInput, ColorPassConfig const& config,
++        RenderPass::Executor passExecutor) noexcept {
++    struct DepthData {
++        FrameGraphId<FrameGraphTexture> depth, shadows, ssao, ssr, structure;
++    };
++    auto const& pass = fg.addPass<DepthData>("Opaque Z Prepass",
++            [&](FrameGraph::Builder& builder, DepthData& data) {
++                data.shadows = colorPassInput.shadows;
++                data.ssao = colorPassInput.ssao;
++                data.ssr = config.hasScreenSpaceReflectionsOrRefractions ? colorPassInput.ssr :
++                        FrameGraphId<FrameGraphTexture>{};
++                data.structure = (config.hasContactShadows || config.fogAsPostProcess) ?
++                        colorPassInput.structure : FrameGraphId<FrameGraphTexture>{};
++                if (data.shadows) data.shadows = builder.sample(data.shadows);
++                if (data.ssao) data.ssao = builder.sample(data.ssao);
++                if (data.ssr) data.ssr = builder.sample(data.ssr);
++                if (data.structure) data.structure = builder.sample(data.structure);
++                data.depth = builder.createTexture("Opaque Z Depth", {
++                        .width = config.physicalViewport.width,
++                        .height = config.physicalViewport.height,
++                        .samples = config.msaa,
++                        .format = TextureFormat::DEPTH32F });
++                data.depth = builder.write(data.depth, FrameGraphTexture::Usage::DEPTH_ATTACHMENT);
++                builder.declareRenderPass("Opaque Z Target", {
++                        .attachments = { .depth = data.depth },
++                        .samples = config.msaa,
++                        .clearFlags = TargetBufferFlags::DEPTH });
++            },
++            [=, passExecutor = std::move(passExecutor), &view, &engine](
++                    FrameGraphResources const& resources, DepthData const& data, DriverApi& driver) {
++                // Same main COLOR descriptor family, UBO, samplers and resources.
++                // Updates happen before beginRenderPass, as for the owning color pass.
++                view.prepareSSAO(data.ssao ? resources.getTexture(data.ssao) : engine.getOneTextureArray());
++                view.prepareSSR(data.ssr ? resources.getTexture(data.ssr) : engine.getOneTextureArray());
++                view.prepareStructure(data.structure ? resources.getTexture(data.structure) : engine.getOneTexture());
++                view.prepareShadowMapping(engine, data.shadows ? resources.getTexture(data.shadows) :
++                        (view.getShadowType() != ShadowType::PCF ? engine.getOneTextureArray() :
++                                engine.getOneTextureArrayDepth()));
++                view.commitUniforms(driver);
++                view.commitDescriptorSet(driver);
++                auto const out = resources.getRenderPassInfo();
++                driver.beginRenderPass(out.target, out.params);
++                passExecutor.execute(engine, driver);
++                driver.endRenderPass();
++                DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_VIEW);
++                DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_RENDERABLE);
++                DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_MATERIAL);
++            });
++    return pass->depth;
++}
++
+ RendererUtils::ColorPassOutput RendererUtils::colorPass(
+         FrameGraph& fg, const char* name, FEngine& engine, FView const& view,
+         ColorPassInput const& colorPassInput,
+@@ -78,6 +131,10 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
+ 
+                 TargetBufferFlags const clearColorFlags = config.clearFlags & TargetBufferFlags::COLOR;
+                 TargetBufferFlags clearDepthFlags = config.clearFlags & TargetBufferFlags::DEPTH;
++                if (colorPassInput.opaqueDepthPrepass) {
++                    assert_invariant(colorPassInput.depth);
++                    clearDepthFlags = TargetBufferFlags::NONE;
++                }
+                 TargetBufferFlags clearStencilFlags = config.clearFlags & TargetBufferFlags::STENCIL;
+ 
+                 data.color = colorPassInput.linearColor;
+@@ -322,7 +379,7 @@ RendererUtils::ColorPassOutput RendererUtils::refractionPass(
+ 
+     // if there wasn't any refractive object, just skip everything below.
+     assert_invariant(!colorPassInput.linearColor);
+-    assert_invariant(!colorPassInput.depth);
++    assert_invariant(!colorPassInput.depth || colorPassInput.opaqueDepthPrepass);
+     config.hasScreenSpaceReflectionsOrRefractions = true;
+ 
+     PostProcessManager& ppm = engine.getPostProcessManager();
+@@ -354,6 +411,7 @@ RendererUtils::ColorPassOutput RendererUtils::refractionPass(
+     // the width and height.
+     colorPassInput.linearColor = opaquePassOutput.linearColor;
+     colorPassInput.depth = opaquePassOutput.depth;
++    colorPassInput.opaqueDepthPrepass = false;
+ 
+     // Since we're reusing the existing target we don't want to clear any of its buffer.
+     // Important: if this target ended up being an imported target, then the clearFlags
+diff --git a/filament/src/RendererUtils.h b/filament/src/RendererUtils.h
+index 42c8c0ad684c56b2f530cd26bdfb8f7c71acdc92..5fdf29deabc8bde5c4a97c4d324801aaffd5b15f 100644
+--- a/filament/src/RendererUtils.h
++++ b/filament/src/RendererUtils.h
+@@ -87,6 +87,8 @@ public:
+         FrameGraphId<FrameGraphTexture> ssao;
+         FrameGraphId<FrameGraphTexture> ssr;
+         FrameGraphId<FrameGraphTexture> structure;
++        // Only an attachment returned by opaqueDepthPrepass may suppress clear.
++        bool opaqueDepthPrepass = false;
+     };
+     struct ColorPassOutput {
+         FrameGraphId<FrameGraphTexture> linearColor;
+@@ -94,6 +96,11 @@ public:
+         FrameGraphId<FrameGraphTexture> depth;
+     };
+ 
++    static FrameGraphId<FrameGraphTexture> opaqueDepthPrepass(
++            FrameGraph& fg, FEngine& engine, FView const& view,
++            ColorPassInput const& colorPassInput, ColorPassConfig const& config,
++        RenderPass::Executor passExecutor) noexcept;
++
+     static ColorPassOutput colorPass(
+             FrameGraph& fg, const char* name, FEngine& engine, FView const& view,
+             ColorPassInput const& colorPassInput,
 diff --git a/filament/src/ShadowMapManager.cpp b/filament/src/ShadowMapManager.cpp
 index fd0b62996bc5fd1d26af2c65ae2adf280f453d1c..908db52b550d3c9fa226377852ea962a1aa2ff0e 100644
 --- a/filament/src/ShadowMapManager.cpp
@@ -5742,7 +6761,7 @@ index fd0b62996bc5fd1d26af2c65ae2adf280f453d1c..908db52b550d3c9fa226377852ea962a
                  if (mShadowUb.isDirty()) {
                      mShadowUb.clean();
 diff --git a/filament/src/View.cpp b/filament/src/View.cpp
-index 2f9a01518cabe727ea659c5db3942d33f05d03b1..915a98b80d7277721e47e8cd9eec86c042ff2693 100644
+index 2f9a01518cabe727ea659c5db3942d33f05d03b1..8289d65aa4a69bf6e14247839911417db0f4b0a3 100644
 --- a/filament/src/View.cpp
 +++ b/filament/src/View.cpp
 @@ -127,6 +127,14 @@ uint8_t View::getSampleCount() const noexcept {
@@ -5760,11 +6779,240 @@ index 2f9a01518cabe727ea659c5db3942d33f05d03b1..915a98b80d7277721e47e8cd9eec86c0
  void View::setAntiAliasing(AntiAliasing const type) noexcept {
      downcast(this)->setAntiAliasing(type);
  }
+@@ -335,6 +343,14 @@ bool View::isScreenSpaceRefractionEnabled() const noexcept {
+     return downcast(this)->isScreenSpaceRefractionEnabled();
+ }
+ 
++void View::setOpaqueDepthPrepassEnabled(bool const enabled) noexcept {
++    downcast(this)->setOpaqueDepthPrepassEnabled(enabled);
++}
++
++bool View::isOpaqueDepthPrepassEnabled() const noexcept {
++    return downcast(this)->isOpaqueDepthPrepassEnabled();
++}
++
+ void View::setStencilBufferEnabled(bool const enabled) noexcept {
+     downcast(this)->setStencilBufferEnabled(enabled);
+ }
+diff --git a/filament/src/details/Material.cpp b/filament/src/details/Material.cpp
+index 339e9bcd1b4a868c28ed5dfa4eb5b0732aed12c9..8bd44b525d7af1d68326273bc29bb48c7edc3456 100644
+--- a/filament/src/details/Material.cpp
++++ b/filament/src/details/Material.cpp
+@@ -20,6 +20,7 @@
+ #include "FilamentAPI-impl.h"
+ #include "Froxelizer.h"
+ #include "MaterialParser.h"
++#include "OpaqueDepthPrepassSafety.h"
+ 
+ #include "details/Engine.h"
+ 
+@@ -60,6 +61,8 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cstring>
++#include <memory>
+ #include <new>
+ #include <string_view>
+ #include <unordered_map>
+@@ -177,6 +180,9 @@ FMaterial::FMaterial(FEngine& engine, const Builder& builder, MaterialDefinition
+             driver.isWorkaroundNeeded(Workaround::DISABLE_DEPTH_PRECACHE_FOR_DEFAULT_MATERIAL);
+ 
+     mHasMotionVectorsVariant = computeHasMotionVectorsVariant();
++    mDepthPrepassVertexReplaySafe.store(computeVertexDepthReplaySafe(), std::memory_order_relaxed);
++    mDepthRejectionSafe.store(computeFragmentDepthSafety(true), std::memory_order_relaxed);
++    mOpaqueDepthPrepassSafe.store(computeOpaqueDepthPrepassSafe(), std::memory_order_relaxed);
+ 
+     mPrograms.initializeForMaterial(engine, *this, processSpecializationConstants(builder));
+ 
+@@ -248,6 +254,120 @@ bool FMaterial::isValidProgram(Variant const variant, DynamicSpecConstKey const
+     return mDefinition.isValidProgram(variant, specKey, shaderModel, isStereoSupported);
+ }
+ 
++bool FMaterial::computeOpaqueDepthPrepassSafe() const noexcept {
++    if (!isDepthPrepassVertexReplaySafe() || getBlendingMode() != BlendingMode::OPAQUE ||
++            !isColorWriteEnabled() || !isDepthWriteEnabled() || isAlphaToCoverageEnabled() ||
++            getRefractionMode() != RefractionMode::NONE) return false;
++    return computeFragmentDepthSafety(false);
++}
++
++bool FMaterial::computeFragmentDepthSafety(bool const allowDiscard) const noexcept {
++    if (mEngine.getBackend() != Backend::VULKAN ||
++            mEngine.getShaderModel() != ShaderModel::DESKTOP ||
++            getMaterialDomain() != MaterialDomain::SURFACE ||
++            getMaterialParser().getShaderLanguage() != ShaderLanguage::SPIRV) {
++        return false;
++    }
++#if FILAMENT_ENABLE_MATDBG
++    // Editing can replace shaders between command preparation and execution.
++    // Keep this optional path disabled for debugger-owned materials.
++    if (mEngine.debug.server) return false;
++#endif
++#if !defined(__cpp_exceptions) && !defined(_CPPUNWIND)
++    // Optional classification must not turn a local allocation failure into
++    // termination in builds where failure cannot be caught.
++    return false;
++#else
++    try {
++        filaflat::ShaderContent content;
++        bool found = false;
++        // These are the three canonical ordinary surface fragment keys. Skin
++        // and stereo are vertex-only; SSR/depth/motion are never admitted here.
++        for (Variant::type_t const key : {Variant::type_t(0), Variant::type_t(Variant::SRE),
++                    Variant::type_t(Variant::SRE | Variant::S2D)}) {
++            Variant const fragment{key};
++            auto const& parser = getMaterialParser();
++            if (!parser.hasShader(ShaderModel::DESKTOP, fragment, ShaderStage::FRAGMENT)) {
++                continue;
++            }
++            if (!parser.getShader(content, ShaderModel::DESKTOP,
++                        fragment, ShaderStage::FRAGMENT) || content.empty() ||
++                    content.size() % sizeof(uint32_t) || content.size() > 4u * 1024u * 1024u) {
++                return false;
++            }
++            // ShaderContent is byte storage. Copy into typed aligned words;
++            // the classifier never relies on allocator-specific byte alignment.
++            std::unique_ptr<uint32_t[]> words(new (std::nothrow)
++                    uint32_t[content.size() / sizeof(uint32_t)]);
++            if (!words) return false;
++            std::memcpy(words.get(), content.data(), content.size());
++            bool const safe = allowDiscard
++                    ? opaque_depth::isDepthRejectionSafeFragment(words.get(),
++                            content.size() / sizeof(uint32_t))
++                    : opaque_depth::isSafeOpaqueDepthPrepassFragment(words.get(),
++                            content.size() / sizeof(uint32_t));
++            if (!safe) return false;
++            found = true;
++        }
++        return found;
++    } catch (std::bad_alloc const&) {
++        return false;
++    }
++#endif
++}
++
++bool FMaterial::computeVertexDepthReplaySafe() const noexcept {
++    if (mEngine.getBackend() != Backend::VULKAN ||
++            mEngine.getShaderModel() != ShaderModel::DESKTOP ||
++            getMaterialDomain() != MaterialDomain::SURFACE ||
++            getMaterialParser().getShaderLanguage() != ShaderLanguage::SPIRV) {
++        return false;
++    }
++#if FILAMENT_ENABLE_MATDBG
++    // Editing can replace shaders between command preparation and execution.
++    // Keep this optional path disabled for debugger-owned materials.
++    if (mEngine.debug.server) return false;
++#endif
++#if !defined(__cpp_exceptions) && !defined(_CPPUNWIND)
++    // Optional classification must not turn a local allocation failure into
++    // termination in builds where failure cannot be caught.
++    return false;
++#else
++    try {
++        filaflat::ShaderContent content;
++        bool found = false;
++        // All present mono COLOR vertex keys: SRE/SKN only. The whole-view
++        // gate excludes stereo, whose clip distances are not invariant here.
++        // The exact original COLOR command selects the replayed module/spec key.
++        for (Variant::type_t key = 0; key < 8; key += 2) {
++            Variant const vertex{key};
++            auto const& parser = getMaterialParser();
++            if (!parser.hasShader(ShaderModel::DESKTOP, vertex, ShaderStage::VERTEX)) {
++                continue;
++            }
++            if (!parser.getShader(content, ShaderModel::DESKTOP,
++                        vertex, ShaderStage::VERTEX) || content.empty() ||
++                    content.size() % sizeof(uint32_t) || content.size() > 4u * 1024u * 1024u) {
++                return false;
++            }
++            // ShaderContent is byte storage. Copy into typed aligned words;
++            // the classifier never relies on allocator-specific byte alignment.
++            std::unique_ptr<uint32_t[]> words(new (std::nothrow)
++                    uint32_t[content.size() / sizeof(uint32_t)]);
++            if (!words) return false;
++            std::memcpy(words.get(), content.data(), content.size());
++            bool const safe = opaque_depth::isDepthPrepassVertexReplaySafe(words.get(),
++                    content.size() / sizeof(uint32_t));
++            if (!safe) return false;
++            found = true;
++        }
++        return found;
++    } catch (std::bad_alloc const&) {
++        return false;
++    }
++#endif
++}
++
+ bool FMaterial::computeHasMotionVectorsVariant() const noexcept {
+     // The SKN permutation isn't checked separately: it can only be missing with the `skinning`
+     // variant filter, and such materials already can't render skinned geometry in any pass.
+@@ -459,6 +579,11 @@ void FMaterial::applyPendingEdits() noexcept {
+ }
+ 
+ void FMaterial::setPendingEdits(std::unique_ptr<MaterialParser> pendingEdits) noexcept {
++    // Never lend an old constructor proof to a later package. Re-enabling
++    // after debugger edits requires constructing a new material.
++    mOpaqueDepthPrepassSafe.store(false, std::memory_order_release);
++    mDepthRejectionSafe.store(false, std::memory_order_release);
++    mDepthPrepassVertexReplaySafe.store(false, std::memory_order_release);
+     std::lock_guard const lock(mPendingEditsLock);
+     std::swap(pendingEdits, mPendingEdits);
+ }
+diff --git a/filament/src/details/Material.h b/filament/src/details/Material.h
+index 21bf7b33c67abe8a1e783df640e07a5f35e0ab65..2b5c28f8c2597fed359aca0a6d00f5473ab0f220 100644
+--- a/filament/src/details/Material.h
++++ b/filament/src/details/Material.h
+@@ -191,6 +191,16 @@ public:
+     // motion vectors pass, i.e. with a motion vector of zero.
+     bool hasMotionVectorsVariant() const noexcept { return mHasMotionVectorsVariant; }
+ 
++    bool isOpaqueDepthPrepassSafe() const noexcept {
++        return mOpaqueDepthPrepassSafe.load(std::memory_order_acquire);
++    }
++    bool isDepthPrepassVertexReplaySafe() const noexcept {
++        return mDepthPrepassVertexReplaySafe.load(std::memory_order_acquire);
++    }
++    bool isDepthRejectionSafe() const noexcept {
++        return mDepthRejectionSafe.load(std::memory_order_acquire);
++    }
++
+     backend::descriptor_binding_t getSamplerBinding(
+             std::string_view const& name) const;
+ 
+@@ -295,6 +305,9 @@ private:
+         utils::Invocable<void(Material*)>&& callback) noexcept;
+ 
+     bool computeHasMotionVectorsVariant() const noexcept;
++    bool computeOpaqueDepthPrepassSafe() const noexcept;
++    bool computeFragmentDepthSafety(bool allowDiscard) const noexcept;
++    bool computeVertexDepthReplaySafe() const noexcept;
+ 
+     MaterialDefinition const& mDefinition;
+ 
+@@ -303,6 +316,9 @@ private:
+     bool mUseUboBatching = false;
+     bool mDepthPrecacheDisabled = false;
+     bool mHasMotionVectorsVariant = false;
++    std::atomic<bool> mOpaqueDepthPrepassSafe{false};
++    std::atomic<bool> mDepthRejectionSafe{false};
++    std::atomic<bool> mDepthPrepassVertexReplaySafe{false};
+ 
+     // reserve some space to construct the default material instance
+     FMaterialInstance* mDefaultMaterialInstance = nullptr;
 diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.cpp
-index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e55d55b23 100644
+index 5fcde1b0fb11f9088aee7a6c535868e56c794343..d48f54b991e8d7c6b8b381061c6566efca87c482 100644
 --- a/filament/src/details/Renderer.cpp
 +++ b/filament/src/details/Renderer.cpp
-@@ -366,6 +366,11 @@ void FRenderer::skipFrame(uint64_t const vsyncSteadyClockTimeNano) {
+@@ -27,6 +27,8 @@
+ #include "details/Engine.h"
+ #include "details/Fence.h"
+ #include "details/MaterialInstance.h"
++#include "details/Material.h"
++#include "RenderPrimitive.h"
+ #include "details/Scene.h"
+ #include "details/SwapChain.h"
+ #include "details/Texture.h"
+@@ -366,6 +368,11 @@ void FRenderer::skipFrame(uint64_t const vsyncSteadyClockTimeNano) {
      }
  
      mFrameId++;
@@ -5776,7 +7024,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
      FILAMENT_TRACING_FRAME_ID(FILAMENT_TRACING_CATEGORY_FILAMENT, mFrameId);
  
      FEngine& engine = mEngine;
-@@ -457,6 +462,13 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
+@@ -457,6 +464,13 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
      }
  
      mFrameId++;
@@ -5790,7 +7038,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
      FILAMENT_TRACING_FRAME_ID(FILAMENT_TRACING_CATEGORY_FILAMENT, mFrameId);
  
      // get the timestamp as soon as possible
-@@ -500,12 +512,21 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
+@@ -500,12 +514,21 @@ bool FRenderer::beginFrame(FSwapChain* swapChain, uint64_t vsyncSteadyClockTimeN
          // user ignored us, we'd still want mSwapChain to be set.
          mSwapChain = swapChain;
  
@@ -5812,7 +7060,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
          auto const presentationTime = mPresentationTime;
          auto const desiredPresentationTime = mDesiredPresentationTime;
          auto const renderingDeadline = mRenderingDeadline;
-@@ -596,6 +617,10 @@ void FRenderer::endFrame() {
+@@ -596,6 +619,10 @@ void FRenderer::endFrame() {
      mSwapChain->commit(driver);
      mSwapChain = nullptr;
  
@@ -5823,7 +7071,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
      mFrameInfoManager.endFrame(driver);
      mFrameSkipper.submitFrame(driver);
  
-@@ -717,6 +742,13 @@ void FRenderer::renderStandaloneView(FView const* view) {
+@@ -717,6 +744,13 @@ void FRenderer::renderStandaloneView(FView const* view) {
          FEngine& engine = mEngine;
          FEngine::DriverApi& driver = engine.getDriverApi();
  
@@ -5837,7 +7085,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
          engine.prepare(driver);
  
          driver.beginFrame(
-@@ -724,6 +756,10 @@ void FRenderer::renderStandaloneView(FView const* view) {
+@@ -724,6 +758,10 @@ void FRenderer::renderStandaloneView(FView const* view) {
                  mDisplayInfo.refreshRate == 0.0 ? 0 : int64_t(
                          1'000'000'000.0 / mDisplayInfo.refreshRate), 0);
  
@@ -5848,7 +7096,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
          // because we don't have a "present" call, we use flush so the driver can submit
          // the command buffer; we do this before driver.endFrame() to mimic what would
          // happen with Renderer::beginFrame/endFrame.
-@@ -731,6 +767,9 @@ void FRenderer::renderStandaloneView(FView const* view) {
+@@ -731,6 +769,9 @@ void FRenderer::renderStandaloneView(FView const* view) {
  
          engine.submitFrame();
  
@@ -5858,7 +7106,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
          driver.endFrame(0);
  
          // engine.flush() has already been called by renderInternal(), but we need an extra one
-@@ -762,6 +801,12 @@ void FRenderer::render(FView const* view) {
+@@ -762,6 +803,12 @@ void FRenderer::render(FView const* view) {
  
  void FRenderer::renderInternal(DriverApi& driver, FView const* view, bool const flush) {
      FEngine& engine = mEngine;
@@ -5871,7 +7119,7 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
  
      FILAMENT_CHECK_PRECONDITION(!view->hasPostProcessPass() ||
              engine.hasFeatureLevel(FeatureLevel::FEATURE_LEVEL_1))
-@@ -1347,6 +1392,7 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
+@@ -1347,6 +1394,7 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
      // This one doesn't need to be a FrameGraph pass because it always happens by construction
      // (i.e. it won't be culled, unless everything is culled), so no need to complexify things.
      passBuilder.variant(variant);
@@ -5879,6 +7127,118 @@ index 5fcde1b0fb11f9088aee7a6c535868e56c794343..c133676f3f97e9b4bac8d0402552756e
  
      // We need to specify the ColorPassDescriptorSet (which is in fact a collection of descriptor
      // sets) because the layout can change based on the material used, and that's only known
+@@ -1469,27 +1517,95 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
+ 
+     const_cast<RenderPass&>(pass).finalize(engine, driver);
+ 
+-    // the color pass itself + color-grading as subpass if needed
+-    auto colorPassOutput = RendererUtils::colorPass(fg, "Color Pass", mEngine, view, {
+-                .shadows = blackboard.get<FrameGraphTexture>("shadows"),
+-                .ssao = blackboard.get<FrameGraphTexture>("ssao"),
+-                .ssr = ssrConfig.ssr,
+-                .structure = structure
+-            },
+-            colorBufferDesc, config, colorGradingConfigForColor, pass.getExecutor());
+-
+-    if (UTILS_UNLIKELY(hasScreenSpaceRefraction)) {
+-        // This cancels the colorPass() call above if refraction is active.
+-        // The color pass + refraction + color-grading as subpass if needed
+-        colorPassOutput = RendererUtils::refractionPass(fg, mEngine, view, {
++    FrameGraphId<FrameGraphTexture> opaquePrepassDepth;
++    bool const canUseOpaquePrepass = [&] {
++        if (!view.isOpaqueDepthPrepassEnabled() || engine.getBackend() != Backend::VULKAN ||
++                engine.getShaderModel() != ShaderModel::DESKTOP ||
++                config.enabledStencilBuffer || config.isAutoDepthResolveSupported ||
++                channelDepthClearMask.any() ||
++                view.hasStereo() || isRenderingMultiview || view.isMotionVectorsActive() ||
++                hasObjectMotionVectorsPass || view.getBlendMode() != BlendMode::OPAQUE ||
++                !hasPostProcess || !useIntermediateBuffer || config.scale.x != 1.0f || config.scale.y != 1.0f ||
++                config.logicalViewport.left < 0 || config.logicalViewport.bottom < 0 ||
++                config.logicalViewport.width == 0 || config.logicalViewport.height == 0 ||
++                uint64_t(config.logicalViewport.left) + config.logicalViewport.width >
++                        config.physicalViewport.width ||
++                uint64_t(config.logicalViewport.bottom) + config.logicalViewport.height >
++                        config.physicalViewport.height ||
++                (config.msaa != 1 && config.msaa != 4)) return false;
++        // An arbitrary custom callback can change uniforms/resources between
++        // draws. A replay is admitted only for a pure ordinary command slice.
++        if (std::any_of(pass.begin(), pass.end(), [](RenderPass::Command const& command) {
++                return (command.key & RenderPass::CUSTOM_MASK) !=
++                        uint64_t(RenderPass::CustomCommand::PASS);
++            })) return false;
++        // Unknown depth-writing state anywhere in the visible sequence can
++        // make advance depth publication observable. Preserve the old path.
++        auto const& soa = view.getRenderableData();
++        auto const* primitives = soa.data<FScene::PRIMITIVES>();
++        auto const* visibility = soa.data<FScene::VISIBILITY_STATE>();
++        auto const range = view.getVisibleRenderables();
++        for (uint32_t i = range.first; i < range.last; ++i) {
++            for (auto const& primitive : primitives[i]) {
++                auto const* mi = primitive.getMaterialInstance();
++                if (!mi) continue;
++                // This transparency mode emits a depth-only first command
++                // even when the instance's ordinary depthWrite bit is false.
++                if (mi->getTransparencyMode() == TransparencyMode::TWO_PASSES_ONE_SIDE) return false;
++                // Advance depth may suppress any later depth-tested draw,
++                // including masked or blended non-occluders. Their shader
++                // needs its own side-effect proof; discard alone is allowed.
++                if (!mi->getMaterial()->isDepthRejectionSafe() ||
++                        !mi->getMaterial()->isDepthPrepassVertexReplaySafe()) return false;
++                auto const offset = mi->getPolygonOffset();
++                auto const stencil = mi->getStencilState();
++                if (mi->isStencilWriteEnabled() ||
++                        stencil.front.stencilFunc != StencilState::StencilFunction::A ||
++                        stencil.back.stencilFunc != StencilState::StencilFunction::A ||
++                        (mi->isDepthWriteEnabled() &&
++                         (!mi->isColorWriteEnabled() ||
++                          !mi->getMaterial()->isColorWriteEnabled() ||
++                          mi->getDepthFunc() != RasterState::DepthFunc::GE ||
++                          visibility[i].channel != RenderableManager::Builder::DEFAULT_CHANNEL ||
++                          visibility[i].priority != 4 ||
++                          offset.slope != 0.0f || offset.constant != 0.0f))) return false;
++            }
++        }
++        return true;
++    }();
++    if (canUseOpaquePrepass) {
++        auto prepassExecutor = pass.getExecutor();
++        if (prepassExecutor.enableOpaqueDepthPrepass()) {
++            opaquePrepassDepth = RendererUtils::opaqueDepthPrepass(fg, engine, view, {
+                         .shadows = blackboard.get<FrameGraphTexture>("shadows"),
+                         .ssao = blackboard.get<FrameGraphTexture>("ssao"),
+                         .ssr = ssrConfig.ssr,
+-                .structure = structure
+-            }, config, ssrConfig, colorGradingConfigForColor,
+-             pass, firstRefractionCommand);
++                        .structure = structure
++                    }, config, std::move(prepassExecutor));
++        }
+     }
+ 
++    // Choose one owner for the input depth version. The ordinary unused
++    // color pass cannot publish a write before the refraction split consumes it.
++    RendererUtils::ColorPassInput const colorInput{
++        .depth = opaquePrepassDepth,
++        .shadows = blackboard.get<FrameGraphTexture>("shadows"),
++        .ssao = blackboard.get<FrameGraphTexture>("ssao"),
++        .ssr = ssrConfig.ssr,
++        .structure = structure,
++        .opaqueDepthPrepass = bool(opaquePrepassDepth)
++    };
++    auto colorPassOutput = [&] {
++        if (UTILS_UNLIKELY(hasScreenSpaceRefraction)) {
++            return RendererUtils::refractionPass(fg, mEngine, view, colorInput,
++                    config, ssrConfig, colorGradingConfigForColor,
++                    pass, firstRefractionCommand);
++        }
++        return RendererUtils::colorPass(fg, "Color Pass", mEngine, view,
++                colorInput, colorBufferDesc, config, colorGradingConfigForColor,
++                pass.getExecutor());
++    }();
++
+     if (colorGradingConfig.customResolve) {
+         assert_invariant(fg.getDescriptor(colorPassOutput.linearColor).samples <= 1);
+         // TODO: we have to "uncompress" (i.e. detonemap) the color buffer here because it's used
 diff --git a/filament/src/details/Renderer.h b/filament/src/details/Renderer.h
 index 86b0c1c2a0c07f20b9a3bdf7b30bb92456073d63..b1de2681599fb24bb4d6f1223febb2cc22569532 100644
 --- a/filament/src/details/Renderer.h
@@ -5968,10 +7328,22 @@ index 918b4743dcecb1b2a3e47d06c5f7bdc6722745d1..c61145e3123816e6dc8bc198fea1cfa0
      }
  
 diff --git a/filament/src/details/View.h b/filament/src/details/View.h
-index 06ac1a24364cdb4e0bbec79a3799c29c456d7aa7..68e445c3a73fcba0954c5af56045cdd4c2eecc2d 100644
+index 06ac1a24364cdb4e0bbec79a3799c29c456d7aa7..01b500c97fb33b5fdcdcafe3d34bf529cda37ba9 100644
 --- a/filament/src/details/View.h
 +++ b/filament/src/details/View.h
-@@ -307,6 +307,23 @@ public:
+@@ -267,6 +267,11 @@ public:
+ 
+     bool isScreenSpaceReflectionEnabled() const noexcept { return mScreenSpaceReflectionsOptions.enabled; }
+ 
++    void setOpaqueDepthPrepassEnabled(bool const enabled) noexcept {
++        mOpaqueDepthPrepassEnabled = enabled;
++    }
++    bool isOpaqueDepthPrepassEnabled() const noexcept { return mOpaqueDepthPrepassEnabled; }
++
+     void setStencilBufferEnabled(bool const enabled) noexcept { mStencilBufferEnabled = enabled; }
+ 
+     bool isStencilBufferEnabled() const noexcept { return mStencilBufferEnabled; }
+@@ -307,6 +312,23 @@ public:
          return mMultiSampleAntiAliasingOptions.sampleCount;
      }
  
@@ -5995,7 +7367,7 @@ index 06ac1a24364cdb4e0bbec79a3799c29c456d7aa7..68e445c3a73fcba0954c5af56045cdd4
      void setAntiAliasing(AntiAliasing const type) noexcept {
          mAntiAliasing = type;
      }
-@@ -704,6 +721,7 @@ private:
+@@ -704,10 +726,12 @@ private:
  
      uint8_t mVisibleLayers = 0x1;
      AntiAliasing mAntiAliasing = AntiAliasing::FXAA;
@@ -6003,6 +7375,11 @@ index 06ac1a24364cdb4e0bbec79a3799c29c456d7aa7..68e445c3a73fcba0954c5af56045cdd4
      Dithering mDithering = Dithering::TEMPORAL;
      bool mShadowingEnabled = true;
      bool mScreenSpaceRefractionEnabled = true;
+     bool mHasPostProcessPass = true;
++    bool mOpaqueDepthPrepassEnabled = false;
+     bool mStencilBufferEnabled = false;
+     AmbientOcclusionOptions mAmbientOcclusionOptions{};
+     ShadowType mShadowType = ShadowType::PCF;
 diff --git a/filament/src/ds/ColorPassDescriptorSet.cpp b/filament/src/ds/ColorPassDescriptorSet.cpp
 index 37a83337a91b73175992184dede57bab0efdc4e1..49a91f0f7033be0f1ad4ef02590b98fe57da971d 100644
 --- a/filament/src/ds/ColorPassDescriptorSet.cpp
@@ -7286,10 +8663,10 @@ index 5eb08579d4ceb26df583a41f2a791804c57629f9..8db5662c53148fa9d198ab4a467c6567
 +#endif
 +}
 diff --git a/shaders/src/surface_light_directional.fs b/shaders/src/surface_light_directional.fs
-index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..59e1626a000e8ae12732cdcf281afe6568387233 100644
+index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..44c58b271d8907cccf20d10ede0ed08fed5c8cb6 100644
 --- a/shaders/src/surface_light_directional.fs
 +++ b/shaders/src/surface_light_directional.fs
-@@ -31,6 +31,130 @@ Light getDirectionalLight() {
+@@ -31,6 +31,142 @@ Light getDirectionalLight() {
      return light;
  }
  
@@ -7417,13 +8794,28 @@ index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..59e1626a000e8ae12732cdcf281afe65
 +
 +#endif
 +
++bool shouldTraceDirectionalContactShadow() {
++#if defined(TARGET_VULKAN_ENVIRONMENT) && !defined(TARGET_MOBILE) && \
++        !defined(MATERIAL_HAS_CUSTOM_SURFACE_SHADING) && !defined(HAS_CUSTOM_OUTPUT)
++    // Material, geometric-normal, specular-AA and map derivatives are already
++    // evaluated. Built-in shading only consumes contact visibility locally, so
++    // derivative helpers can bypass its rays while keeping all visible work.
++    return !gl_HelperInvocation;
++#else
++    return true;
++#endif
++}
++
  void evaluateDirectionalLight(const MaterialInputs material,
          const PixelParams pixel, inout vec3 color) {
  
-@@ -72,7 +196,11 @@ void evaluateDirectionalLight(const MaterialInputs material,
+@@ -71,8 +207,13 @@ void evaluateDirectionalLight(const MaterialInputs material,
+ #endif
          }
          if ((frameUniforms.directionalShadows & 0x2) != 0 && visibility > 0.0) {
-             if ((object_uniforms_flagsChannels & FILAMENT_OBJECT_CONTACT_SHADOWS_BIT) != 0) {
+-            if ((object_uniforms_flagsChannels & FILAMENT_OBJECT_CONTACT_SHADOWS_BIT) != 0) {
++            if ((object_uniforms_flagsChannels & FILAMENT_OBJECT_CONTACT_SHADOWS_BIT) != 0 &&
++                    shouldTraceDirectionalContactShadow()) {
 +#if defined(SUN_AS_AREA_LIGHT) && defined(HAS_ATTRIBUTE_TANGENTS) && MATERIAL_FEATURE_LEVEL >= 1
 +                ssContactShadowOcclusion = screenSpaceSunContactShadow(light.l);
 +#else
@@ -7432,6 +8824,23 @@ index b2eb5d6dfe4293388cf74677441cf9ba05ef6a0a..59e1626a000e8ae12732cdcf281afe65
              }
          }
  
+diff --git a/shaders/src/surface_main.vs b/shaders/src/surface_main.vs
+index 22d9349b823bbb36c9f34fc566387ed4bc642b95..3257e9585d8fc02ae302813e7123eb729cd962a2 100644
+--- a/shaders/src/surface_main.vs
++++ b/shaders/src/surface_main.vs
+@@ -6,6 +6,12 @@
+  * We can use this to remove all code that doesn't participate in the depth computation.
+  */
+ 
++#if defined(TARGET_VULKAN_ENVIRONMENT) && !defined(TARGET_MOBILE) && !defined(VARIANT_DEPTH)
++// The optional opaque prepass reuses this exact color vertex program with no
++// fragment stage. Preserve position across those otherwise distinct pipelines.
++invariant gl_Position;
++#endif
++
+ void main() {
+ #if defined(FILAMENT_HAS_FEATURE_INSTANCING)
+ #   if defined(TARGET_METAL_ENVIRONMENT) || defined(TARGET_VULKAN_ENVIRONMENT) || defined(TARGET_WEBGPU_ENVIRONMENT)
 diff --git a/shaders/src/surface_shading_model_cloth.fs b/shaders/src/surface_shading_model_cloth.fs
 index 53d20d121d1c9e2210997af038fb6596e79fb6ae..d2d1a8043a4c4108c0963a52be6052644ee63ab6 100644
 --- a/shaders/src/surface_shading_model_cloth.fs

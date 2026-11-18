@@ -27,6 +27,7 @@
 #include "benchmark/build_info.h"
 #include "benchmark/benchmark_system.h"
 #include "benchmark/driver_check.h"
+#include "benchmark/gpu_thermal_warning.h"
 #include "engine/cli_parser.h"   // heaven::BenchConfig (Working_Configuration snapshot)
 #include "rhi/overlay/config_edit.h"
 
@@ -65,10 +66,20 @@ struct DebugSidebarInfo {
     double device_vram_used_mb = -1.0;
     double device_vram_total_mb = -1.0;
     double gpu_temperature_c = -1.0;
+    double gpu_vram_temperature_c = -1.0;
+    double gpu_temperature_high_c = -1.0;
+    double gpu_temperature_critical_c = -1.0;
+    double gpu_vram_temperature_high_c = -1.0;
+    double gpu_vram_temperature_critical_c = -1.0;
     double gpu_power_w = -1.0;
+    double gpu_power_limit_w = -1.0;
     double gpu_core_clock_mhz = -1.0;
     double gpu_memory_clock_mhz = -1.0;
     double gpu_fan_rpm = -1.0;
+    double gpu_telemetry_sample_age_seconds = -1.0;
+    std::uint64_t gpu_telemetry_sample_monotonic_ns = 0;
+    std::string gpu_telemetry_reason;
+    std::string gpu_throttle_reason;
 
     uint64_t vertices = 0;
     uint64_t triangles = 0;
@@ -118,6 +129,9 @@ public:
     // backend/driver telemetry. Unsupported live metrics remain visibly N/A.
     void draw_debug_sidebar(const DebugSidebarInfo& info,
                             const FrameGenerationStatus& frame_generation = {});
+    // Call every normal UI frame, independently of sidebar visibility. This
+    // noninteractive bottom-corner advisory leaves all toolbar controls usable.
+    void draw_thermal_warning(const DebugSidebarInfo& info);
     void set_microprofiler_snapshot(std::shared_ptr<const profile::Snapshot> snapshot,
                                     std::string feedback = {}) {
         microprofiler_.set_snapshot(std::move(snapshot), std::move(feedback));
@@ -159,6 +173,7 @@ public:
     [[nodiscard]] bool credits_open() const { return credits_open_; }
 
 private:
+    GpuThermalWarning thermal_warning_;
     void draw_driver_notice();
     void draw_credits();
 

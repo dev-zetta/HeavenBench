@@ -19,6 +19,7 @@
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
 #include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/ToneMapper.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
@@ -28,13 +29,18 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -121,20 +127,46 @@ struct FrameCounts {
 
 enum class FrameResult { Accepted, Rejected, Failed };
 
+struct HelperLaneOptions {
+    bool dense = false;
+    bool masked = false;
+    std::uint8_t samples = 1;
+};
+
+constexpr std::uint8_t helper_alpha_texel(std::uint32_t x, std::uint32_t y) {
+    const auto stripe = (x + y / 8) % 16;
+    return stripe < 4 ? 0 : stripe < 8
+        ? static_cast<std::uint8_t>((stripe - 3) * 51) : 255;
+}
+
 class FiniteSunFixture {
 public:
-    FiniteSunFixture(filament::Engine& engine, bool blocker, bool sun = true)
+    FiniteSunFixture(filament::Engine& engine, bool blocker, bool sun = true,
+                     const HelperLaneOptions* helper = nullptr)
         : engine_(engine), textures_(engine), materials_(engine, textures_),
-          meshes_(engine), blocker_(blocker), sun_(sun), width_(blocker ? 512u : 128u),
-          height_(blocker ? 256u : 128u) {
+          meshes_(engine), blocker_(blocker), sun_(sun), helper_lanes_(helper != nullptr),
+          helper_(helper ? *helper : HelperLaneOptions{}),
+          width_(helper ? 256u : blocker ? 512u : 128u),
+          height_(helper ? 128u : blocker ? 256u : 128u) {
         textures_.create_placeholders();
         if (!materials_.load_base_materials()) {
             throw std::runtime_error("Finite Sun fixture material load failed");
         }
         materials_.set_colored_penumbra(false);
+        if (helper_lanes_) {
+            materials_.set_specular_aa(true, QualityKnobs{});
+            create_helper_textures();
+        }
         renderer_ = engine_.createRenderer();
         renderer_->setDisplayInfo({.refreshRate = 0.0f});
         renderer_->setFrameRateOptions({.interval = 0});
+        if (helper_lanes_) {
+            // Alpha-discarded samples must see a known background every frame.
+            // Without a color clear, a reused single-sample target may retain
+            // another fixture's pixels in holes; that is not coverage evidence.
+            renderer_->setClearOptions({.clearColor = {0, 0, 0, 0},
+                                        .clear = true, .discard = true});
+        }
         swapchain_ = engine_.createSwapChain(width_, height_);
         camera_entity_ = utils::EntityManager::get().create();
         auto* camera = engine_.createCamera(camera_entity_);
@@ -167,14 +199,19 @@ public:
         view_->setViewport({0, 0, width_, height_});
         view_->setShadowingEnabled(true);
         view_->setPostProcessingEnabled(true);
+        if (helper_lanes_) view_->setBlendMode(filament::View::BlendMode::OPAQUE);
         view_->setAntiAliasing(filament::AntiAliasing::NONE);
         view_->setMultiSampleAntiAliasingOptions({.enabled = false});
+        if (helper_lanes_) {
+            view_->setMultiSampleAntiAliasingOptions({.enabled = helper_.samples > 1,
+                                                     .sampleCount = helper_.samples});
+        }
         filament::AmbientOcclusionOptions ao;
         ao.enabled = false;
         ao.resolution = 1.0f;
         view_->setAmbientOcclusionOptions(ao);
         filament::TemporalAntiAliasingOptions taa;
-        taa.enabled = true;
+        taa.enabled = !helper_lanes_;
         view_->setTemporalAntiAliasingOptions(taa);
         view_->setDithering(filament::Dithering::NONE);
         filament::LinearToneMapper linear_mapper;
@@ -186,7 +223,15 @@ public:
 
         const auto smooth = blocker_ ? glm::vec3(0, 0, 1)
                                     : glm::normalize(glm::vec3(1, 0, 1));
-        add_quad("receiver", {-4, -4, -6}, {4, 4, -6}, smooth, false, true, false);
+        if (helper_lanes_) {
+            // Binary fractions keep both grids' positions and UVs exact. The
+            // dense cells project to roughly 0.51x0.52 pixels, with triangle
+            // area below 0.14 pixel: every measured pixel borders microtriangles.
+            add_quad("receiver", {-0.0625f, -0.03125f, -6}, {0.0625f, 0.03125f, -6},
+                     smooth, false, true, helper_.masked);
+        } else {
+            add_quad("receiver", {-4, -4, -6}, {4, 4, -6}, smooth, false, true, false);
+        }
         if (blocker_) {
             add_quad("blocker", {0, -0.10f, -5.88f}, {0.10f, 0.10f, -5.88f},
                      {0, 0, 1}, false, false, false);
@@ -211,6 +256,13 @@ public:
     }
 
     ~FiniteSunFixture() {
+        if (helper_receiver_) {
+            const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::LINEAR,
+                filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::REPEAT);
+            helper_receiver_->setParameter("baseColorMap", textures_.placeholder(), sampler);
+            helper_receiver_->setParameter("normalMap", textures_.placeholder_normal(), sampler);
+            engine_.flushAndWait();
+        }
         view_->setRenderTarget(nullptr);
         engine_.destroy(view_);
         for (auto entity : entities_) {
@@ -222,6 +274,8 @@ public:
         engine_.destroy(light_);
         utils::EntityManager::get().destroy(light_);
         engine_.destroy(scene_);
+        if (helper_color_) engine_.destroy(helper_color_);
+        if (helper_normal_) engine_.destroy(helper_normal_);
         engine_.destroy(grading_);
         engine_.destroy(target_);
         engine_.destroy(color_);
@@ -307,6 +361,38 @@ public:
     FrameCounts counts() const { return counts_; }
 
 private:
+    void create_helper_textures() {
+        constexpr std::uint32_t size = 64;
+        std::vector<std::uint8_t> color(size * size * 4);
+        std::vector<std::uint8_t> normal(color.size());
+        for (std::uint32_t y = 0; y < size; ++y) {
+            for (std::uint32_t x = 0; x < size; ++x) {
+                const auto index = (static_cast<std::size_t>(y) * size + x) * 4;
+                color[index] = color[index + 1] = color[index + 2] = 180;
+                color[index + 3] = helper_.masked ? helper_alpha_texel(x, y) : 255;
+                // A real sampled normal field exercises normal derivatives and
+                // geometric specular AA on both sides of microtriangle edges.
+                normal[index] = ((x / 4 + y / 4) % 2) == 0 ? 104 : 184;
+                normal[index + 1] = (y / 4) % 2 == 0 ? 112 : 144;
+                normal[index + 2] = 250;
+                normal[index + 3] = 255;
+            }
+        }
+        const auto upload = [&](const std::vector<std::uint8_t>& bytes) {
+            auto* texture = filament::Texture::Builder().width(size).height(size).levels(1)
+                .format(filament::Texture::InternalFormat::RGBA8).build(engine_);
+            if (!texture) throw std::runtime_error("Helper-lane texture creation failed");
+            texture->setImage(engine_, 0, filament::backend::PixelBufferDescriptor(
+                bytes.data(), bytes.size(), filament::backend::PixelDataFormat::RGBA,
+                filament::backend::PixelDataType::UBYTE));
+            return texture;
+        };
+        helper_color_ = upload(color);
+        helper_normal_ = upload(normal);
+        // Both local upload buffers stay alive until the driver consumes them.
+        engine_.flushAndWait();
+    }
+
     void add_quad(const char* role, glm::vec3 lower, glm::vec3 upper, glm::vec3 normal,
                   bool cast_shadows, bool receive_contact, bool double_sided) {
         Mesh mesh;
@@ -324,16 +410,60 @@ private:
             surface.vertices.push_back(vertex);
         }
         surface.indices = {0, 1, 2, 0, 2, 3};
+        if (helper_lanes_ && helper_.dense && receive_contact) {
+            constexpr std::uint32_t columns = 512;
+            constexpr std::uint32_t rows = 256;
+            surface.vertices.clear();
+            surface.indices.clear();
+            surface.vertices.reserve(static_cast<std::size_t>(columns + 1) * (rows + 1));
+            surface.indices.reserve(static_cast<std::size_t>(columns) * rows * 6);
+            for (std::uint32_t y = 0; y <= rows; ++y) {
+                for (std::uint32_t x = 0; x <= columns; ++x) {
+                    Vertex vertex{};
+                    vertex.u = static_cast<float>(x) / static_cast<float>(columns);
+                    vertex.v = static_cast<float>(y) / static_cast<float>(rows);
+                    vertex.px = lower.x + (upper.x - lower.x) * vertex.u;
+                    vertex.py = lower.y + (upper.y - lower.y) * vertex.v;
+                    vertex.pz = lower.z;
+                    vertex.nx = normal.x; vertex.ny = normal.y; vertex.nz = normal.z;
+                    surface.vertices.push_back(vertex);
+                    if (x < columns && y < rows) {
+                        const auto a = y * (columns + 1) + x;
+                        const auto b = a + 1;
+                        const auto d = a + columns + 1;
+                        const auto c = d + 1;
+                        surface.indices.insert(surface.indices.end(), {a, b, c, a, c, d});
+                    }
+                }
+            }
+        }
         mesh.surfaces.push_back(std::move(surface));
         const auto gpu = meshes_.upload(mesh);
         if (gpu.surfaces.empty()) throw std::runtime_error("Finite Sun mesh upload failed");
         const auto buffers = meshes_.find(gpu.surfaces.front().handle);
         GpuMaterial definition{};
         definition.two_sided = double_sided;
+        if (helper_lanes_ && receive_contact && helper_.masked) definition.alpha_ref = 0.5f;
         auto* material = materials_.get_or_create("finite-sun-fixture", role, definition);
         if (!material) throw std::runtime_error("Finite Sun material instance failed");
-        if (receive_contact && std::strcmp(material->getMaterial()->getName(), "heaven_lit") != 0) {
+        const auto* receiver_material = helper_lanes_ && helper_.masked
+            ? "heaven_lit_twosided" : "heaven_lit";
+        if (receive_contact && std::strcmp(material->getMaterial()->getName(), receiver_material) != 0) {
             throw std::runtime_error("Finite Sun receiver did not route to heaven_lit");
+        }
+        if (helper_lanes_ && receive_contact) {
+            helper_receiver_ = material;
+            const filament::TextureSampler sampler(filament::TextureSampler::MinFilter::LINEAR,
+                filament::TextureSampler::MagFilter::LINEAR, filament::TextureSampler::WrapMode::REPEAT);
+            material->setParameter("baseColorMap", helper_color_, sampler);
+            material->setParameter("hasBaseColor", true);
+            material->setParameter("normalMap", helper_normal_, sampler);
+            material->setParameter("hasNormal", true);
+            material->setParameter("normalStrength", 1.0f);
+            if (!(material->getSpecularAntiAliasingVariance() > 0.0f &&
+                  material->getSpecularAntiAliasingThreshold() > 0.0f)) {
+                throw std::runtime_error("Helper-lane geometric specular AA is inactive");
+            }
         }
         const auto entity = utils::EntityManager::get().create();
         const auto center = 0.5f * (lower + upper);
@@ -361,6 +491,8 @@ private:
     MeshStore meshes_;
     bool blocker_;
     bool sun_;
+    bool helper_lanes_;
+    HelperLaneOptions helper_;
     std::uint32_t width_, height_;
     FrameCounts counts_;
     filament::Renderer* renderer_ = nullptr;
@@ -368,6 +500,9 @@ private:
     filament::Scene* scene_ = nullptr;
     filament::View* view_ = nullptr;
     filament::Texture* color_ = nullptr;
+    filament::Texture* helper_color_ = nullptr;
+    filament::Texture* helper_normal_ = nullptr;
+    filament::MaterialInstance* helper_receiver_ = nullptr;
     filament::RenderTarget* target_ = nullptr;
     filament::ColorGrading* grading_ = nullptr;
     utils::Entity camera_entity_, light_;
@@ -379,24 +514,24 @@ struct Capture {
     double worst_mean_frame_delta = 0.0;
 };
 
-bool warm_up(FiniteSunFixture& fixture) {
+bool warm_up(FiniteSunFixture& fixture, int frames = kWarmupFrames) {
     int accepted = 0;
-    for (int attempts = 0; accepted < kWarmupFrames && attempts < 4 * kWarmupFrames; ++attempts) {
+    for (int attempts = 0; accepted < frames && attempts < 4 * frames; ++attempts) {
         const auto result = fixture.frame();
         if (result == FrameResult::Failed) return false;
         if (result == FrameResult::Accepted) ++accepted;
     }
-    if (accepted != kWarmupFrames) {
+    if (accepted != frames) {
         std::printf("%s warmup exhausted retries after %d accepted frames\n", kTag, accepted);
     }
-    return accepted == kWarmupFrames;
+    return accepted == frames;
 }
 
-bool capture_average(FiniteSunFixture& fixture, Capture& capture) {
+bool capture_average(FiniteSunFixture& fixture, Capture& capture, int frames = kMeasuredFrames) {
     Pixels previous, current;
     std::vector<double> sum;
     int accepted = 0;
-    for (int attempts = 0; accepted < kMeasuredFrames && attempts < 4 * kMeasuredFrames; ++attempts) {
+    for (int attempts = 0; accepted < frames && attempts < 4 * frames; ++attempts) {
         const auto result = fixture.frame(&current);
         if (result == FrameResult::Failed) return false;
         if (result == FrameResult::Rejected) continue;
@@ -428,13 +563,13 @@ bool capture_average(FiniteSunFixture& fixture, Capture& capture) {
         previous.swap(current);
         ++accepted;
     }
-    if (accepted != kMeasuredFrames) {
+    if (accepted != frames) {
         std::printf("%s measurement exhausted retries after %d accepted frames\n", kTag, accepted);
         return false;
     }
     capture.average.resize(sum.size());
     std::transform(sum.begin(), sum.end(), capture.average.begin(),
-                   [](double value) { return static_cast<float>(value / kMeasuredFrames); });
+                   [frames](double value) { return static_cast<float>(value / frames); });
     return true;
 }
 
@@ -574,6 +709,227 @@ bool blocker_case(filament::Engine& engine) {
            worst_error <= 0.15 && mean_error <= 0.07 &&
            intermediate >= 8 && umbra <= 0.05 && exterior >= 0.95;
 }
+
+struct HelperLaneImages {
+    std::array<Capture, 2> on;
+    std::array<Capture, 2> off;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+enum class AlphaNeighborhood { Transparent, Opaque, FractionalOrEdge };
+
+AlphaNeighborhood helper_alpha_neighborhood(std::uint32_t x, std::uint32_t y,
+                                             std::uint32_t width, std::uint32_t height) {
+    bool all_zero = true, all_one = true;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const double world_x = (((double(x) + 0.5 + dx) / width * 2.0 - 1.0) *
+                                    kBlockerHalfWidth) / std::cos(radians(kSideAngleDegrees));
+            const double u = (world_x + 0.0625) / 0.125;
+            for (int orientation : {-1, 1}) {
+                // Raw target-row orientation differs across backends. Requiring
+                // both Y orientations is conservative without guessing a flip.
+                const double world_y = orientation *
+                    ((double(y) + 0.5 + dy) / height * 2.0 - 1.0) * kBlockerHalfHeight;
+                const double v = (world_y + 0.03125) / 0.0625;
+                // The full derivative neighborhood must have constant alpha,
+                // not just the covered pixel. Reserve 0.001 texel for the
+                // affine interpolation's FLOAT rounding at texel boundaries.
+                constexpr double texel_reserve = 0.001;
+                const auto min_x = static_cast<int>(std::floor(u * 64.0 - 0.5 - texel_reserve));
+                const auto max_x = static_cast<int>(std::floor(u * 64.0 - 0.5 + texel_reserve));
+                const auto min_y = static_cast<int>(std::floor(v * 64.0 - 0.5 - texel_reserve));
+                const auto max_y = static_cast<int>(std::floor(v * 64.0 - 0.5 + texel_reserve));
+                for (int base_y = min_y; base_y <= max_y; ++base_y) {
+                    for (int base_x = min_x; base_x <= max_x; ++base_x) {
+                        for (int ty : {0, 1}) {
+                            for (int tx : {0, 1}) {
+                                const auto wrapped_x = static_cast<std::uint32_t>(((base_x + tx) % 64 + 64) % 64);
+                                const auto wrapped_y = static_cast<std::uint32_t>(((base_y + ty) % 64 + 64) % 64);
+                                const auto alpha = helper_alpha_texel(wrapped_x, wrapped_y);
+                                all_zero = all_zero && alpha == 0;
+                                all_one = all_one && alpha == 255;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (all_one) return AlphaNeighborhood::Opaque;
+    if (all_zero) return AlphaNeighborhood::Transparent;
+    return AlphaNeighborhood::FractionalOrEdge;
+}
+
+bool dump_helper_capture(const Capture& capture, std::uint32_t width, std::uint32_t height,
+                         std::uint8_t samples, bool masked, std::size_t geometry, bool contact) {
+    const auto* configured = std::getenv("HEAVEN_SMOKE_HELPER_DUMP_DIR");
+    if (!configured || !*configured) return true;
+    static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
+    const std::filesystem::path directory(configured);
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (error) {
+        std::printf("%s helper dump directory failed: %s\n", kTag, error.message().c_str());
+        return false;
+    }
+    const std::string name = std::string(masked ? "masked-" : "opaque-") +
+        std::to_string(static_cast<unsigned int>(samples)) + "x-" +
+        (geometry == 0 ? "coarse-" : "dense-") + (contact ? "on" : "off");
+    const auto bytes = capture.average.size() * sizeof(float);
+    const auto raw_path = directory / (name + ".rgba32f");
+    std::ofstream raw(raw_path, std::ios::binary | std::ios::out | std::ios::noreplace);
+    if (!raw) {
+        std::printf("%s helper FLOAT dump cannot create exclusive file %s\n", kTag,
+                    raw_path.string().c_str());
+        return false;
+    }
+    raw.write(reinterpret_cast<const char*>(capture.average.data()), static_cast<std::streamsize>(bytes));
+    raw.close();
+    if (!raw) return false;
+    std::ofstream metadata(directory / (name + ".json"), std::ios::out | std::ios::noreplace);
+    metadata << "{\n  \"schema\":1,\n  \"width\":" << width << ",\n  \"height\":" << height
+        << ",\n  \"channels\":4,\n  \"component\":\"IEEE754_FLOAT32\",\n  \"byte_order\":\""
+        << (std::endian::native == std::endian::little ? "little" : "big")
+        << "\",\n  \"row_order\":\"native_readPixels\",\n  \"color\":\"linear_Rec709\",\n"
+        << "  \"averaged_frames\":8,\n  \"clear_every_frame\":true,\n  \"clear_rgba\":[0,0,0,0],\n"
+        << "  \"view_blend_mode\":\"opaque\",\n  \"bytes\":" << bytes << ",\n  \"msaa_samples\":"
+        << static_cast<unsigned int>(samples) << ",\n  \"masked_a2c\":" << (masked ? "true" : "false")
+        << ",\n  \"triangles\":" << (geometry == 0 ? 2 : 262144)
+        << ",\n  \"contact_shadows\":" << (contact ? "true" : "false") << "\n}\n";
+    metadata.close();
+    if (!metadata) return false;
+    std::printf("%s helper FLOAT dump %s (%zu bytes)\n", kTag, raw_path.string().c_str(), bytes);
+    return true;
+}
+
+bool helper_lane_case(filament::Engine& engine, std::uint8_t samples, bool masked,
+                      HelperLaneImages& images, const HelperLaneImages* opaque) {
+    constexpr int warmup_frames = 16;
+    constexpr int measured_frames = 8;
+    constexpr double maximum_pixel_delta = 0.006;
+    constexpr double maximum_mean_delta = 0.0003;
+    constexpr double maximum_ratio_delta = 0.025;
+    for (std::size_t geometry = 0; geometry < 2; ++geometry) {
+        const HelperLaneOptions options{.dense = geometry != 0, .masked = masked,
+                                        .samples = samples};
+        FiniteSunFixture fixture(engine, true, true, &options);
+        images.width = fixture.width();
+        images.height = fixture.height();
+        fixture.set_contact(false);
+        if (!warm_up(fixture, warmup_frames) ||
+            !capture_average(fixture, images.off[geometry], measured_frames)) return false;
+        if (!dump_helper_capture(images.off[geometry], images.width, images.height,
+                                  samples, masked, geometry, false)) return false;
+        fixture.set_contact(true);
+        if (!warm_up(fixture, warmup_frames) ||
+            !capture_average(fixture, images.on[geometry], measured_frames)) return false;
+        if (!dump_helper_capture(images.on[geometry], images.width, images.height,
+                                  samples, masked, geometry, true)) return false;
+    }
+
+    std::size_t pixels = 0, lit_pixels = 0, umbra_pixels = 0, exterior_pixels = 0;
+    std::size_t derivative_pixels = 0, holes = 0, alpha_edges = 0;
+    std::size_t stable_opaque_pixels = 0;
+    std::size_t stable_transparent_pixels = 0, coverage_mismatches = 0, stable_coverage_mismatches = 0;
+    double max_pixel_delta = 0.0, absolute_delta = 0.0, max_ratio_delta = 0.0;
+    double transparent_background_max_rgb = 0.0;
+    double umbra_sum = 0.0, exterior_sum = 0.0, contact_delta = 0.0;
+    double derivative_max_delta = 0.0, lowest_reference = 1.0, highest_reference = 0.0;
+    for (std::uint32_t y = images.height / 2 - 12; y < images.height / 2 + 12; ++y) {
+        for (std::uint32_t x = 1; x + 1 < images.width; ++x) {
+            const double world_x = (((double(x) + 0.5) / images.width * 2.0 - 1.0) *
+                                    kBlockerHalfWidth) / std::cos(radians(kSideAngleDegrees));
+            if (std::abs(world_x) > 0.01) continue;
+            const auto index = (static_cast<std::size_t>(y) * images.width + x) * 4;
+            const double coarse_reference = mean_rgb(images.off[0].average, index);
+            const double dense_reference = mean_rgb(images.off[1].average, index);
+            const auto alpha_neighborhood = helper_alpha_neighborhood(x, y, images.width, images.height);
+            const bool stable_alpha = alpha_neighborhood != AlphaNeighborhood::FractionalOrEdge;
+            stable_opaque_pixels += alpha_neighborhood == AlphaNeighborhood::Opaque;
+            stable_transparent_pixels += alpha_neighborhood == AlphaNeighborhood::Transparent;
+            if ((coarse_reference > 0.01) != (dense_reference > 0.01)) {
+                ++coverage_mismatches;
+                if (stable_alpha) ++stable_coverage_mismatches;
+            }
+            double pixel_delta = 0.0;
+            for (const auto* captures : {&images.on, &images.off}) {
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const double delta = std::abs(double((*captures)[0].average[index + channel]) -
+                                                          (*captures)[1].average[index + channel]);
+                    absolute_delta += delta;
+                    pixel_delta = std::max(pixel_delta, delta);
+                    if (masked && alpha_neighborhood == AlphaNeighborhood::Transparent) {
+                        transparent_background_max_rgb = std::max(transparent_background_max_rgb,
+                            std::max(std::abs(double((*captures)[0].average[index + channel])),
+                                     std::abs(double((*captures)[1].average[index + channel]))));
+                    }
+                }
+            }
+            max_pixel_delta = std::max(max_pixel_delta, pixel_delta);
+            ++pixels;
+            if (opaque) {
+                const double full_reference = mean_rgb(opaque->off[0].average, index);
+                if (full_reference > 0.01) {
+                    const double coverage = coarse_reference / full_reference;
+                    holes += coverage < 0.02;
+                    // The masked shader's authored foliage-detail multiplier
+                    // lowers fully covered normal-mapped colors by up to ~12%.
+                    // A <0.8 ratio instead detects genuine partial coverage.
+                    alpha_edges += coverage > 0.05 && coverage < 0.8;
+                }
+            }
+            if (coarse_reference <= 0.01 || dense_reference <= 0.01) continue;
+            ++lit_pixels;
+            lowest_reference = std::min(lowest_reference, coarse_reference);
+            highest_reference = std::max(highest_reference, coarse_reference);
+            const double coarse_ratio = mean_rgb(images.on[0].average, index) / coarse_reference;
+            const double dense_ratio = mean_rgb(images.on[1].average, index) / dense_reference;
+            max_ratio_delta = std::max(max_ratio_delta, std::abs(coarse_ratio - dense_ratio));
+            contact_delta += coarse_reference - mean_rgb(images.on[0].average, index);
+            if (world_x >= 0.008) { umbra_sum += dense_ratio; ++umbra_pixels; }
+            if (world_x <= -0.008) { exterior_sum += dense_ratio; ++exterior_pixels; }
+            const double gradient = std::abs(mean_rgb(images.off[0].average, index - 4) -
+                                             mean_rgb(images.off[0].average, index + 4));
+            if (gradient > 0.003) {
+                ++derivative_pixels;
+                derivative_max_delta = std::max(derivative_max_delta, pixel_delta);
+            }
+        }
+    }
+    if (pixels == 0 || lit_pixels == 0 || umbra_pixels == 0 || exterior_pixels == 0) {
+        std::printf("%s helper lanes have empty measured/bright/umbra/exterior sets: "
+                    "%zu/%zu/%zu/%zu\n", kTag, pixels, lit_pixels, umbra_pixels, exterior_pixels);
+        return false;
+    }
+    const double mean_delta = absolute_delta / (double(pixels) * 6.0);
+    const double umbra = umbra_sum / double(umbra_pixels);
+    const double exterior = exterior_sum / double(exterior_pixels);
+    const double mean_contact_delta = contact_delta / double(lit_pixels);
+    const bool correct = lit_pixels >= 256 && derivative_pixels >= 16 &&
+        lowest_reference > 0.01 && highest_reference < 0.95 &&
+        umbra <= 0.08 && exterior >= 0.90 && mean_contact_delta > 0.005 &&
+        max_pixel_delta <= maximum_pixel_delta && mean_delta <= maximum_mean_delta &&
+        max_ratio_delta <= maximum_ratio_delta && derivative_max_delta <= maximum_pixel_delta &&
+        (!masked || (holes >= 16 && stable_opaque_pixels >= 32 && stable_transparent_pixels >= 64 &&
+                     coverage_mismatches == 0 && stable_coverage_mismatches == 0 &&
+                     transparent_background_max_rgb <= 1e-6 && (samples == 1 || alpha_edges >= 8)));
+    std::printf("%s helper lanes %ux MSAA %s, coarse/dense triangles 2/262144, "
+                "measured/bright pixels %zu/%zu, FLOAT parity max/mean RGB delta %.8g/%.8g, "
+                "max contact-ratio delta %.8g, normal-derivative pixels %zu max delta %.8g, "
+                "reference range %.6f/%.6f, dense umbra/exterior %.6f/%.6f, "
+                "mean contact darkening %.6f, alpha holes/edges %zu/%zu, excluded pixels 0, "
+                "stable opaque/transparent %zu/%zu, coverage mismatches total/stable %zu/%zu, "
+                "known-transparent background max RGB %.8g: %s\n",
+                kTag, static_cast<unsigned int>(samples), masked ? "masked A2C" : "opaque",
+                pixels, lit_pixels, max_pixel_delta, mean_delta, max_ratio_delta,
+                derivative_pixels, derivative_max_delta, lowest_reference, highest_reference,
+                umbra, exterior, mean_contact_delta, holes, alpha_edges,
+                stable_opaque_pixels, stable_transparent_pixels, coverage_mismatches, stable_coverage_mismatches,
+                transparent_background_max_rgb, correct ? "PASS" : "FAIL");
+    return correct;
+}
 } // namespace
 
 CaseResult run_finite_sun_contact_case(const CaseContext& ctx) {
@@ -603,5 +959,43 @@ CaseResult run_finite_sun_contact_case(const CaseContext& ctx) {
     }
     const bool blocker_correct = blocker_case(*engine);
     return blocker_correct && passed ? CaseResult::Pass : CaseResult::Fail;
+}
+
+CaseResult run_contact_helper_lanes_case(const CaseContext& ctx) {
+    if (ctx.backend.api() != GraphicsApi::Filament || ctx.backend.render_api_name() != "Vulkan") {
+        std::printf("%s helper lanes SKIP: this dense/coarse FLOAT oracle is Vulkan-only; "
+                    "cross-tessellation MSAA centroid parity is not established on other APIs. "
+                    "The ordinary finite-Sun fixture remains independent.\n", kTag);
+        return CaseResult::Skip;
+    }
+    auto& backend = static_cast<FilamentBackend&>(ctx.backend);
+    // A selected standalone case has no earlier suite case to initialize the
+    // backend's published RenderContext. The fixture still owns only its own
+    // scenes/views; ordinary backend initialization remains the harness path.
+    if (const auto initialized = backend.init_pipelines(ctx.config); !initialized) {
+        std::printf("%s helper-lane backend initialization failed: %s\n", kTag,
+                    initialized.error().message.c_str());
+        return CaseResult::Fail;
+    }
+    auto* engine = backend.debug_render_context().engine;
+    if (!engine) {
+        std::printf("%s helper-lane active backend has no engine\n", kTag);
+        return CaseResult::Fail;
+    }
+    bool passed = true;
+    for (const std::uint8_t samples : {std::uint8_t{1}, std::uint8_t{4}}) {
+        HelperLaneImages opaque, masked;
+        const bool opaque_correct = helper_lane_case(*engine, samples, false, opaque, nullptr);
+        passed = opaque_correct && passed;
+        // Test A2C even if opaque numerical parity fails, retaining diagnostic
+        // coverage instead of hiding later modes behind an early return.
+        if (!opaque.off[0].average.empty()) {
+            const bool masked_correct = helper_lane_case(*engine, samples, true, masked, &opaque);
+            passed = masked_correct && passed;
+        } else {
+            passed = false;
+        }
+    }
+    return passed ? CaseResult::Pass : CaseResult::Fail;
 }
 } // namespace heaven::smoke

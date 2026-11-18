@@ -41,6 +41,7 @@ private:
     void draw_timeline(const profile::Snapshot& snapshot);
     void draw_details(const profile::Snapshot& snapshot);
     void draw_gpu(const profile::Snapshot& snapshot);
+    void draw_host_gpu_telemetry(const profile::Snapshot& snapshot);
     void fit(const profile::Snapshot& snapshot);
     void refresh_layout(const std::shared_ptr<const profile::Snapshot>& snapshot);
     void clamp_view(const profile::Snapshot& snapshot);
@@ -67,6 +68,8 @@ private:
     std::unordered_map<std::uint64_t, unsigned> depths_;
     std::unordered_map<std::uint64_t, unsigned> thread_depths_;
     std::vector<profile::ThreadInfo> threads_;
+    std::vector<std::size_t> host_gpu_counters_;
+    bool host_gpu_counters_truncated_ = false;
     std::string feedback_;
     std::string output_base_;
     std::string search_;

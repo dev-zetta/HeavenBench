@@ -24,6 +24,13 @@ STATISTIC_FORMATS = ("Bool32", "Int64", "Uint64", "Float64")
 PIPELINE_LOSS_FIELDS = ("dropped_pipeline_events", "overwritten_pipeline_events", "truncated_pipeline_artifacts",
                         "dropped_pipeline_headers", "dropped_pipeline_statistics", "overwritten_pipeline_statistics",
                         "dropped_pipeline_artifacts", "overwritten_pipeline_artifacts")
+# Only these observation fields vary independently of capture configuration.
+# Monitoring mode/clock, power cap, sensor limits and unknown fields remain
+# identity. Never ignore an entire rendering object or a sensor-name prefix.
+SENSOR_METADATA_OBSERVATIONS = ("gpu_sensor_sample_monotonic_ns", "gpu_sensor_reason", "gpu_sensor_throttle_reason")
+SENSOR_HARDWARE_OBSERVATIONS = ("sample_monotonic_ns", "available", "reason", "gpu_temperature_c", "vram_temperature_c",
+                                "power_w", "graphics_clock_mhz", "memory_clock_mhz", "fan_rpm", "utilization_percent",
+                                "memory_utilization_percent", "device_vram_used_mb", "throttle_reason")
 
 
 def integer(value: Any, label: str) -> int:
@@ -394,6 +401,79 @@ def analyze(data: dict[str, Any]) -> dict[str, Any]:
                        "Recorded frames are attempts/submissions, not hardware presentation timing or benchmark scores."]}
 
 
+def comparison_metadata(metadata: dict[str, str]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Separate a fixed sensor-observation allowlist from strict identity."""
+    identity = dict(metadata)
+    observations: dict[str, Any] = {}
+    if any(key in identity for key in SENSOR_METADATA_OBSERVATIONS):
+        if not identity.get("gpu_sensor_clock", "").strip():
+            raise ValueError("sensor observations require a nonempty gpu_sensor_clock contract")
+        for key in SENSOR_METADATA_OBSERVATIONS:
+            if key in identity:
+                if key == "gpu_sensor_sample_monotonic_ns":
+                    identifier(identity[key], key)
+                observations[key] = identity.pop(key)
+
+    if "rendering" not in identity:
+        return identity, observations
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate rendering metadata key: " + key)
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError("nonfinite rendering metadata constant: " + value)
+
+    def finite_float(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite rendering metadata number: " + value)
+        return number
+
+    try:
+        rendering = json.loads(identity["rendering"], object_pairs_hook=unique_object,
+            parse_constant=reject_constant, parse_float=finite_float)
+    except (ValueError, RecursionError) as error:
+        raise ValueError("comparison requires valid rendering metadata JSON: " + str(error)) from error
+    if not isinstance(rendering, dict):
+        raise ValueError("comparison rendering metadata must be an object")
+    if "hardware_telemetry" not in rendering:
+        # Preserve the preceding byte-exact identity policy for metadata with
+        # no sensor snapshot rather than normalizing unrelated JSON strings.
+        return identity, observations
+    hardware = rendering["hardware_telemetry"]
+    if not isinstance(hardware, dict):
+        raise ValueError("comparison hardware_telemetry must be an object")
+    for key in ("mode", "clock"):
+        if not isinstance(hardware.get(key), str) or not hardware[key].strip():
+            raise ValueError("comparison hardware_telemetry requires nonempty " + key)
+    for key in SENSOR_HARDWARE_OBSERVATIONS:
+        if key not in hardware:
+            continue
+        value = hardware[key]
+        if key == "sample_monotonic_ns":
+            if integer(value, key) > (1 << 64) - 1:
+                raise ValueError("hardware telemetry sample timestamp exceeds uint64")
+        elif key == "available":
+            if not isinstance(value, bool):
+                raise ValueError("hardware telemetry available must be boolean")
+        elif key in ("reason", "throttle_reason"):
+            if not isinstance(value, str) and not (key == "throttle_reason" and value is None):
+                raise ValueError("hardware telemetry reason must be a string (or null throttle reason)")
+        elif value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                    or not math.isfinite(value) or value < 0):
+            raise ValueError("hardware telemetry measurement must be finite nonnegative numeric or null: " + key)
+        observations["rendering.hardware_telemetry." + key] = hardware.pop(key)
+    # Retain all non-sensor fields and all unrecognized nested keys, including
+    # mode/clock, configured power limits, device capacity and sensor limits.
+    identity["rendering"] = json.dumps(rendering, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return identity, observations
+
+
 def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     a, b = analyze(left), analyze(right)
     if a["metadata"].get("settings_mixed") == "true" or b["metadata"].get("settings_mixed") == "true":
@@ -410,10 +490,14 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("comparison requires known nonempty identity metadata; missing/unknown fields: " + ", ".join(invalid))
     # Transient diagnostic requests and logical-device query/executable
     # enablement live outside persisted effective_settings. Requiring the
-    # complete metadata identity also refuses missing-vs-enabled modes and
-    # capture-IR compile flags; never compare them as ordinary rendering.
-    if not a["metadata"] or a["metadata"] != b["metadata"]:
+    # metadata identity refuses missing-vs-enabled modes and capture-IR compile
+    # flags. Only the fixed observed-sensor allowlist is compared separately.
+    identity_a, observations_a = comparison_metadata(a["metadata"])
+    identity_b, observations_b = comparison_metadata(b["metadata"])
+    if not identity_a or identity_a != identity_b:
         raise ValueError("comparison requires identical nonempty recorded metadata")
+    differing_observations = sorted(key for key in observations_a.keys() | observations_b.keys()
+        if key not in observations_a or key not in observations_b or observations_a[key] != observations_b[key])
     def rows(summary: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
         # Thread IDs may change between processes; named scopes aggregate only
         # for comparison. Retain per-thread identities in each single report.
@@ -435,7 +519,10 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         changes.append({"category": key[0], "name": key[1], "a_mean_exclusive_ns": av,
                         "b_mean_exclusive_ns": bv, "count_a": ar[key]["count"], "count_b": br[key]["count"],
                         "change_percent": (bv / av - 1) * 100 if av else None})
-    return {"metadata": a["metadata"], "cpu_mean_per_complete_scope": changes,
+    return {"metadata": identity_a, "sensor_observations": {
+                "a": observations_a, "b": observations_b, "differing_keys": differing_observations,
+                "qualification": "Only listed sensor observations are excluded from metadata identity. Sampling mode/clock, power cap, device VRAM capacity, driver sensor limits and every other recorded field must match. Different thermal/power states can still affect timing."},
+            "cpu_mean_per_complete_scope": changes,
             "counters_a": a["counters"], "counters_b": b["counters"],
             "gpu_workloads_a": a["gpu_workloads"], "gpu_workloads_b": b["gpu_workloads"],
             "gpu_by_view_a": a["gpu_by_view"], "gpu_by_view_b": b["gpu_by_view"],

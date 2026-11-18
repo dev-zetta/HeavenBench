@@ -53,6 +53,8 @@
 // already lists that include dir). The trivial widget callback below issues a
 // couple of ImGui:: calls so the overlay has real draw data to translate.
 #include <imgui.h>
+#include <imgui_internal.h>
+#include <SDL2/SDL.h>
 
 #include <filament/Engine.h>
 #include <filament/Material.h>
@@ -60,9 +62,18 @@
 #include <filament/RenderableManager.h>
 #include <filament/Scene.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace heaven::smoke {
 
@@ -104,6 +115,183 @@ void render_one_empty_frame(IRhiBackend& backend, const Camera& camera,
                          std::span<const int>{},
                          std::span<const GpuMesh>{},
                          resolver, camera, lighting, weather, tonemap, w, h);
+}
+
+// Fixture-only resize: the ordinary smoke window is 64x64, which cannot show
+// readable temperature text. No configuration or hardware sensor is changed.
+bool resize_thermal_fixture(const CaseContext& ctx, int width, int height) {
+    if (!ctx.window) return false;
+    ctx.window->set_drawable_size(width, height);
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        SDL_PumpEvents();
+        get_drawable_size(ctx.window->window, ctx.window->width, ctx.window->height);
+        if (ctx.window->width == width && ctx.window->height == height) {
+            ctx.backend.resize(width, height);
+            return true;
+        }
+        SDL_Delay(10);
+    }
+    return false;
+}
+
+class ThermalFixtureRestore {
+public:
+    explicit ThermalFixtureRestore(const CaseContext& ctx) : ctx_(ctx) {}
+    ~ThermalFixtureRestore() { if (!restored_) static_cast<void>(restore()); }
+    bool restore() noexcept {
+        restored_ = true;
+        try {
+            // Retire stack captures while the builder and samples are alive.
+            ctx_.backend.overlay_set_draw({});
+            return resize_thermal_fixture(ctx_, ctx_.width, ctx_.height);
+        } catch (...) {
+            return false;
+        }
+    }
+private:
+    const CaseContext& ctx_;
+    bool restored_ = false;
+};
+
+class ThermalFixtureCapture {
+public:
+    ThermalFixtureCapture() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        path = std::filesystem::temp_directory_path() /
+            ("heaven-thermal-fixture-" + std::to_string(stamp) + ".ppm");
+    }
+    ~ThermalFixtureCapture() {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+    std::filesystem::path path;
+};
+
+std::vector<unsigned char> read_thermal_fixture(const std::filesystem::path& path,
+                                              int width, int height) {
+    std::ifstream stream(path, std::ios::binary);
+    std::string magic;
+    int actual_width = 0, actual_height = 0, maximum = 0;
+    stream >> magic >> actual_width >> actual_height >> maximum;
+    char delimiter = 0;
+    stream.get(delimiter);
+    if (!stream || magic != "P6" || actual_width != width || actual_height != height ||
+        maximum != 255 || delimiter != '\n') {
+        throw std::runtime_error("thermal fixture screenshot header is invalid");
+    }
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 3);
+    stream.read(reinterpret_cast<char*>(pixels.data()),
+                static_cast<std::streamsize>(pixels.size()));
+    if (!stream || stream.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error("thermal fixture screenshot payload is invalid");
+    }
+    return pixels;
+}
+
+bool run_thermal_fixture(const CaseContext& ctx, const Camera& camera,
+                         const LightingParams& lighting, const TonemapParams& tonemap,
+                         const BenchConfig& working) {
+    if (!ctx.window || ctx.backend.api() != GraphicsApi::Filament) {
+        std::printf("%s thermal fixture unavailable without a native Filament window\n", kTag);
+        return false;
+    }
+    constexpr int width = 640, height = 360;
+    constexpr float dt = 1.0f / 60.0f;
+    OverlayUI ui;
+    DebugSidebarInfo synthetic;
+    // These deliberately hot values exist ONLY in this smoke fixture. They do
+    // not poll, override, or heat the GPU, and cannot enter a benchmark report.
+    synthetic.gpu_temperature_c = 83.0;
+    synthetic.gpu_telemetry_sample_age_seconds = 0.0;
+    synthetic.gpu_telemetry_sample_monotonic_ns = 1;
+    synthetic.gpu_telemetry_reason = "Fixture-only synthetic temperature sample";
+    BenchmarkStatus running;
+    running.state = BenchmarkState::Running;
+    bool visible = false, inert = true;
+    ImVec2 minimum, maximum;
+    ThermalFixtureRestore restore(ctx);
+    if (!resize_thermal_fixture(ctx, width, height)) {
+        throw std::runtime_error("thermal fixture drawable resize did not settle");
+    }
+    ctx.backend.overlay_set_draw([&] {
+        const auto intents = ui.build(running, working, ConfigUiState{});
+        ui.draw_thermal_warning(synthetic); // Sidebar intentionally closed.
+        inert = inert && !intents.cancel && !intents.quit && !intents.start_benchmark;
+        const auto* window = ImGui::FindWindowByName("GPU temperature advisory");
+        visible = window && window->Active;
+        if (visible) {
+            inert = inert && (window->Flags & ImGuiWindowFlags_NoInputs) == ImGuiWindowFlags_NoInputs;
+            const auto origin = ImGui::GetMainViewport()->Pos;
+            const auto scale = ImGui::GetIO().DisplayFramebufferScale;
+            minimum = ImVec2((window->Pos.x - origin.x) * scale.x,
+                             (window->Pos.y - origin.y) * scale.y);
+            maximum = ImVec2(minimum.x + window->Size.x * scale.x,
+                             minimum.y + window->Size.y * scale.y);
+        }
+    });
+    const auto draw = [&] {
+        ctx.backend.overlay_begin_frame(dt, width, height);
+        render_one_empty_frame(ctx.backend, camera, lighting, tonemap, width, height);
+    };
+    draw();
+    if (visible) throw std::runtime_error("one synthetic High sample showed a warning");
+    synthetic.gpu_telemetry_sample_monotonic_ns = 2;
+
+    const auto capture = [&](const char* name, bool extreme) {
+        // Two UI frames settle auto-size before recording window bounds. The
+        // sample identity is unchanged, so UI frames cannot fake persistence.
+        draw(); draw();
+        if (!visible || !inert) throw std::runtime_error("live thermal advisory is absent or interactive");
+        if (ctx.config.hdr) {
+            std::printf("%s %s callback checked; SDR color oracle omitted for HDR output\n", kTag, name);
+            return;
+        }
+        ThermalFixtureCapture file;
+        if (auto requested = ctx.backend.request_screenshot(file.path); !requested) {
+            throw std::runtime_error(requested.error().message);
+        }
+        bool complete = false;
+        for (int attempt = 0; attempt < 32 && !complete; ++attempt) {
+            draw();
+            auto& render = static_cast<FilamentBackend&>(ctx.backend).debug_render_context();
+            render.engine->flushAndWait();
+            render.engine->pumpMessageQueues();
+            const auto result = ctx.backend.screenshot_complete();
+            if (!result) throw std::runtime_error(result.error().message);
+            complete = *result;
+        }
+        if (!complete) throw std::runtime_error("thermal fixture screenshot did not complete");
+        if (const char* directory = std::getenv("HEAVEN_SMOKE_ARTIFACT_DIR"); directory && *directory) {
+            std::filesystem::create_directories(directory);
+            std::filesystem::copy_file(file.path, std::filesystem::path(directory) / (std::string(name) + ".ppm"),
+                                       std::filesystem::copy_options::overwrite_existing);
+        }
+        const auto pixels = read_thermal_fixture(file.path, width, height);
+        std::size_t colored = 0;
+        const int left = std::clamp(static_cast<int>(std::floor(minimum.x)), 0, width);
+        const int right = std::clamp(static_cast<int>(std::ceil(maximum.x)), 0, width);
+        const int top = std::clamp(static_cast<int>(std::floor(minimum.y)), 0, height);
+        const int bottom = std::clamp(static_cast<int>(std::ceil(maximum.y)), 0, height);
+        for (int y = top; y < bottom; ++y) for (int x = left; x < right; ++x) {
+            const auto offset = (static_cast<std::size_t>(y) * width + x) * 3;
+            const int r = pixels[offset], g = pixels[offset + 1], b = pixels[offset + 2];
+            colored += extreme ? (r >= 150 && g <= 135 && b <= 135 && r >= g + 55 && r >= b + 65)
+                               : (r >= 150 && g >= 100 && b <= 110 && r * 100 >= g * 110 && g * 100 >= b * 150);
+        }
+        std::printf("%s %s: fixture-only synthetic sample, %zu %s advisory pixels\n",
+                    kTag, name, colored, extreme ? "red" : "amber");
+        if (colored < 12) throw std::runtime_error("composed frame lacks expected thermal advisory color");
+    };
+    capture("thermal-high", false);
+    synthetic.gpu_temperature_c = 95.0;
+    synthetic.gpu_vram_temperature_c = 103.0;
+    synthetic.gpu_telemetry_sample_monotonic_ns = 3;
+    capture("thermal-extreme", true);
+    synthetic.gpu_telemetry_sample_age_seconds = 5.1;
+    draw();
+    if (visible || !inert) throw std::runtime_error("stale live thermal advisory did not clear safely");
+    if (!restore.restore()) throw std::runtime_error("thermal fixture window restoration failed");
+    return true;
 }
 
 } // namespace
@@ -311,6 +499,13 @@ CaseResult run_overlay_render_case(const CaseContext& ctx) {
                     captured.edits.size(), captured.save, captured.load,
                     captured.reload, captured.quit, captured.start_benchmark,
                     captured.dismiss_diagnostics);
+        return CaseResult::Fail;
+    }
+
+    try {
+        if (!run_thermal_fixture(ctx, camera, lighting, tonemap, working)) return CaseResult::Fail;
+    } catch (const std::exception& error) {
+        std::printf("%s FAIL: %s\n", kTag, error.what());
         return CaseResult::Fail;
     }
 

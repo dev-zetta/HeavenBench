@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 # third_party/stb_vorbis.c compiles with the C toolchain, mirroring the
 # top-level project's bundled lz4.c precedent. Our own renderer code is all
 # C++ (the standard is set per-target below); enabling C does not change it.
-project(HeavenBench VERSION 1.2.0 LANGUAGES C CXX)
+project(HeavenBench VERSION 1.2.1 LANGUAGES C CXX)
 
 option(HEAVEN_BUILD_GPU_LAB "Build optional headless GPU hardware diagnostics" OFF)
 option(HEAVEN_BUILD_FILAMENT_TESTS "Build upstream Filament tests on a native desktop" OFF)
@@ -1086,6 +1086,19 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME heaven_microprofile_analysis
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/microprofile_analyzer_test.py)
+    add_test(NAME heaven_profile_metrics
+        COMMAND ${Python3_EXECUTABLE} -E -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_metrics_test.py)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        add_test(NAME heaven_profile_evidence
+            COMMAND ${Python3_EXECUTABLE} -E -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_evidence_test.py)
+        add_test(NAME heaven_profile_process
+            COMMAND ${Python3_EXECUTABLE} -E -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_process_test.py)
+        add_test(NAME heaven_profile_compare
+            COMMAND ${Python3_EXECUTABLE} -E -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_compare_test.py)
+        add_test(NAME heaven_profile_power_observer
+            COMMAND ${Python3_EXECUTABLE} -E -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_power_observer_test.py)
+        set_tests_properties(heaven_profile_process heaven_profile_compare PROPERTIES TIMEOUT 30)
+    endif()
     add_test(NAME heaven_runtime_paths_cli
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_paths_cli_test.py
                 $<TARGET_FILE:heaven_benchmark>)
@@ -1112,6 +1125,18 @@ if(Python3_Interpreter_FOUND)
         set(HEAVEN_SURFACE_COLOR_HOST_CXX "${CMAKE_CXX_COMPILER}")
     endif()
     if(HEAVEN_SURFACE_COLOR_HOST_CXX)
+        add_test(NAME heaven_contact_helper_contract
+            COMMAND ${Python3_EXECUTABLE} -E -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contact_helper_contract_test.py
+                    --filament ${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}")
+        set_tests_properties(heaven_contact_helper_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME heaven_opaque_depth_prepass_contract
+            COMMAND ${Python3_EXECUTABLE} -E -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/opaque_depth_prepass_contract_test.py
+                    --filament ${CMAKE_CURRENT_SOURCE_DIR}/../lib/filament
+                    --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}")
+        set_tests_properties(heaven_opaque_depth_prepass_contract PROPERTIES TIMEOUT 30)
         add_test(NAME heaven_filament_intel_color_alias_contract
             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/../tests/filament_intel_color_alias_test.py"
                     --cxx "${HEAVEN_SURFACE_COLOR_HOST_CXX}"

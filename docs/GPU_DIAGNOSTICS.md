@@ -34,13 +34,42 @@ Shader text is optional and requires driver support. The diagnostic cache retain
 
 Compiler-cache limits apply to the engine's diagnostic lifetime, including pipeline recreation. Long sessions can exhaust compiler metadata before a later recording starts; the report discloses that loss while invocation queries continue independently. Restart the diagnostic launch to begin a fresh compiler catalog. A new recorder epoch alone does not reset the engine cache.
 
+## Hardware monitoring and thermal warnings
+
+Ordinary Linux launches monitor the active rendering adapter through read-only sysfs sensors on a worker at approximately 1 Hz. Discovery checks the PCI address and vendor/device IDs; when a complete address is unavailable, a vendor/device match must identify exactly one adapter. Missing or ambiguous identity never selects an arbitrary card. The UI reads the cached snapshot and shows its age, driver identity and availability reason. Windows, macOS and Android currently report these sysfs readings as N/A, as do Linux drivers or standard libraries without the required interfaces.
+
+| Reading | Meaning |
+| --- | --- |
+| GPU / VRAM temperature | Independently labelled sensor observations in Celsius. Sensor high/critical limits are displayed separately. |
+| Core / memory clock | Actual exposed graphics or memory frequency in MHz. Intel media/tile/GT clocks are not relabelled as memory clocks. |
+| Fan | Exposed fan RPM; zero is a valid stopped-fan observation, while an absent fan sensor is N/A. |
+| Power | Driver-exposed actual power, or power derived from a selected energy counter over a valid host interval. First samples, resets or invalid intervals can be unavailable. |
+| Power limit | The configured cap in watts. This is separate from actual draw and does not prove that the card reaches the cap. |
+| Utilization / memory busy | Driver-exposed percentages when available; missing counters are N/A. |
+| Device VRAM / app heap | Device memory readings and existing application heap-budget estimates retain their different scopes. |
+| Throttle report | Explicit hardware status/reasons when readable. `None` means a measured clear status; N/A means unsupported or unreadable. Temperature, power and clocks do not imply a throttle status. |
+
+The diagnostic sidebar shows the latest cached readings. Recording additionally imports each new snapshot into the microprofiler's bounded `Host GPU telemetry` counter history, with per-metric availability, sample age and bounded latest reasons. The profiler's **Host GPU telemetry** section preserves access to low-rate readings behind frequent frame counters, and matching JSON/HTML exports retain their history. These are host observation/import timestamps with no GPU clock calibration or per-pass attribution. Frame-profile JSON includes a latest hardware snapshot and a bounded sample list; see [sensor trace fields and export limits](MICROPROFILER.md#hardware-sensor-observations).
+
+An amber **High** or red **Extreme** temperature advisory appears in the corner when a fresh GPU or VRAM reading crosses the applicable threshold. Default warning ceilings are GPU 80/90°C and VRAM 90/100°C for High/Extreme. Plausible driver high/critical limits may lower these ceilings but cannot raise them; implausible or inverted limits are ignored for warning policy while remaining available as raw sensor data. These advisory defaults are not claimed manufacturer operating limits.
+
+High requires two distinct fresh samples at or above its threshold; drawing the same cached sample repeatedly does not advance that requirement. Extreme activates immediately. A 3°C hysteresis prevents repeated changes near a threshold. A missing/invalid reading or a sample older than five seconds cannot sustain an alert, and the sidebar explicitly marks stale samples. An absent warning therefore does not certify a cool or healthy GPU. The advisory does not change quality settings, fan behavior, clocks, power limits or benchmark scores.
+
+Sensor access can affect GPU power state and performance; read-only, asynchronous monitoring is not a zero-overhead guarantee. The worker does not invoke external GPU-management tools or change driver/security/thermal settings. Compare performance with equivalent monitoring conditions and preserve the exported availability and sample-age evidence. The offline comparison guard requires matching sampling mode/clock, configured power cap, total device VRAM capacity and driver sensor limits; it permits only a fixed list of observed sensor-state differences and discloses both observations and their differing keys. Other identity, rendering, settings and diagnostic fields remain strict. Source, ordinary-filesystem sensor fixtures and UI/export checks do not establish sensor calibration, every driver's behavior, physical thermal acceptance or other-platform hardware support. Historical GPU timing and overhead records below retain their original source and monitoring conditions.
+
+### November 17 hardware-monitoring checkpoint
+
+The final Linux renderer `ac6238174f2d72a7d5f437942a3f79bb959e0f5fc26f62f68a8c9777846f8f85` and smoke harness `7dcd832d74c91996a924232c9984c6aa1c9f148e696c223c86fee08788512655` pass 56 host CTest entries with one separately gated GPU entry skipped, 21 analyzer checks, 18 static-analysis gate controls and focused analysis of all eleven changed C++ translation units. The backend retains its previously reviewed valid TextureUsage bitmask diagnostic; all 59 trace locations map to unchanged code, and only caller/trace fingerprints and corresponding fixture offsets change. Native Intel BMG G31 / Mesa 26.0.8 / xe / X11 suites pass 57 Vulkan cases with six skips and 55 OpenGL cases with eight skips. Composed synthetic High/Extreme screenshots independently verify amber/red pixels and readable controls without heating the hardware. All 49 production material packages and the host material compiler retain their pre-task hashes.
+
+The exact final renderer also completes startup and an eight-second full-Heaven runtime capture at 1920×1080, Visual Ultra, generated 4K textures and High contact shadows. Both JSON/HTML pairs contain identical data. The retained runtime sensor observations show GPU 60–61 C, VRAM 60–62 C, fan 1140–1199 RPM, graphics clock 2800 MHz, energy-derived power about 211–212.5 W and a separate 275 W cap, with explicit clear throttle reports. These ranges describe three retained batches rather than the complete thermal history: the shared bounded recorder reports 1,152 dropped and 97,023 overwritten events. Missing Intel memory-clock/utilization readings remain unavailable. All six native launches exit normally with drained descendants, closed logs and no kernel GPU-error lines; they total 186.837 wall seconds. This is integration evidence, with monitoring overhead, sustained thermal behavior, other GPUs and non-Linux hardware support unqualified. Commands, failed intermediate checks, source reviews, screenshots, captures and verification are preserved under ignored `build/hardware-telemetry/20261117/`.
+
 ## Intel clocks
 
 The optional sampler also checks standard-library support for `std::jthread` and stop tokens. Toolchains without that capability, including the pinned Android NDK, compile without the worker and report an explicit unavailable reason if clock sources are discovered. This does not fabricate clock readings or disable the independent GPU query/compiler diagnostics.
 
 On Linux, an explicitly requested diagnostic session can sample read-only `xe` frequency files once per second on a worker. Discovery verifies the renderer's complete PCI address and vendor/device identity before looking for tile/GT sources. Missing files, malformed values and other drivers remain unavailable; an idle value of zero is retained as a valid observation. The capture records actual/requested/minimum/maximum MHz separately for each source.
 
-These samples use host observation timestamps and do not align GPU and CPU clocks. Frequency limits are configuration, not measured frequency or power consumption. The sampler makes no clock, power, driver or thermal-setting changes and performs no main-loop file reads. Normal launches do not create this worker.
+These samples use host observation timestamps and do not align GPU and CPU clocks. Frequency limits are configuration, not measured frequency or power consumption. The sampler makes no clock, power, driver or thermal-setting changes and performs no main-loop file reads. This optional per-GT diagnostic worker remains separate from the ordinary hardware-monitoring worker described above; normal launches do not create the per-GT diagnostic worker.
 
 ## Validation record
 

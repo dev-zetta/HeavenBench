@@ -17,6 +17,7 @@ namespace heaven {
 namespace {
 constexpr double kNsPerMs = 1'000'000.0;
 constexpr std::size_t kDrawLimit = 12'000;
+constexpr std::size_t kHostGpuCounterLimit = 128;
 
 int resize_text(ImGuiInputTextCallbackData* data) {
     auto* text = static_cast<std::string*>(data->UserData);
@@ -253,6 +254,7 @@ MicroprofileIntents MicroprofilerUI::draw() {
     }
     draw_details(*snapshot);
     draw_gpu(*snapshot);
+    draw_host_gpu_telemetry(*snapshot);
     if (ImGui::CollapsingHeader("Counters and metadata")) {
         for (const auto& [name, value] : snapshot->metadata)
             ImGui::TextWrapped("%s: %s", name.c_str(), value.c_str());
@@ -344,6 +346,32 @@ void MicroprofilerUI::refresh_layout(const std::shared_ptr<const profile::Snapsh
         if (std::ranges::none_of(threads_, [&](const auto& thread) { return thread.id == span.thread_id; }))
             threads_.push_back({span.thread_id, "Thread " + std::to_string(span.thread_id)});
     }
+    // Low-rate host observations must remain accessible after high-rate frame
+    // counters replace the generic list's last 64 entries. Cache by immutable
+    // snapshot, with bounded names and the latest sensor batch only: a newly
+    // unavailable metric must not display its older successful value.
+    host_gpu_counters_.clear();
+    host_gpu_counters_truncated_ = false;
+    std::set<std::string_view> host_names;
+    std::uint64_t sensor_batch_ns = 0;
+    for (const auto& counter : snapshot->counters) {
+        if (counter.category == "Host GPU telemetry" && counter.name == "GPU sensors available")
+            sensor_batch_ns = std::max(sensor_batch_ns, counter.timestamp_ns);
+    }
+    for (std::size_t i = snapshot->counters.size(); i > 0; --i) {
+        const auto& counter = snapshot->counters[i - 1];
+        if (counter.category != "Host GPU telemetry" || host_names.contains(counter.name)) continue;
+        if (counter.name.starts_with("GPU ") && counter.timestamp_ns < sensor_batch_ns) continue;
+        if (host_names.size() == kHostGpuCounterLimit) {
+            host_gpu_counters_truncated_ = true;
+            continue;
+        }
+        host_names.insert(counter.name);
+        host_gpu_counters_.push_back(i - 1);
+    }
+    std::ranges::sort(host_gpu_counters_, [&](const auto a, const auto b) {
+        return snapshot->counters[a].name < snapshot->counters[b].name;
+    });
     // GPU intervals share a clock only within one native frame and renderer.
     // Missing native frame IDs stay separated by their available correlation.
     gpu_frames_.clear();
@@ -377,6 +405,31 @@ void MicroprofilerUI::refresh_layout(const std::shared_ptr<const profile::Snapsh
             [](const auto& frame) { return frame.available; });
         selected_gpu_frame_ = last_available != gpu_frames_.rend() ? *last_available : gpu_frames_.back();
         selected_gpu_sample_ = 0;
+    }
+}
+
+void MicroprofilerUI::draw_host_gpu_telemetry(const profile::Snapshot& snapshot) {
+    if (!ImGui::CollapsingHeader("Host GPU telemetry")) return;
+    ImGui::TextWrapped("Latest retained host observations. Import times are relative to capture start; these are not GPU-aligned or per-frame measurements.");
+    if (host_gpu_counters_.empty()) ImGui::TextWrapped("No host GPU sensor observations are retained.");
+    for (const auto index : host_gpu_counters_) {
+        const auto& counter = snapshot.counters[index];
+        const double seconds = static_cast<double>(counter.timestamp_ns) / 1'000'000'000.0;
+        if (counter.name.ends_with(" available")) {
+            ImGui::TextWrapped("%s: %s | import %.3f s", counter.name.c_str(),
+                counter.value == 0.0 ? "Unavailable" : "Available", seconds);
+        } else if (counter.name == "GPU throttled") {
+            ImGui::TextWrapped("%s: %s | import %.3f s", counter.name.c_str(),
+                counter.value == 0.0 ? "No" : "Yes", seconds);
+        } else ImGui::TextWrapped("%s: %.4g | import %.3f s", counter.name.c_str(), counter.value, seconds);
+    }
+    if (host_gpu_counters_truncated_) ImGui::TextWrapped("Display limited to the latest 128 host-counter names; saved reports retain the available history.");
+    for (const char* key : {"gpu_sensor_reason", "gpu_sensor_throttle_reason"}) {
+        const auto entry = snapshot.metadata.find(key);
+        if (entry != snapshot.metadata.end()) {
+            ImGui::TextWrapped("%s: %s", key == std::string_view("gpu_sensor_reason") ? "Sensors" : "Throttling",
+                entry->second.c_str());
+        }
     }
 }
 

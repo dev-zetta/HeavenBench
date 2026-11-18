@@ -2,6 +2,7 @@
 """Known-interval oracle for the standalone microprofile analyzer."""
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -29,7 +30,115 @@ def fixture():
                          name="GPU", status="Disjoint", source="HardwareTimestamp", capability="fixture", command_count="0", primitive_count="0", visible_renderables="0")])
 
 
+def sensor_fixture():
+    data = fixture()
+    data["metadata"].update(gpu_sensor_clock="Host monotonic observations; import time, no GPU calibration",
+        gpu_sensor_sample_monotonic_ns="1000000000", gpu_sensor_reason="Available", gpu_sensor_throttle_reason="None")
+    data["metadata"]["rendering"] = json.dumps({"render_scale": 1.0, "texture_policy": {"variant": "4K"},
+        "hardware_telemetry": {"mode": "read-only sysfs worker, up to 1 Hz", "clock": "host monotonic observations",
+            "sample_monotonic_ns": 1000000000, "available": True, "reason": "Available", "gpu_temperature_c": 70.0,
+            "vram_temperature_c": None, "power_w": 120.5, "graphics_clock_mhz": 2450.0, "memory_clock_mhz": None,
+            "fan_rpm": 0.0, "utilization_percent": 98.0, "memory_utilization_percent": None,
+            "device_vram_used_mb": 6000.0, "device_vram_total_mb": 12000.0, "throttle_reason": "None",
+            "power_limit_w": 190.0, "gpu_high_c": 80.0, "gpu_critical_c": 90.0,
+            "vram_high_c": None, "vram_critical_c": None}})
+    return data
+
+
 class TestAnalyzer(unittest.TestCase):
+    def test_sensor_observations_do_not_break_identity_and_are_disclosed(self):
+        left = sensor_fixture()
+        right = copy.deepcopy(left)
+        right["metadata"].update(gpu_sensor_sample_monotonic_ns="2000000000", gpu_sensor_reason="New observation",
+            gpu_sensor_throttle_reason="thermal")
+        rendering = json.loads(right["metadata"]["rendering"])
+        rendering["hardware_telemetry"].update(sample_monotonic_ns=2000000000, gpu_temperature_c=85.5,
+            power_w=134.0, graphics_clock_mhz=2400.0, fan_rpm=1500.0, utilization_percent=99.0,
+            device_vram_used_mb=6100.0, throttle_reason="thermal", reason="New observation")
+        del rendering["hardware_telemetry"]["memory_clock_mhz"]
+        right["metadata"]["rendering"] = json.dumps(rendering, indent=2)
+        original_left, original_right = copy.deepcopy(left), copy.deepcopy(right)
+        result = analyzer.compare(left, right)
+        observed = result["sensor_observations"]
+        self.assertEqual(observed["a"]["gpu_sensor_sample_monotonic_ns"], "1000000000")
+        self.assertEqual(observed["b"]["gpu_sensor_sample_monotonic_ns"], "2000000000")
+        path = "rendering.hardware_telemetry."
+        self.assertEqual(observed["a"][path + "gpu_temperature_c"], 70.0)
+        self.assertEqual(observed["b"][path + "gpu_temperature_c"], 85.5)
+        self.assertIn(path + "memory_clock_mhz", observed["differing_keys"])
+        self.assertIn(path + "throttle_reason", observed["differing_keys"])
+        self.assertIn("gpu_sensor_reason", observed["differing_keys"])
+        self.assertNotIn(path + "power_limit_w", observed["a"])
+        self.assertNotIn("gpu_sensor_sample_monotonic_ns", result["metadata"])
+        self.assertEqual(result["metadata"]["gpu_sensor_clock"], left["metadata"]["gpu_sensor_clock"])
+        identity_rendering = json.loads(result["metadata"]["rendering"])
+        self.assertEqual(identity_rendering["texture_policy"], {"variant": "4K"})
+        self.assertEqual(identity_rendering["hardware_telemetry"]["power_limit_w"], 190.0)
+        self.assertEqual(identity_rendering["hardware_telemetry"]["gpu_high_c"], 80.0)
+        self.assertTrue(result["cpu_mean_per_complete_scope"])
+        self.assertEqual((left, right), (original_left, original_right))
+
+    def test_monitoring_contract_limits_and_unknown_metadata_remain_strict(self):
+        left = sensor_fixture()
+        for key in ("mode", "clock", "power_limit_w", "device_vram_total_mb", "gpu_high_c", "gpu_critical_c", "vram_high_c", "vram_critical_c",
+                    "unrecognized_sensor_field"):
+            with self.subTest(hardware_key=key):
+                right = copy.deepcopy(left)
+                rendering = json.loads(right["metadata"]["rendering"])
+                rendering["hardware_telemetry"][key] = "different"
+                right["metadata"]["rendering"] = json.dumps(rendering)
+                with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+                    analyzer.compare(left, right)
+        for key in ("gpu_sensor_clock", "gpu_sensor_future_observation", "gpu_diagnostics_requested", "gpu_shader_ir_requested",
+                    "gpu_diagnostics", "cpu", "gpu", "driver", "driver_version", "api", "resolution", "effective_settings"):
+            with self.subTest(metadata_key=key):
+                right = copy.deepcopy(left)
+                right["metadata"][key] = "different"
+                with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+                    analyzer.compare(left, right)
+        for key in ("render_scale", "texture_policy", "unknown_rendering_field"):
+            with self.subTest(rendering_key=key):
+                right = copy.deepcopy(left)
+                rendering = json.loads(right["metadata"]["rendering"])
+                rendering[key] = "different"
+                right["metadata"]["rendering"] = json.dumps(rendering)
+                with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+                    analyzer.compare(left, right)
+        with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+            analyzer.compare(left, fixture())
+        # Metadata without a sensor object retains its prior byte-exact guard.
+        left, right = fixture(), fixture()
+        left["metadata"]["rendering"] = '{"a":1,"b":2}'
+        right["metadata"]["rendering"] = '{"b":2,"a":1}'
+        with self.assertRaisesRegex(ValueError, "identical nonempty recorded metadata"):
+            analyzer.compare(left, right)
+
+    def test_malformed_sensor_or_rendering_metadata_never_gains_comparison_acceptance(self):
+        malformed = ("{", "[]", "null", '{"hardware_telemetry":null}', '{"hardware_telemetry":[]}',
+            '{"hardware_telemetry":{}}', '{"hardware_telemetry":{"mode":"x","clock":""}}',
+            '{"hardware_telemetry":{"mode":"x","clock":"x","power_w":NaN}}',
+            '{"hardware_telemetry":{"mode":"x","clock":"x","gpu_temperature_c":"hot"}}',
+            '{"hardware_telemetry":{"mode":"x","clock":"x","sample_monotonic_ns":true}}',
+            '{"hardware_telemetry":{"mode":"x","clock":"x","available":0}}',
+            '{"unrelated":1e999}',
+            '{"unrelated":1e999,"hardware_telemetry":{"mode":"x","clock":"x"}}',
+            '{"hardware_telemetry":{"mode":"x","mode":"y","clock":"x"}}',
+            '{"a":1,"a":2,"hardware_telemetry":{"mode":"x","clock":"x"}}')
+        for value in malformed:
+            with self.subTest(rendering=value):
+                bad = sensor_fixture()
+                bad["metadata"]["rendering"] = value
+                for right in (sensor_fixture(), copy.deepcopy(bad)):
+                    with self.assertRaises(ValueError):
+                        analyzer.compare(bad, right)
+        for edit in (lambda metadata: metadata.pop("gpu_sensor_clock"),
+                     lambda metadata: metadata.update(gpu_sensor_clock=""),
+                     lambda metadata: metadata.update(gpu_sensor_sample_monotonic_ns="-1")):
+            bad = sensor_fixture()
+            edit(bad["metadata"])
+            with self.assertRaises(ValueError):
+                analyzer.compare(bad, bad)
+
     def test_separate_catalog_loss_keeps_legacy_availability_explicit(self):
         data = fixture()
         summary = analyzer.analyze(data)

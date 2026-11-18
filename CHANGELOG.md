@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-11-18
+
+- Skip directional contact-shadow work in desktop Vulkan helper invocations after derivative-dependent shading work completes. A matched full-scene Intel test measured **2.03% lower mean frame time** against its development baseline. High retains all 16 Sun rays and 32 depth steps. [Measurement details](docs/PERFORMANCE_OPTIMIZATIONS.md)
+- Use a same-sample opaque depth prepass for eligible daytime High contact shadows on Intel BMG G31 with the qualified Mesa Vulkan driver. In a separate eight-window Intel comparison at 1080p Visual Ultra, generated 4K textures and 4× MSAA, mean frame time fell from **316.77 to 305.04 ms**. Native rendering tests and four fixed-camera image comparisons verified the change at this workload. [Results and hardware scope](docs/PERFORMANCE_OPTIMIZATIONS.md#monitored-intel-opaque-depth-optimization-november-17-2026)
+- Add GPU temperature, clocks, power, fan speed and available memory and throttle readings to Diagnostics, Microprofiler and saved reports. The selected GPU is sampled on a read-only Linux worker. In-scene warnings use reported GPU and VRAM temperature limits where available. [Hardware monitoring](docs/GPU_DIAGNOSTICS.md#hardware-monitoring-and-thermal-warnings)
+- Add a Linux fixed-camera comparison harness with matched settings, repeated timing windows, hardware monitoring and verifiable run records. [Profiling harness](docs/PROFILING_HARNESS.md)
+- Android advances to versionCode **7** with the same application ID and persistent signing identity used by 1.2.0.
+
 ## 1.2.0 — 2026-11-13
 
 [HeavenBench 1.2.0](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.0) is published from `465f26c1418643b3dd8fb860f7bc56e303e40274`. All five CI workflows / eight jobs pass, with independent checks of eight application packages and six source origins represented by two distinct source archives. Public readback verifies all 24 asset hashes and preserves the four preceding releases / 90 assets. Downloaded Linux packages pass bounded CLI, Intel OpenGL / AMD Vulkan height-sampling and experimental Intel FSR startup/submission controls; physical Windows GPU, Apple Silicon/macOS, current tablet and NVIDIA runtime acceptance remain separate. The published macOS bundle requires macOS 15 or later.

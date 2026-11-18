@@ -9,6 +9,7 @@
  */
 #include "rhi/filament_backend.h"
 #include "rhi/filament_util.h"
+#include "rhi/opaque_depth_prepass_policy.h"
 #include "rhi/hdr_surface_formats.h"
 #include "rhi/screenshot_ppm.h"
 #include "rhi/screenshot_hdr.h"
@@ -559,6 +560,17 @@ FilamentBackend::FilamentBackend(SDL_Window* window, const AppConfig& config,
 
     // Create view
     view_ = engine_->createView();
+    // Cache the selected device's exact qualification once. gpu_info() remains
+    // the single owner of GPU-specific queries; ordinary frames read only this bool.
+    const auto prepass_device = gpu_info();
+    opaque_depth_prepass_device_qualified_ = qualifies_opaque_depth_prepass_device({
+        .vulkan = engine_->getBackend() == filament::Engine::Backend::VULKAN,
+        .vendor_id = prepass_device.vendor_id,
+        .device_id = prepass_device.device_id,
+        .driver_family = prepass_device.driver_family,
+        .driver_version = prepass_device.driver_version
+    });
+    view_->setOpaqueDepthPrepassEnabled(false);
     view_->setScene(scene_);
 
     // Create camera
@@ -926,109 +938,6 @@ bool supports_device_extension(VkPhysicalDevice device,
     });
 }
 
-std::optional<double> read_numeric_file(const std::filesystem::path& path) {
-    std::ifstream input(path);
-    double value = 0.0;
-    if (!(input >> value)) return std::nullopt;
-    return value;
-}
-
-std::optional<uint32_t> read_hex_id(const std::filesystem::path& path) {
-    std::ifstream input(path);
-    std::string value;
-    if (!(input >> value)) return std::nullopt;
-    try {
-        return static_cast<uint32_t>(std::stoul(value, nullptr, 0));
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-bool is_drm_card_name(std::string_view name) {
-    if (!name.starts_with("card") || name.size() == 4) return false;
-    return std::ranges::all_of(name.substr(4), [](char ch) {
-        return ch >= '0' && ch <= '9';
-    });
-}
-
-std::optional<std::filesystem::path> linux_gpu_device_path(
-        [[maybe_unused]] const IRhiBackend::GpuInfoRaw& info) {
-#if defined(__linux__) && !defined(__ANDROID__)
-    std::error_code ec;
-    if (info.pci_domain >= 0 && info.pci_bus >= 0 && info.pci_device >= 0 &&
-        info.pci_function >= 0) {
-        std::filesystem::path exact = std::filesystem::path(
-            "/sys/bus/pci/devices") /
-            std::format("{:04x}:{:02x}:{:02x}.{:x}", info.pci_domain,
-                        info.pci_bus, info.pci_device, info.pci_function);
-        if (std::filesystem::is_directory(exact, ec)) return exact;
-    }
-
-    // PCI bus properties are optional (for example on older Vulkan drivers).
-    // Fall back to matching the active device's Vulkan vendor/device IDs
-    // against DRM card devices. This remains selection-aware on the common
-    // multi-GPU case where the adapters are different models.
-    const std::filesystem::path drm_root{"/sys/class/drm"};
-    for (std::filesystem::directory_iterator it(drm_root, ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (!is_drm_card_name(it->path().filename().string())) continue;
-        std::filesystem::path device = it->path() / "device";
-        const auto vendor = read_hex_id(device / "vendor");
-        const auto id = read_hex_id(device / "device");
-        if (vendor && id && *vendor == info.vendor_id && *id == info.device_id) {
-            std::filesystem::path resolved =
-                std::filesystem::canonical(device, ec);
-            if (!ec) return resolved;
-            ec.clear();
-            return device;
-        }
-    }
-#endif
-    return std::nullopt;
-}
-
-void read_linux_gpu_telemetry(const IRhiBackend::GpuInfoRaw& info,
-                              IRhiBackend::GpuTelemetry& telemetry) {
-    const auto device = linux_gpu_device_path(info);
-    if (!device) return;
-
-    if (const auto value = read_numeric_file(*device / "gpu_busy_percent")) {
-        telemetry.utilization_percent = *value;
-    }
-    if (const auto value = read_numeric_file(*device / "mem_busy_percent")) {
-        telemetry.memory_utilization_percent = *value;
-    }
-    if (const auto value = read_numeric_file(*device / "mem_info_vram_used")) {
-        telemetry.device_vram_used_mb = *value / (1024.0 * 1024.0);
-    }
-    if (const auto value = read_numeric_file(*device / "mem_info_vram_total")) {
-        telemetry.device_vram_total_mb = *value / (1024.0 * 1024.0);
-    }
-
-    std::error_code ec;
-    const std::filesystem::path hwmon_root = *device / "hwmon";
-    for (std::filesystem::directory_iterator it(hwmon_root, ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        const std::filesystem::path sensors = it->path();
-        if (const auto value = read_numeric_file(sensors / "temp1_input")) {
-            telemetry.temperature_c = *value / 1000.0;
-        }
-        if (const auto value = read_numeric_file(sensors / "power1_average")) {
-            telemetry.power_w = *value / 1'000'000.0;
-        }
-        if (const auto value = read_numeric_file(sensors / "freq1_input")) {
-            telemetry.core_clock_mhz = *value / 1'000'000.0;
-        }
-        if (const auto value = read_numeric_file(sensors / "freq2_input")) {
-            telemetry.memory_clock_mhz = *value / 1'000'000.0;
-        }
-        if (const auto value = read_numeric_file(sensors / "fan1_input")) {
-            telemetry.fan_rpm = *value;
-        }
-        break;
-    }
-}
 
 } // namespace
 
@@ -1181,7 +1090,13 @@ IRhiBackend::GpuTelemetry FilamentBackend::gpu_telemetry() const {
     if (!engine_) return telemetry;
 
     const GpuInfoRaw info = gpu_info();
-    if (info.vram_mb >= 0) {
+    if (!gpu_sensor_telemetry_) {
+        gpu_sensor_telemetry_ = std::make_unique<profile::GpuSensorTelemetry>(profile::PciIdentity{
+            info.vendor_id, info.device_id, info.pci_domain, info.pci_bus,
+            info.pci_device, info.pci_function});
+    }
+    static_cast<profile::GpuSensorReading&>(telemetry) = gpu_sensor_telemetry_->latest();
+    if (telemetry.device_vram_total_mb < 0.0 && info.vram_mb >= 0) {
         telemetry.device_vram_total_mb = static_cast<double>(info.vram_mb);
     }
 
@@ -1216,7 +1131,6 @@ IRhiBackend::GpuTelemetry FilamentBackend::gpu_telemetry() const {
         }
     }
 
-    read_linux_gpu_telemetry(info, telemetry);
     return telemetry;
 }
 
@@ -2308,6 +2222,8 @@ FrameResult FilamentBackend::render_frame(
     // actual count before building any main-color commands.
     variable_rate_shading_->apply(config_.variable_rate_shading);
 
+    update_opaque_depth_prepass_policy(lighting);
+
     // Depth pre-pass → main view → composite, inside one begin/endFrame.
     stage_start = FrameClock::now();
     if (startup_scene_frame) {
@@ -2327,6 +2243,15 @@ FrameResult FilamentBackend::render_frame(
     collect_completed_gpu_times();
     result.timings.gpu_ms = collected_gpu_ms_;
     return result;
+}
+
+// The optional opaque execution path is scoped to the qualified High daytime
+// workload. It never changes contact-shadow settings, rays, steps or geometry.
+void FilamentBackend::update_opaque_depth_prepass_policy(const LightingParams& lighting) {
+    if (!view_) return;
+    view_->setOpaqueDepthPrepassEnabled(should_use_opaque_depth_prepass(
+        opaque_depth_prepass_device_qualified_, config_.features.contact_shadows,
+        config_.quality.contact_shadow_level, lighting.sun_dir.z, lighting.sun_intensity));
 }
 
 // ── render_frame step: camera ───────────────────────────────────

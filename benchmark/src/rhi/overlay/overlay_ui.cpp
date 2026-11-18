@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <string>
@@ -115,7 +116,7 @@ std::string grouped_count(uint64_t value) {
 
 std::string optional_metric(double value, std::string_view suffix,
                             int precision = 1) {
-    if (value < 0.0) return "N/A";
+    if (!std::isfinite(value) || value < 0.0) return "N/A";
     return std::vformat("{:.{}f} {}", std::make_format_args(
         value, precision, suffix));
 }
@@ -161,6 +162,49 @@ void draw_metric_table(const char* id, const Rows& rows) {
 }
 
 } // namespace
+
+void OverlayUI::draw_thermal_warning(const DebugSidebarInfo& info) {
+    const auto status = thermal_warning_.update({
+        info.gpu_temperature_c, info.gpu_vram_temperature_c,
+        info.gpu_temperature_high_c, info.gpu_temperature_critical_c,
+        info.gpu_vram_temperature_high_c, info.gpu_vram_temperature_critical_c,
+        info.gpu_telemetry_sample_age_seconds, info.gpu_telemetry_sample_monotonic_ns});
+    if (status.severity == ThermalSeverity::Normal) return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (!viewport || viewport->WorkSize.x <= 0.0f || viewport->WorkSize.y <= 0.0f) return;
+
+    constexpr float margin = 10.0f;
+    const float width = std::min(360.0f, std::max(1.0f, viewport->WorkSize.x - 2.0f * margin));
+    const float maximum_height = std::max(1.0f, viewport->WorkSize.y - 2.0f * margin);
+    const ImVec4 color = status.severity == ThermalSeverity::Extreme
+        ? ImVec4(1.0f, 0.30f, 0.25f, 1.0f) : ImVec4(1.0f, 0.78f, 0.22f, 1.0f);
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
+               viewport->WorkPos.y + viewport->WorkSize.y - margin),
+        ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, maximum_height));
+    ImGui::SetNextWindowBgAlpha(0.96f);
+    ImGui::PushStyleColor(ImGuiCol_Border, color);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("GPU temperature advisory", nullptr, flags)) {
+        const std::string_view sensor = status.gpu == status.severity ? "GPU" : "VRAM";
+        const auto severity = thermal_severity_label(status.severity);
+        ImGui::TextColored(color, "%.*s %.*s temperature",
+            static_cast<int>(severity.size()), severity.data(),
+            static_cast<int>(sensor.size()), sensor.data());
+        ImGui::TextWrapped("GPU %s  |  VRAM %s",
+            optional_metric(info.gpu_temperature_c, "C").c_str(),
+            optional_metric(info.gpu_vram_temperature_c, "C").c_str());
+        ImGui::TextWrapped("%s", status.severity == ThermalSeverity::Extreme
+            ? "Stop benchmark and check cooling" : "Check cooling");
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+}
 
 void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info,
                                    const FrameGenerationStatus& frame_generation) {
@@ -272,12 +316,24 @@ void OverlayUI::draw_debug_sidebar(const DebugSidebarInfo& info,
                 std::pair{"App heap", memory_metric(info.process_vram_used_mb, info.process_vram_budget_mb)},
                 std::pair{"Device VRAM", memory_metric(info.device_vram_used_mb, info.device_vram_total_mb)},
                 std::pair{"Temperature", optional_metric(info.gpu_temperature_c, "C")},
+                std::pair{"VRAM temp.", optional_metric(info.gpu_vram_temperature_c, "C")},
+                std::pair{"GPU high / critical", optional_metric(info.gpu_temperature_high_c, "C") + " / " + optional_metric(info.gpu_temperature_critical_c, "C")},
+                std::pair{"VRAM high / critical", optional_metric(info.gpu_vram_temperature_high_c, "C") + " / " + optional_metric(info.gpu_vram_temperature_critical_c, "C")},
                 std::pair{"Power", optional_metric(info.gpu_power_w, "W")},
+                std::pair{"Power limit", optional_metric(info.gpu_power_limit_w, "W")},
                 std::pair{"Core clock", optional_metric(info.gpu_core_clock_mhz, "MHz", 0)},
                 std::pair{"Memory clock", optional_metric(info.gpu_memory_clock_mhz, "MHz", 0)},
                 std::pair{"Fan", optional_metric(info.gpu_fan_rpm, "RPM", 0)},
+                std::pair{"Throttle report", info.gpu_throttle_reason.empty() ? std::string{"N/A"} : info.gpu_throttle_reason},
+                std::pair{"Sample age", optional_metric(info.gpu_telemetry_sample_age_seconds, "s")},
             };
             draw_metric_table("##gpu", gpu_rows);
+            if (!info.gpu_telemetry_reason.empty()) {
+                ImGui::TextWrapped("%s", info.gpu_telemetry_reason.c_str());
+            }
+            if (info.gpu_telemetry_sample_age_seconds > 5.0) {
+                ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.22f, 1.0f), "Sensor sample is stale");
+            }
             if (!driver_check_.summary.empty()) {
                 if (driver_check_.severity == DriverCheckSeverity::Warning) {
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),

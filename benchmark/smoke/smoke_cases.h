@@ -420,6 +420,9 @@ struct CaseContext {
 
 // Exact planar horizon under a 3-degree SUN and a separate contact-only blocker.
 [[nodiscard]] CaseResult run_finite_sun_contact_case(const CaseContext& ctx);
+// Native Vulkan FLOAT parity across coarse and subpixel planar triangles, with a
+// separate contact blocker, normal-map derivatives, specular AA and masked A2C.
+[[nodiscard]] CaseResult run_contact_helper_lanes_case(const CaseContext& ctx);
 
 // Actual displaced geometry must reject unresolved height detail while
 // retaining low-frequency relief, independently of source texture resolution.
@@ -729,6 +732,9 @@ struct CaseContext {
 
 // Shared backend: real procedural scene uploads, feature borrowers and reload cleanup.
 [[nodiscard]] CaseResult run_render_test_reload_case(const CaseContext& ctx);
+
+// Same-sample main-depth replay, exact FLOAT coverage and native invocation controls.
+[[nodiscard]] CaseResult run_opaque_depth_prepass_case(const CaseContext& ctx);
 
 } // namespace heaven::smoke
 
