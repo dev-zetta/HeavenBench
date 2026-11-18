@@ -2,6 +2,10 @@
 
 HeavenBench keeps Android compilation and persistent signing separate. The Docker/Gradle pipeline produces the same debug-signed, debuggable development APK without persistent signing credentials. A conditional post-build step signs that APK with the project's retained identity and verifies its public certificate pin. This establishes continuity for future updates; it does not turn the development build into a production build or establish physical-device acceptance.
 
+## Published 1.2.1 identity
+
+The [official HeavenBench 1.2.1 APK](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.1) uses application ID `app.zetta.heavenbench`, versionCode **7** and certificate SHA-256 `1520df3e689ee71ce34a05ebabcbfd2b68c7e672048bbd45879ba789a445b6aa`. The signing identity matches 1.2.0 for in-place upgrades. The APK remains debuggable development software.
+
 ## Published 1.2.0 identity
 
 The [official HeavenBench 1.2.0 APK](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.0) uses application ID `app.zetta.heavenbench`, versionCode **6** and the retained public certificate SHA-256 `1520df3e689ee71ce34a05ebabcbfd2b68c7e672048bbd45879ba789a445b6aa`. It remains debuggable development software. A verified signature establishes package identity, not physical-device installation, rendering or upgrade acceptance.

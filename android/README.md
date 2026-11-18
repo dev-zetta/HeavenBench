@@ -4,7 +4,7 @@
 
 **Historical 1.1.1 migration:** the published 1.1.1 APK uses a different development signing certificate from the published 1.1.0 APK. Back up imported assets and user data before uninstalling 1.1.0 and installing 1.1.1; `adb install -r` cannot update that older release in place. Earlier published APKs also used different development certificates. Local builds can update installations signed with the same local debug key.
 
-The official 1.2.0 APK uses the retained [signing identity](../docs/ANDROID_SIGNING.md), application ID `app.zetta.heavenbench` and versionCode **6**. Trusted `main` CI signs after compilation; Docker and Gradle receive no persistent credentials, and the APK remains debuggable development software. Back up imported assets and user data before uninstalling published 1.1.1 and installing 1.2.0 once; that older private key was not retained. Builds already using the retained key can update in place with the same application ID and higher versionCode. Published 1.1.1 assets, source and certificate records remain unchanged.
+The official 1.2.1 APK uses the retained [signing identity](../docs/ANDROID_SIGNING.md), application ID `app.zetta.heavenbench` and versionCode **7**. Trusted `main` CI signs after compilation; Docker and Gradle receive no persistent credentials, and the APK remains debuggable development software. Back up imported assets and user data before uninstalling published 1.1.1 and installing 1.2.1 once; that older private key was not retained. Builds already using the retained key can update in place with the same application ID and higher versionCode. Published 1.1.1 assets, source and certificate records remain unchanged.
 
 The Linux build host needs the renderer's normal Clang/libc++ dependencies, Java 17 or newer, and an Android SDK. Install the versions pinned in [versions.properties](versions.properties):
 
@@ -13,7 +13,7 @@ export ANDROID_HOME=/path/to/android-sdk
 sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
 ./scripts/fetch_dependencies.sh
 ./scripts/build_android.sh --abi arm64-v8a --jobs 6
-adb install -r build/packages/HeavenBench-1.2.0-android-arm64-v8a-debug.apk
+adb install -r build/packages/HeavenBench-1.2.1-android-arm64-v8a-debug.apk
 ```
 
 The helper downloads checksum-pinned SDL 2.32.10 and Gradle 8.13 into the ignored `build/` tree. Android Gradle Plugin 8.11.1 packages SDK 35 with minimum API 26. NDK r28c supplies the C++23 library and enables 16 KiB native-library alignment by default; APK signatures, ZIP alignment, and required package contents are checked before delivery. The pinned versions are reproducible inputs, not a claim that they are the latest releases. [AGP compatibility](https://developer.android.com/build/releases/agp-8-11-0-release-notes), [NDK r28 changes](https://github.com/android/ndk/wiki/Changelog-r28), [SDL Android integration](https://wiki.libsdl.org/SDL2/README-android).

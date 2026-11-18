@@ -1,6 +1,6 @@
 # HeavenBench on Apple Silicon
 
-[Download the latest HeavenBench release for macOS](https://github.com/dev-zetta/HeavenBench/releases/latest). Choose the Apple Silicon app ZIP and its matching checksum, source archive and provenance files. The published 1.2.0 package requires **Apple Silicon (M1 or newer) and macOS 15.0 or newer**, derived from the maximum minimum OS version across its bundled Mach-O files; each package's verification record declares its actual minimum OS version. Original Heaven assets are supplied separately.
+[Download the latest HeavenBench release for macOS](https://github.com/dev-zetta/HeavenBench/releases/latest). Choose the Apple Silicon app ZIP and its matching checksum, source archive and provenance files. The published 1.2.1 package requires **Apple Silicon (M1 or newer) and macOS 15.0 or newer**, derived from the maximum minimum OS version across its bundled Mach-O files; each package's verification record declares its actual minimum OS version. Original Heaven assets are supplied separately.
 
 The 1.2.0 app uses release source [`465f26c1418643b3dd8fb860f7bc56e303e40274`](https://github.com/dev-zetta/HeavenBench/commit/465f26c1418643b3dd8fb860f7bc56e303e40274). Use the matching source archive, checksum and provenance supplied with that app package. Archive and command-line checks do not establish physical Apple Silicon rendering, Developer ID signing or notarization.
 

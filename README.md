@@ -6,11 +6,11 @@
 
 *Captured in released HeavenBench 1.1.1 on Linux with Intel Vulkan, Balanced System and original textures, at 3840×2160; shown at 1920×1080.*
 
-**Downloads:** [HeavenBench 1.2.0 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.0), with separate experimental Linux FSR 3.1 and Windows FSR/DLSS-adapter packages. Generation remains off by default. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
+**Downloads:** [HeavenBench 1.2.1 for Linux, Windows, macOS and Android](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.1), with separate experimental Linux FSR 3.1 and Windows FSR/DLSS-adapter packages. Generation remains off by default. [Release readiness](docs/RELEASE_READINESS.md) records package verification and remaining rendering/device limitations. See the [changelog](CHANGELOG.md) for the development history.
 
 The macOS download requires **Apple Silicon (M1 or newer) and macOS 15+**. It is ad hoc signed, without notarization, and full rendering on a physical Mac remains unverified. See [macOS setup and launch instructions](docs/MACOS.md).
 
-The official Android 1.2.0 APK uses the retained [development signing identity](docs/ANDROID_SIGNING.md) and versionCode **6**. Back up imported assets, configuration and reports before moving from a differently signed build, including published 1.1.1, then uninstall and reinstall once. Published 1.1.1 keeps its original certificate and assets. Later official updates can retain data with the same application ID/key and a higher versionCode; the APK remains debuggable development software.
+The official Android 1.2.1 APK uses the retained [development signing identity](docs/ANDROID_SIGNING.md) and versionCode **7**. Back up imported assets, configuration and reports before moving from a differently signed build, including published 1.1.1, then uninstall and reinstall once. Published 1.1.1 keeps its original certificate and assets. Later official updates can retain data with the same application ID/key and a higher versionCode; the APK remains debuggable development software.
 
 ## Watch the videos
 

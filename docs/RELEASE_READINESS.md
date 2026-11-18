@@ -1,5 +1,11 @@
 # First-release readiness
 
+## November 18 published 1.2.1
+
+[HeavenBench 1.2.1](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.1) is published from `3c5203ce7484976ef3b54142023a855b2661a2e2` / tree `ce8a84baed3531c769897d09378744a0f6f6f0d1`. All five exact-source workflows passed. The release contains eight application packages and two distinct source archives. Post-publication readback verified all 24 asset digests and anonymous checksum and manifest downloads. Receipt `build/releases/20261118-v1.2.1/published-verification.json` has SHA-256 `9963ed5b03beef891216e79b305cdf96acfeaa1c0d7e6017f0d8d929e572b2e3`.
+
+The Android ARM64 package uses the pinned certificate, versionCode 7 and 16 KiB alignment. The macOS package requires Apple Silicon and macOS 15.0 or newer. The Linux Intel Vulkan tests cover the corrected opaque-depth and contact-helper fixtures. The measured performance scope remains the fixed full-scene village view documented in [performance results](PERFORMANCE_OPTIMIZATIONS.md#monitored-intel-opaque-depth-optimization-november-17-2026).
+
 ## November 13 published 1.2.0
 
 [HeavenBench 1.2.0](https://github.com/dev-zetta/HeavenBench/releases/tag/v1.2.0) was published on November 13, 2026 at 09:48:32 UTC, release ID `444056300`, from source `465f26c1418643b3dd8fb860f7bc56e303e40274` / tree `5358487947cea712597248c4c1fb59ef428c0624`. Public verification confirms that `v1.2.0` points to that exact commit, all 24 uploaded asset SHA-256 values and release notes match immutable staging, and both checksum and release manifests download anonymously. All four prior releases and their 90 assets retain their identities. The readback receipt is `build/releases/20261113-v1.2.0-cohort03/published-verification.json`, SHA-256 `479b598081327b81a6631e2ba8e749dcc8a0e529142683a75ada46f1227a89fa`.
