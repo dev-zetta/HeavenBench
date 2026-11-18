@@ -309,10 +309,14 @@ public:
             if(sample.name=="Color Pass (transparent)")group.observed.refraction=true;
         }
         bool complete=false;
-        for(auto const& [frame,group]:groups) {
+        for (auto const& entry : groups) {
+            auto const& group = entry.second;
             if(!group.color)continue;
             if(result.prepass && (!group.observed.prepass||!group.observed.depth_commands))continue;
-            auto pixels=std::move(result.pixels);result=group.observed;result.pixels=std::move(pixels);complete=true;(void)frame;
+            auto pixels = std::move(result.pixels);
+            result = group.observed;
+            result.pixels = std::move(pixels);
+            complete = true;
         }
         require(complete,"no completed main-view color/prepass frame pair");
         if(const char* path=std::getenv("HEAVEN_SMOKE_OPAQUE_Z_OUTPUT")) {
