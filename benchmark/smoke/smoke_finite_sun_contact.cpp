@@ -363,7 +363,7 @@ public:
 private:
     void create_helper_textures() {
         constexpr std::uint32_t size = 64;
-        std::vector<std::uint8_t> color(size * size * 4);
+        std::vector<std::uint8_t> color(static_cast<std::size_t>(size) * size * 4);
         std::vector<std::uint8_t> normal(color.size());
         for (std::uint32_t y = 0; y < size; ++y) {
             for (std::uint32_t x = 0; x < size; ++x) {
@@ -861,9 +861,9 @@ bool helper_lane_case(filament::Engine& engine, std::uint8_t samples, bool maske
                     absolute_delta += delta;
                     pixel_delta = std::max(pixel_delta, delta);
                     if (masked && alpha_neighborhood == AlphaNeighborhood::Transparent) {
-                        transparent_background_max_rgb = std::max(transparent_background_max_rgb,
-                            std::max(std::abs(double((*captures)[0].average[index + channel])),
-                                     std::abs(double((*captures)[1].average[index + channel]))));
+                        transparent_background_max_rgb = std::max({transparent_background_max_rgb,
+                            std::abs(double((*captures)[0].average[index + channel])),
+                            std::abs(double((*captures)[1].average[index + channel]))});
                     }
                 }
             }
