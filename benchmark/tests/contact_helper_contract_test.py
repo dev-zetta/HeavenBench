@@ -176,6 +176,10 @@ vec3 customSurfaceShading(MaterialInputs, PixelParams, Light light, float visibi
 def check_program(predicate, evaluator):
     evaluator = evaluator.replace("inout vec3 color", "vec3& color").replace("color.rgb", "color")
     evaluator = re.sub(r"\bhighp\s+", "", evaluator)
+    # An unsuffixed decimal literal has type float in GLSL and double in C++.
+    # Keep the shader's precision when compiling its evaluator as C++.
+    evaluator = re.sub(r"(?<![\w.])(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w.])",
+                       r"\g<0>f", evaluator)
     pieces = ["#include <cstdint>\n#include <cstring>\n#include <initializer_list>\n#include <iostream>\n"]
     invocations = []
     for profile in range(16):
